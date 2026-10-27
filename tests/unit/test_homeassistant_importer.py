@@ -368,3 +368,48 @@ class TestNameOverride:
         )
         assert (ghost.selection, lock.selection, cover.selection) == (0, 1, 3)
         assert ghost.proposed_name == "sensor.ghost"
+
+
+class TestThirdReview:
+    def test_on_off_only_light_gets_no_brightness_profile(self):
+        onoff = {**_entity("light.plain", "off", {}), "capabilities": {"supported_color_modes": ["onoff"]}}
+        dimmable = {**_entity("light.dim", "off", {}), "capabilities": {"supported_color_modes": ["brightness"]}}
+        page = filter_entities([onoff, dimmable], domain="light")
+        support = {item["entity_id"]: {p["id"]: p["supported"] for p in item["profiles"]} for item in page["items"]}
+        assert support["light.plain"]["light.brightness"] is False
+        assert support["light.dim"]["light.brightness"] is True
+        request = HaImportRequest(selections=[HaImportSelection(entity_id="light.plain", profile="light.brightness")])
+        (c,) = plan_import([onoff], request, [])
+        assert (c.status, c.reason) == ("unsupported", "featureMissing")
+        assert "supported_color_modes" not in c.config
+
+    def test_write_only_candidate_does_not_conflict_with_a_manual_reader(self):
+        existing = [("r1", {"entity_id": "switch.fan", "service_name": "turn_on"}, "SOURCE")]
+        (dest,) = _plan({"entity_id": "switch.fan", "direction": "DEST"}, existing=existing)
+        assert dest.status == "new"
+        (both,) = _plan({"entity_id": "switch.fan"}, existing=existing)
+        assert both.reason == "entityAlreadyBound"
+
+    def test_widening_to_both_checks_existing_readers(self):
+        existing = [("r1", {"entity_id": "switch.fan", "service_name": "turn_on"}, "SOURCE")]
+        (merged,) = _plan(
+            {"entity_id": "switch.fan", "direction": "DEST"},
+            {"entity_id": "switch.fan", "direction": "SOURCE"},
+            existing=existing,
+        )
+        assert (merged.direction, merged.status, merged.reason) == ("BOTH", "conflict", "entityAlreadyBound")
+
+    def test_widening_a_conflicting_candidate_keeps_its_status(self):
+        existing = [("x1", {"entity_id": "switch.fan", "profile": "switch.on_off"}, "DEST")]
+        (merged,) = _plan(
+            {"entity_id": "switch.fan", "direction": "DEST"},
+            {"entity_id": "switch.fan", "direction": "SOURCE"},
+            existing=existing,
+        )
+        assert (merged.status, merged.reason) == ("exists", "bindingExists")
+
+    def test_mapping_summary_names_the_write_kind(self):
+        assert mapping_summary({"entity_id": "lock.t", "profile": "lock.boolean_locked"})["write_kind"] == "map"
+        assert mapping_summary({"entity_id": "cover.t", "profile": "cover.position"})["write_kind"] == "single"
+        assert mapping_summary({"entity_id": "switch.t"})["write_kind"] == "none"
+        assert mapping_summary({"entity_id": "sensor.t", "profile": "sensor.value"})["write_kind"] == "none"

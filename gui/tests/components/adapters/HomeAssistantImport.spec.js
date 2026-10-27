@@ -30,13 +30,14 @@ const NEW_LOCK = {
   direction: 'BOTH', tags: ['homeassistant', 'lock'], config: {}, convention: 'trueLocked', status: 'new', reason: null,
   mapping: {
     mode: 'profile',
+    write_kind: 'map',
     read: { attribute: null, state_map: { locked: true }, transitional_states: [], fault_states: [] },
     write: { true: { domain: 'lock', name: 'lock' }, false: { domain: 'lock', name: 'unlock' } },
   },
 }
 const ATTR = {
   ...NEW_LOCK, attribute: 'battery', profile: null, name: 'Shed (battery)', data_type: 'INTEGER', unit: '%', direction: 'SOURCE', convention: null,
-  mapping: { mode: 'default', read: { attribute: 'battery', state_map: null, transitional_states: [], fault_states: [] }, write: { mode: 'default' } },
+  mapping: { mode: 'default', write_kind: 'none', read: { attribute: 'battery', state_map: null, transitional_states: [], fault_states: [] }, write: { mode: 'default' } },
 }
 const UNSUPPORTED = { ...ATTR, entity_id: 'climate.living', status: 'unsupported', reason: 'writeNeedsProfile', mapping: null, tags: [] }
 
@@ -191,7 +192,7 @@ describe('HomeAssistantImport', () => {
     await history.setValue(false)
     const position = {
       ...NEW_LOCK, reason: 'ambiguousReadOnly',
-      mapping: { mode: 'profile', read: { attribute: 'current_position', state_map: null, transitional_states: [], fault_states: [] }, write: { domain: 'cover', name: 'set_cover_position', value_path: 'position' } },
+      mapping: { mode: 'profile', write_kind: 'single', read: { attribute: 'current_position', state_map: null, transitional_states: [], fault_states: [] }, write: { domain: 'cover', name: 'set_cover_position', value_path: 'position' } },
     }
     api.haImportPreview.mockResolvedValue({ data: { preview: [position] } })
     await w.find('[data-testid="ha-preview"]').trigger('click')

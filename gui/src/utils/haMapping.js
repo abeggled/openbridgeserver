@@ -59,29 +59,36 @@ export function resolveHaMapping(cfg, catalog) {
   }
   let mode = 'default'
   let write = null
+  let writeKind = 'none'  // 'single' action or value-keyed 'map'
   if (cfg.service_domain || cfg.service_name || cfg.service_data_key) {
     mode = 'legacy'
   } else if (hasValue(cfg.write_actions)) {
     mode = 'write_actions'
     write = cfg.write_actions
+    writeKind = 'map'
   } else if (hasValue(cfg.action)) {
     mode = 'action'
     write = cfg.action
+    writeKind = 'single'
   } else if (profile) {
     mode = 'profile'
-    if (profile.action) write = materialize(profile.action, cfg.entity_id)
-    else if (profile.write_actions) {
+    if (profile.action) {
+      write = materialize(profile.action, cfg.entity_id)
+      writeKind = 'single'
+    } else if (profile.write_actions) {
       write = Object.fromEntries(Object.entries(profile.write_actions).map(([k, a]) => [k, materialize(a, cfg.entity_id)]))
+      writeKind = 'map'
     }
   }
-  return { mode, read, write, convention: profile?.convention ?? null }
+  return { mode, read, write, writeKind, convention: profile?.convention ?? null }
 }
 
 // Flatten a resolved write mapping into display rows: { when, action, valuePath }.
-// `when` is null for a single action (every value triggers it).
-export function writeRows(write) {
-  if (!write || write.mode) return []
-  if (write.name) return [{ when: null, action: `${write.domain}.${write.name}`, valuePath: write.value_path ?? null }]
+// `when` is null for a single action (every value triggers it). The kind is passed
+// explicitly: a value key may itself be called "name" or "mode".
+export function writeRows(write, kind) {
+  if (!write || kind === 'none') return []
+  if (kind === 'single') return [{ when: null, action: `${write.domain}.${write.name}`, valuePath: write.value_path ?? null }]
   return Object.entries(write).map(([when, a]) => ({ when, action: `${a.domain}.${a.name}`, valuePath: a.value_path ?? null }))
 }
 

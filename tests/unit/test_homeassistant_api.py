@@ -468,9 +468,12 @@ def test_binding_validation_checks_the_profile_direction(direction, config, ok):
 
 
 def test_adapters_without_a_direction_hook_are_validated_as_before():
-    from obs.api.v1.bindings import _validate_adapter_binding
+    from obs.api.v1.bindings import _has_direction_check, _validate_adapter_binding
 
     _validate_adapter_binding("IOBROKER", "DEST", {"state_id": "a.0.x"})
+    assert _has_direction_check("HOME_ASSISTANT") is True
+    assert _has_direction_check("IOBROKER") is False
+    assert _has_direction_check("NOT_REGISTERED") is False
 
 
 async def test_import_uses_the_edited_name(monkeypatch, db):

@@ -290,6 +290,12 @@ def _ensure_system_datapoint_binding_allowed(dp_id: uuid.UUID | str, adapter_typ
         )
 
 
+def _has_direction_check(adapter_type: str) -> bool:
+    from obs.adapters.registry import get_class
+
+    return getattr(get_class(adapter_type), "validate_binding_direction", None) is not None
+
+
 def _validate_adapter_binding(
     adapter_type: str,
     direction: str,
@@ -668,7 +674,10 @@ async def update_binding(
         row["adapter_type"],
         direction,
         config,
-        validate_schema="config" in updates or (row["adapter_type"] == "MESSAGE" and "enabled" in updates),
+        validate_schema="config" in updates
+        or (row["adapter_type"] == "MESSAGE" and "enabled" in updates)
+        # a direction change must still fit the binding's config (e.g. a read-only HA profile)
+        or ("direction" in updates and _has_direction_check(row["adapter_type"])),
         enabled=bool(enabled),
         instance_config=instance_config,
     )

@@ -94,20 +94,34 @@ describe('resolveHaMapping', () => {
 
   it('defaults without profile or catalog', () => {
     const r = resolveHaMapping({ entity_id: 'switch.x', profile: '' }, undefined)
-    expect(r).toEqual({ mode: 'default', read: { attribute: null, state_map: null, transitional_states: [], fault_states: [] }, write: null, convention: null })
+    expect(r).toEqual({ mode: 'default', read: { attribute: null, state_map: null, transitional_states: [], fault_states: [] }, write: null, writeKind: 'none', convention: null })
   })
 })
 
 describe('writeRows', () => {
   it('handles empty, legacy, single and keyed writes', () => {
-    expect(writeRows(null)).toEqual([])
-    expect(writeRows({ mode: 'legacy' })).toEqual([])
-    expect(writeRows({ domain: 'cover', name: 'stop_cover' })).toEqual([{ when: null, action: 'cover.stop_cover', valuePath: null }])
-    expect(writeRows({ domain: 'cover', name: 'set_cover_position', value_path: 'position' })[0].valuePath).toBe('position')
-    expect(writeRows({ true: { domain: 'lock', name: 'lock' }, false: { domain: 'lock', name: 'unlock', value_path: 'x' } })).toEqual([
+    expect(writeRows(null, 'single')).toEqual([])
+    expect(writeRows({ mode: 'legacy' }, 'none')).toEqual([])
+    expect(writeRows({ domain: 'cover', name: 'stop_cover' }, 'single')).toEqual([{ when: null, action: 'cover.stop_cover', valuePath: null }])
+    expect(writeRows({ domain: 'cover', name: 'set_cover_position', value_path: 'position' }, 'single')[0].valuePath).toBe('position')
+    expect(writeRows({ true: { domain: 'lock', name: 'lock' }, false: { domain: 'lock', name: 'unlock', value_path: 'x' } }, 'map')).toEqual([
       { when: 'true', action: 'lock.lock', valuePath: null },
       { when: 'false', action: 'lock.unlock', valuePath: 'x' },
     ])
+  })
+
+  it('keeps value keys called "name" or "mode" as map entries', () => {
+    const write = { mode: { domain: 'select', name: 'a' }, name: { domain: 'select', name: 'b' } }
+    expect(writeRows(write, 'map').map(r => [r.when, r.action])).toEqual([['mode', 'select.a'], ['name', 'select.b']])
+  })
+
+  it('resolves the kind with the mapping', () => {
+    expect(resolveHaMapping({ entity_id: 'lock.x', profile: 'lock.boolean_locked' }, CATALOG).writeKind).toBe('map')
+    expect(resolveHaMapping({ entity_id: 'input_number.x', profile: 'number.value' }, CATALOG).writeKind).toBe('single')
+    expect(resolveHaMapping({ entity_id: 'x.y', action: { domain: 'a', name: 'b' } }, CATALOG).writeKind).toBe('single')
+    expect(resolveHaMapping({ entity_id: 'x.y', write_actions: { mode: { domain: 'a', name: 'b' } } }, CATALOG).writeKind).toBe('map')
+    expect(resolveHaMapping({ entity_id: 'sensor.x', profile: 'sensor.value' }, CATALOG).writeKind).toBe('none')
+    expect(resolveHaMapping({ entity_id: 'switch.x' }, CATALOG).writeKind).toBe('none')
   })
 })
 

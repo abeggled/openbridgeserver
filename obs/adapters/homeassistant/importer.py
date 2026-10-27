@@ -116,7 +116,8 @@ def filter_entities(
 
 
 def _state_obj(item: dict[str, Any]) -> dict[str, Any]:
-    return {"state": item.get("state"), "attributes": item.get("attributes") or {}}
+    # capabilities: non-scalar attributes the profile checks need (never offered for import)
+    return {"state": item.get("state"), "attributes": {**(item.get("attributes") or {}), **(item.get("capabilities") or {})}}
 
 
 def _with_profiles(item: dict[str, Any]) -> dict[str, Any]:
@@ -168,14 +169,18 @@ def mapping_summary(config: dict[str, Any]) -> dict[str, Any]:
     bc = HaBindingConfig(**config)
     mapping = resolve(bc)
     write: Any = None
+    write_kind = "none"  # "single" action or value-keyed "map"; a value key may be called "name"
     if mapping.mode in ("legacy", "default"):
         write = {"mode": mapping.mode}
     elif mapping.write_actions is not None:
         write = {k: a.model_dump(exclude_defaults=True) for k, a in mapping.write_actions.items()}
+        write_kind = "map"
     elif mapping.action is not None:
         write = mapping.action.model_dump(exclude_defaults=True)
+        write_kind = "single"
     return {
         "mode": mapping.mode,
+        "write_kind": write_kind,
         "read": {
             "attribute": mapping.attribute,
             "state_map": mapping.state_map,
@@ -286,7 +291,9 @@ def plan_import(
             first = result[planned[identity]]
             if candidate.direction != first.direction:
                 first.direction = "BOTH"  # SOURCE + DEST, or either + BOTH
-                _register_planned_read(first, planned_manual, planned_profiled)  # it may read only now
+                # It may read only now: check and register that read like a new one.
+                _check_read_overlap(first, manual_reads, profiled_reads, planned_manual, planned_profiled)
+                _register_planned_read(first, planned_manual, planned_profiled)
             continue
         planned[identity] = len(result)
         if identity in by_identity:
@@ -296,14 +303,22 @@ def plan_import(
             # Same HA registry entry under another entity_id: renamed in HA.
             candidate.status, candidate.reason = "conflict", "entityRenamed"
             candidate.existing_binding_id = uid_match[0]
-        elif (overlap := _overlap(candidate.config, manual_reads, profiled_reads)) is not None:
-            candidate.status, candidate.reason = "conflict", "entityAlreadyBound"
-            candidate.existing_binding_id = overlap
-        elif _overlap(candidate.config, planned_manual, planned_profiled) is not None:
-            candidate.status, candidate.reason = "conflict", "selectedTwice"
+        else:
+            _check_read_overlap(candidate, manual_reads, profiled_reads, planned_manual, planned_profiled)
         _register_planned_read(candidate, planned_manual, planned_profiled)
         result.append(candidate)
     return result
+
+
+def _check_read_overlap(candidate: HaImportCandidate, manual_reads: dict, profiled_reads: dict, planned_manual: dict, planned_profiled: dict) -> None:
+    """Mark a new candidate that would read a value someone already reads as a conflict."""
+    if candidate.status != "new" or candidate.direction == "DEST":
+        return  # a write-only candidate adds no second reader
+    if (overlap := _overlap(candidate.config, manual_reads, profiled_reads)) is not None:
+        candidate.status, candidate.reason = "conflict", "entityAlreadyBound"
+        candidate.existing_binding_id = overlap
+    elif _overlap(candidate.config, planned_manual, planned_profiled) is not None:
+        candidate.status, candidate.reason = "conflict", "selectedTwice"
 
 
 def _register_planned_read(candidate: HaImportCandidate, planned_manual: dict, planned_profiled: dict) -> None:

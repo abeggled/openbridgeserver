@@ -54,6 +54,7 @@ from obs.api.authz_service import adapter_delegates, authorize_adapter_instance,
 from obs.api.v1.application_audit import audit_application_contract, write_application_success
 from obs.api.v1.bindings import (
     _ensure_binding_mutation_scope,
+    _is_admin_principal,
     _json_config,
     _resend_system_value,
     _validate_adapter_binding,
@@ -401,10 +402,6 @@ def _redact_instance_config(adapter_type: str, config: dict[str, Any], *, privil
     return config
 
 
-def _is_admin_user(principal: Principal) -> bool:
-    return principal.type == "user" and principal.is_admin
-
-
 def _restore_redacted_token(adapter_type: str, stored: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
     """Keep the stored HA token when a client sends the redacted placeholder back."""
     if adapter_type == "HOME_ASSISTANT" and incoming.get("token") == REDACTED:
@@ -546,7 +543,7 @@ async def list_instances(
         except HTTPException:
             continue
         instance = adapter_registry.get_instance_by_id(row["id"])
-        result.append(_instance_out(row, instance, privileged=_is_admin_user(principal)))
+        result.append(_instance_out(row, instance, privileged=_is_admin_principal(principal)))
     return result
 
 
@@ -629,7 +626,7 @@ async def get_instance(
     principal = _principal_from_dependency(_user)
     await _ensure_instance_read(db, principal, str(instance_id))
     instance = adapter_registry.get_instance_by_id(str(instance_id))
-    return _instance_out(row, instance, privileged=_is_admin_user(principal))
+    return _instance_out(row, instance, privileged=_is_admin_principal(principal))
 
 
 # Serializes the read-modify-write of a ONEWIRE instance's config JSON per
@@ -724,7 +721,7 @@ async def update_instance(
 
         row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
         instance = adapter_registry.get_instance_by_id(str(instance_id))
-    return _instance_out(row, instance, privileged=_is_admin_user(principal))
+    return _instance_out(row, instance, privileged=_is_admin_principal(principal))
 
 
 @router.delete(
@@ -867,7 +864,7 @@ async def restart_instance_route(
 
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     instance = adapter_registry.get_instance_by_id(str(instance_id))
-    return _instance_out(row, instance, privileged=_is_admin_user(principal))
+    return _instance_out(row, instance, privileged=_is_admin_principal(principal))
 
 
 @router.post(

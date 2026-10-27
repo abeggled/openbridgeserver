@@ -97,8 +97,9 @@ class HaBindingConfig(BaseModel):
     @classmethod
     def _check_entity_id(cls, value: str) -> str:
         # HA rejects anything else in subscribe_entities for the whole request,
-        # so one malformed binding must never reach the subscription.
-        value = value.strip()
+        # so one malformed binding must never reach the subscription. HA itself
+        # lowercases entity ids in actions, so "Light.Kitchen" stays valid.
+        value = value.strip().lower()
         if not _ENTITY_ID.match(value):
             raise ValueError(f"invalid entity_id {value!r} (expected <domain>.<object_id>, lowercase a-z, 0-9, _)")
         return value

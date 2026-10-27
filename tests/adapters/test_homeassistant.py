@@ -760,6 +760,15 @@ class TestBrowse:
         with pytest.raises(HaNotConnectedError):
             await a.browse_services()
 
+    async def test_browse_passes_capabilities_separately(self, adapter, fake_ha):
+        fake_ha.states["light.plain"] = {"entity_id": "light.plain", "state": "off", "attributes": {"supported_color_modes": ["onoff"]}}
+        data = await adapter.browse_entities()
+        plain = next(e for e in data["entities"] if e["entity_id"] == "light.plain")
+        assert plain["capabilities"] == {"supported_color_modes": ["onoff"]}
+        assert "supported_color_modes" not in plain["attributes"]  # not importable
+        temp = next(e for e in data["entities"] if e["entity_id"] == "sensor.temp")
+        assert temp["capabilities"] == {}
+
     async def test_browse_not_connected(self, mock_bus):
         a = HomeAssistantAdapter(event_bus=mock_bus, config={"token": "t"})
         with pytest.raises(HaNotConnectedError):

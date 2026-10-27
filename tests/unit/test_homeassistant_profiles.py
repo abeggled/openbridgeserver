@@ -70,6 +70,10 @@ class TestBindingSchema:
     def test_entity_id_is_trimmed(self):
         assert HaBindingConfig(entity_id="  sensor.temp ").entity_id == "sensor.temp"
 
+    def test_entity_id_is_lowercased_like_home_assistant_does(self):
+        # pre-#1392 bindings like "Light.Kitchen" worked: HA lowercases ids in actions
+        assert HaBindingConfig(entity_id="Light.Kitchen").entity_id == "light.kitchen"
+
     def test_minimal_config_is_default_mode(self):
         assert resolve(HaBindingConfig(entity_id="switch.fan")).mode == "default"
 
@@ -89,7 +93,6 @@ class TestBindingSchema:
             {"entity_id": "lock.x", "action": {"domain": "lock", "name": "lock", "data": {"x": {"nested": "dict"}}}},
             {"entity_id": "lock.x", "ha_uid": "NOT-HEX"},
             {"entity_id": "sensor.my-temp"},
-            {"entity_id": "Sensor.Temp"},
             {"entity_id": "sensor"},
             {"entity_id": "sensor.a.b"},
         ],

@@ -106,6 +106,15 @@ def _public_attributes(attrs: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in attrs.items() if _is_scalar(v) and not any(part in k.lower() for part in _SENSITIVE_ATTRIBUTE_PARTS)}
 
 
+# Non-scalar attributes the profile checks read (e.g. on/off-only lights); passed
+# to the import planner separately, never offered as importable attributes.
+_CAPABILITY_ATTRIBUTES = ("supported_color_modes",)
+
+
+def _capabilities(attrs: dict[str, Any]) -> dict[str, Any]:
+    return {k: attrs[k] for k in _CAPABILITY_ATTRIBUTES if k in attrs}
+
+
 def _text(value: Any) -> str | None:
     return str(value)[:200] if isinstance(value, str) and value else None
 
@@ -550,6 +559,7 @@ class HomeAssistantAdapter(AdapterBase):
                     "device_class": attrs.get("device_class"),
                     "available": state.get("state") != "unavailable",
                     "attributes": _public_attributes(attrs),
+                    "capabilities": _capabilities(attrs),
                     "platform": meta.get("platform"),
                     "device": device.get("name_by_user") or device.get("name"),
                     "device_id": meta.get("device_id"),

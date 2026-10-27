@@ -174,6 +174,16 @@ async def test_browse_import_and_write_through_write_router(client, auth_headers
         inst = (await client.get(f"/api/v1/adapters/instances/{instance_id}", headers=auth_headers)).json()
         assert (inst["severity"], inst["status_detail_code"]) == ("warning", "haActionFailed")
         assert inst["config"]["token"] == TOKEN  # admins keep the editable value
+
+        # Changing only the direction is still checked against the profile
+        stop = next(r for r in rows if r["config"].get("profile") == "cover.stop")
+        resp = await client.patch(
+            f"/api/v1/datapoints/{stop['datapoint_id']}/bindings/{stop['binding_id']}",
+            json={"direction": "SOURCE"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 422, resp.text
+        assert "cover.stop" in resp.text
     finally:
         resp = await client.delete(f"/api/v1/adapters/instances/{instance_id}", headers=auth_headers)
         assert resp.status_code == 204, resp.text

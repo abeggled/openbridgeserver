@@ -172,7 +172,7 @@
               {{ $t('adapters.homeassistant.mappingRead', { source: c.mapping.read.attribute || 'state' }) }}
               <span v-if="c.mapping.read.state_map" class="font-mono">{{ JSON.stringify(c.mapping.read.state_map) }}</span>
             </div>
-            <div v-for="row in writeRows(c.mapping.write)" :key="row.when ?? 'all'" class="font-mono text-slate-600 dark:text-slate-300">
+            <div v-for="row in writeRows(c.mapping.write, c.mapping.write_kind)" :key="row.when ?? 'all'" class="font-mono text-slate-600 dark:text-slate-300">
               {{ $t(row.when === null ? 'adapters.homeassistant.writeAlways' : 'adapters.homeassistant.writeWhen', { when: row.when, action: row.action }) }}
               <span v-if="row.valuePath">{{ $t('adapters.homeassistant.writeValuePath', { path: row.valuePath }) }}</span>
             </div>

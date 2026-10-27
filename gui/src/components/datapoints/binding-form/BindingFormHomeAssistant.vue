@@ -158,19 +158,19 @@ const advancedInvalid = ref(false)
 const profiles = computed(() => profilesForEntity(catalog.value, props.cfg.entity_id))
 const unknownProfile = computed(() => !!props.cfg.profile && !profiles.value.some(p => p.id === props.cfg.profile))
 const resolved = computed(() => resolveHaMapping(props.cfg, catalog.value))
-const rows = computed(() => writeRows(resolved.value.write))
+const rows = computed(() => writeRows(resolved.value.write, resolved.value.writeKind))
 const typeMismatch = computed(() => profileTypeMismatch(catalog.value, props.cfg.profile, props.dpDataType))
 
 // Live suggestions from the selected instance; without one (or offline) the
 // fields stay plain free-text inputs.
 let servicesPromise = null
 let servicesFor = null
-const entityCache = new Map()
+const entityCache = new Map()  // `${instance}|${entity_id}` → entity, so a switched instance never answers
 
 async function searchEntities(query, limit) {
   if (!props.selectedInstanceId) return []
   const { data } = await adapterApi.haEntities(props.selectedInstanceId, { q: query, limit })
-  for (const item of data.items) entityCache.set(item.entity_id, item)
+  for (const item of data.items) entityCache.set(`${props.selectedInstanceId}|${item.entity_id}`, item)
   return data.items
 }
 
@@ -181,8 +181,9 @@ async function suggestEntities(query) {
 async function suggestAttributes(query) {
   const id = props.cfg.entity_id
   if (!id) return []
-  if (!entityCache.has(id)) await searchEntities(id, 10)
-  return attributeSuggestions(entityCache.get(id), query)
+  const key = `${props.selectedInstanceId}|${id}`
+  if (!entityCache.has(key)) await searchEntities(id, 10)
+  return attributeSuggestions(entityCache.get(key), query)
 }
 
 function loadServices() {

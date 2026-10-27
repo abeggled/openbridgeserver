@@ -56,6 +56,15 @@ describe('BindingFormHomeAssistant — searchable fields', () => {
     expect(api.haEntities).toHaveBeenCalledTimes(1)
   })
 
+  it('does not reuse attributes of another instance', async () => {
+    const { w } = await mk({ entity_id: 'lock.shed' })
+    await focus(w, 'attribute')
+    api.haEntities.mockResolvedValue({ data: { items: [{ ...SHED, attributes: { other: 1 } }], total: 1, facets: {} } })
+    await w.setProps({ selectedInstanceId: 'ha-2' })
+    expect(await focus(w, 'attribute')).toEqual([expect.stringContaining('other')])
+    expect(api.haEntities).toHaveBeenLastCalledWith('ha-2', { q: 'lock.shed', limit: 10 })
+  })
+
   it('offers no attributes without an entity', async () => {
     const { w } = await mk()
     expect(await focus(w, 'attribute')).toEqual([])
