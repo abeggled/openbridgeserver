@@ -54,6 +54,18 @@ async def _wait(predicate, timeout: float = 3.0) -> None:
         await asyncio.sleep(0.01)
 
 
+async def _value_when(client, auth_headers, dp_id: str, check, timeout: float = 5.0) -> dict:
+    """Poll a DataPoint value until *check* holds (the adapter works in background tasks)."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        value = await _value(client, auth_headers, dp_id)
+        if check(value):
+            return value
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError(f"value of {dp_id} never matched: {value}")
+        await asyncio.sleep(0.02)
+
+
 async def _value(client, auth_headers, dp_id: str) -> dict:
     resp = await client.get(f"/api/v1/datapoints/{dp_id}/value", headers=auth_headers)
     assert resp.status_code == 200, resp.text
@@ -71,10 +83,13 @@ async def test_browse_import_and_write_through_write_router(client, auth_headers
     base = f"/api/v1/adapters/instances/{instance_id}/homeassistant"
     try:
         await _wait(lambda: fake_ha.sockets and fake_ha.socket.authenticated)
-        await asyncio.sleep(0.05)
 
-        # Browse + filter
-        resp = await client.get(f"{base}/entities", params={"domain": "cover"}, headers=auth_headers)
+        # Browse + filter (the adapter becomes browsable right after its login)
+        for _attempt in range(250):
+            resp = await client.get(f"{base}/entities", params={"domain": "cover"}, headers=auth_headers)
+            if resp.status_code != 503:
+                break
+            await asyncio.sleep(0.02)
         assert resp.status_code == 200, resp.text
         page = resp.json()
         assert [i["entity_id"] for i in page["items"]] == ["cover.roof"]
@@ -128,19 +143,15 @@ async def test_browse_import_and_write_through_write_router(client, auth_headers
         volume_dp = by_key[("media_player.kitchen", "media_player.volume")]
 
         # Initial values arrive without waiting for an HA state change
-        await asyncio.sleep(0.1)
-        assert (await _value(client, auth_headers, lock_dp))["value"] is True
-        assert (await _value(client, auth_headers, position_dp))["value"] == 40
-        assert (await _value(client, auth_headers, volume_dp))["value"] == 0.2
+        await _value_when(client, auth_headers, lock_dp, lambda v: v["value"] is True)
+        await _value_when(client, auth_headers, position_dp, lambda v: v["value"] == 40)
+        await _value_when(client, auth_headers, volume_dp, lambda v: v["value"] == 0.2)
 
         # HA state changes reach OBS, transitional lock states keep the stable value
         fake_ha.set_state("lock.shed", "unlocking")
-        await asyncio.sleep(0.05)
-        value = await _value(client, auth_headers, lock_dp)
-        assert (value["value"], value["quality"]) == (True, "uncertain")
+        await _value_when(client, auth_headers, lock_dp, lambda v: (v["value"], v["quality"]) == (True, "uncertain"))
         fake_ha.set_state("lock.shed", "unlocked")
-        await asyncio.sleep(0.05)
-        assert (await _value(client, auth_headers, lock_dp))["value"] is False
+        await _value_when(client, auth_headers, lock_dp, lambda v: (v["value"], v["quality"]) == (False, "good"))
 
         # OBS writes traverse the WriteRouter into HA actions
         fake_ha.service_calls.clear()
