@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from obs.adapters.homeassistant.profiles import (
     AMBIGUOUS_DOMAINS,
+    ENTITY_ID_PATTERN,
     PROFILES,
     HaBindingConfig,
     HaProfile,
@@ -23,7 +24,6 @@ from obs.adapters.homeassistant.profiles import (
     resolve,
 )
 
-ENTITY_ID_PATTERN = r"^[a-z0-9_]+\.[a-z0-9_]+$"
 NAME_MAX = 255  # DataPointCreate.name
 
 

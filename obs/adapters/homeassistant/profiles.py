@@ -21,6 +21,7 @@ Reads use the binding's ``attribute``/``state_map``/``transitional_states``/
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import re
 from dataclasses import dataclass, field
@@ -35,7 +36,8 @@ from obs.core.json import jsonable
 # ---------------------------------------------------------------------------
 
 _IDENT = r"^[a-z0-9_]+$"
-_ENTITY_ID = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
+ENTITY_ID_PATTERN = r"^[a-z0-9_]+\.[a-z0-9_]+$"
+_ENTITY_ID = re.compile(ENTITY_ID_PATTERN)
 _PATH = r"^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$"
 _TARGET_KEYS = frozenset({"entity_id", "device_id", "area_id", "floor_id", "label_id"})
 
@@ -558,7 +560,9 @@ def _materialize(action: ProfileAction, entity_id: str) -> HaAction:
 def resolve(bc: HaBindingConfig) -> ResolvedMapping:
     profile = PROFILES.get(bc.profile) if bc.profile else None
     attribute = bc.attribute or (profile.attribute if profile else None)
-    state_map = bc.state_map if bc.state_map is not None else (profile.state_map if profile else None)
+    # A profile's state_map and "missing attribute" values only apply to the value it reads.
+    own_value = profile is not None and attribute == profile.attribute
+    state_map = bc.state_map if bc.state_map is not None else (profile.state_map if own_value else None)
     transitional = frozenset(bc.transitional_states or (profile.transitional_states if profile else ()))
     fault = frozenset(bc.fault_states or (profile.fault_states if profile else ()))
     value_kind: ValueKind = bc.read_as or (_KIND_BY_TYPE.get(profile.data_type, "auto") if profile else "auto")
@@ -580,8 +584,7 @@ def resolve(bc: HaBindingConfig) -> ResolvedMapping:
             write_actions = {k: _materialize(a, bc.entity_id) for k, a in profile.write_actions.items()}
     else:
         mode = "default"
-    # The profile's "missing attribute" values only apply to the attribute it reads.
-    missing = profile.missing_values if profile is not None and attribute == profile.attribute else {}
+    missing = profile.missing_values if own_value else {}
     return ResolvedMapping(mode, attribute, state_map, transitional, fault, value_kind, action, write_actions, missing)
 
 
@@ -647,15 +650,22 @@ def normalize(mapping: ResolvedMapping, state_obj: dict[str, Any] | None) -> tup
         raw = (state_obj.get("attributes") or {}).get(mapping.attribute)
         if raw is None and state in mapping.missing_values:
             return mapping.missing_values[state], GOOD, True
+        if mapping.state_map is not None:
+            # Map keys are text: a non-text attribute value is looked up as JSON (true, 1, null).
+            return _mapped(mapping.state_map, raw if isinstance(raw, str) else json.dumps(raw))
         if mapping.value_kind in ("auto", "string") and raw is None:
             return None, GOOD, True  # e.g. no media title while idle
         return _typed(raw, mapping.value_kind, coerce=False)
 
     if mapping.state_map is not None:
-        if state in mapping.state_map:
-            return mapping.state_map[state], GOOD, True
-        return None, UNCERTAIN, False
+        return _mapped(mapping.state_map, state)
     return _typed(state, mapping.value_kind, coerce=True)
+
+
+def _mapped(state_map: dict[str, Any], key: Any) -> tuple[Any, str, bool]:
+    if key in state_map:
+        return state_map[key], GOOD, True
+    return None, UNCERTAIN, False
 
 
 _TRUE = (True, "on", "true")

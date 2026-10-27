@@ -93,15 +93,16 @@ und Änderungen während eines Verbindungsabbruchs gehen nicht verloren.
 | Home-Assistant-Zustand | Wert in OBS | Qualität |
 |---|---|---|
 | normaler Zustand | neuer Wert | good |
-| `unknown`, Übergangszustand (z. B. `locking`, `opening`) | letzter stabiler Wert | uncertain |
-| `unavailable`, Fehlerzustand (z. B. `jammed`), Entity entfernt | letzter stabiler Wert | bad |
-| Verbindung zu Home Assistant verloren | letzter stabiler Wert | bad |
+| `unknown`, Übergangszustand (z. B. `locking`, `opening`) | Wert des Objekts bleibt | uncertain |
+| `unavailable`, Fehlerzustand (z. B. `jammed`), Entity entfernt | Wert des Objekts bleibt | bad |
+| Verbindung zu Home Assistant verloren | Wert des Objekts bleibt | bad |
 
 Nach einem Neustart von OBS gilt der gespeicherte Wert des Objekts als letzter stabiler Wert,
 auch wenn Home Assistant gerade nicht erreichbar ist. Eine Änderung an den Verknüpfungen sendet
 unveränderte Werte nicht erneut an andere Adapter.
 
-Nur Werte mit Qualität *good* werden an andere Verknüpfungen weitergereicht.
+Nur neue Werte mit Qualität *good* werden an andere Verknüpfungen weitergereicht und lösen
+Logik aus; ein reiner Qualitätswechsel ändert nur die Anzeige des Objekts.
 
 ### Entities importieren
 
@@ -177,7 +178,9 @@ Unter *Erweiterte Zuordnung (JSON)* sind zusätzlich möglich:
   des Objekts landet im Feld `value_path`;
 - `write_actions` — wertabhängige Aktionen, z. B.
   `{"true": {"domain": "lock", "name": "lock"}, "false": {"domain": "lock", "name": "unlock"}}`;
-- `state_map`, `transitional_states`, `fault_states` — eigene Lese-Normalisierung.
+- `state_map`, `transitional_states`, `fault_states` — eigene Lese-Normalisierung. Mit
+  einem Attribut gilt `state_map` für dessen Wert; Werte, die kein Text sind, werden als JSON
+  nachgeschlagen (`true`, `1`, `null`).
 
 **Lesen als** legt fest, in welchen Typ der Wert umgewandelt wird (Boolean, Zahl, Text oder
 automatisch); ein unpassender Wert behält den letzten Wert mit Qualität *unsicher*. Ein Profil

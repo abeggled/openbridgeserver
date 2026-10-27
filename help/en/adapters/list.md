@@ -84,15 +84,16 @@ gets its value immediately, and changes during a connection loss are not missed.
 | Home Assistant state | Value in OBS | Quality |
 |---|---|---|
 | normal state | new value | good |
-| `unknown`, transitional state (e.g. `locking`, `opening`) | last stable value | uncertain |
-| `unavailable`, fault state (e.g. `jammed`), entity removed | last stable value | bad |
-| connection to Home Assistant lost | last stable value | bad |
+| `unknown`, transitional state (e.g. `locking`, `opening`) | object's value is kept | uncertain |
+| `unavailable`, fault state (e.g. `jammed`), entity removed | object's value is kept | bad |
+| connection to Home Assistant lost | object's value is kept | bad |
 
 After an OBS restart the object's stored value counts as the last stable value, even while
 Home Assistant is unreachable. Changing bindings does not re-send unchanged values to other
 adapters.
 
-Only values with quality *good* are passed on to other bindings.
+Only new values with quality *good* are passed on to other bindings and trigger logic; a
+quality change alone only updates the object's display.
 
 ### Importing entities
 
@@ -163,7 +164,9 @@ needed. *Advanced mapping (JSON)* additionally accepts:
   value goes into the field `value_path`;
 - `write_actions` — value-dependent actions, e.g.
   `{"true": {"domain": "lock", "name": "lock"}, "false": {"domain": "lock", "name": "unlock"}}`;
-- `state_map`, `transitional_states`, `fault_states` — custom read normalization.
+- `state_map`, `transitional_states`, `fault_states` — custom read normalization. With an
+  attribute, `state_map` applies to its value; values that are not text are looked up as JSON
+  (`true`, `1`, `null`).
 
 **Read as** sets the type the value is converted to (Boolean, number, text or automatic); a
 value that does not fit keeps the last value with quality *uncertain*. A profile must fit the

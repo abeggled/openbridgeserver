@@ -3,6 +3,7 @@
   <div class="form-group">
     <label class="label">{{ $t('adapters.bindingForm.haEntityIdLabel') }}</label>
     <SuggestInput
+      :empty-text="$t('adapters.bindingForm.haNoSuggestions')"
       v-model="cfg.entity_id"
       :fetch-suggestions="suggestEntities"
       :placeholder="$t('adapters.bindingForm.haEntityIdPlaceholder')"
@@ -15,6 +16,7 @@
   <div class="form-group">
     <label class="label">{{ $t('adapters.bindingForm.haAttributeLabel') }} <span class="optional">{{ $t('adapters.bindingForm.haAttributeOptional') }}</span></label>
     <SuggestInput
+      :empty-text="$t('adapters.bindingForm.haNoSuggestions')"
       v-model="cfg.attribute"
       :fetch-suggestions="suggestAttributes"
       :placeholder="$t('adapters.bindingForm.haAttributePlaceholder')"
@@ -76,6 +78,7 @@
     <div class="form-group">
       <label class="label">{{ $t('adapters.bindingForm.haServiceDomainLabel') }} <span class="optional">{{ $t('adapters.bindingForm.haServiceDomainOptional') }}</span></label>
       <SuggestInput
+      :empty-text="$t('adapters.bindingForm.haNoSuggestions')"
         v-model="cfg.service_domain"
         :fetch-suggestions="suggestDomains"
         :placeholder="$t('adapters.bindingForm.haServiceDomainPlaceholder')"
@@ -86,6 +89,7 @@
     <div class="form-group">
       <label class="label">{{ $t('adapters.bindingForm.haServiceNameLabel') }} <span class="optional">{{ $t('adapters.bindingForm.haServiceNameOptional') }}</span></label>
       <SuggestInput
+      :empty-text="$t('adapters.bindingForm.haNoSuggestions')"
         v-model="cfg.service_name"
         :fetch-suggestions="suggestServices"
         :placeholder="$t('adapters.bindingForm.haServiceNamePlaceholder')"
@@ -97,6 +101,7 @@
   <div class="form-group" style="max-width:280px">
     <label class="label">{{ $t('adapters.bindingForm.haServiceDataKeyLabel') }} <span class="optional">{{ $t('adapters.bindingForm.haServiceDataKeyOptional') }}</span></label>
     <SuggestInput
+      :empty-text="$t('adapters.bindingForm.haNoSuggestions')"
       v-model="cfg.service_data_key"
       :fetch-suggestions="suggestDataKeys"
       :placeholder="$t('adapters.bindingForm.haServiceDataKeyPlaceholder')"

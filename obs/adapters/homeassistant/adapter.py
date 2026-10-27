@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import logging
 import time
 from typing import Any
@@ -180,6 +181,7 @@ class HomeAssistantAdapter(AdapterBase):
         self._last_good: dict[Any, Any] = {}
         self._last_published: dict[Any, tuple[Any, str]] = {}
         self._fresh_events: set[str] | None = None
+        self._write_specs: dict[Any, tuple[dict[str, Any], HaBindingConfig, ResolvedMapping]] = {}
         # binding id → what its published value depends on; a change republishes it
         self._signatures: dict[Any, tuple[Any, ...]] = {}
         self._sub_lock = asyncio.Lock()
@@ -248,6 +250,8 @@ class HomeAssistantAdapter(AdapterBase):
         self._sub_id = None
         self._sub_entities = None
         self._snapshot_expected = None
+        # A new connection tries the filtered subscription again (HA may have been upgraded).
+        self._sub_mode = "entities"
         self._browse_cache = None
         self._services_cache = None
         if conn is not None:
@@ -342,6 +346,8 @@ class HomeAssistantAdapter(AdapterBase):
             for binding_id in [b for b in store if signatures.get(b) != self._signatures.get(b)]:
                 del store[binding_id]
         self._entity_map, self._mappings, self._signatures = entity_map, mappings, signatures
+        bound = {binding.id for binding in self._bindings}
+        self._write_specs = {k: v for k, v in self._write_specs.items() if k in bound}
 
         logger.info("HA adapter: %d entity subscription(s): %s", len(self._entity_map), sorted(self._entity_map))
         try:
@@ -405,9 +411,11 @@ class HomeAssistantAdapter(AdapterBase):
         if self._sub_id is None:
             self._sub_id = await conn.subscribe({"type": "subscribe_events", "event_type": "state_changed"}, self._on_state_changed_event)
         # state_changed events applied while get_states was pending are newer than its answer.
-        self._fresh_events = set()
-        states = await conn.command({"type": "get_states"})
-        fresh, self._fresh_events = self._fresh_events, None
+        self._fresh_events = fresh = set()
+        try:
+            states = await conn.command({"type": "get_states"})
+        finally:
+            self._fresh_events = None
         snapshot = {
             s["entity_id"]: s
             for s in states or []
@@ -514,7 +522,8 @@ class HomeAssistantAdapter(AdapterBase):
         # The value HA reports again after a reconnect, an OBS start or a degraded
         # state is no new value: update the DataPoint (quality), but never re-send it
         # to other bindings or re-trigger logic — that could re-fire actuators.
-        unchanged = stable and _same_value(pub_value, self._last_known(binding))
+        # A degraded state always carries the DataPoint's current value.
+        unchanged = not stable or _same_value(pub_value, self._last_known(binding))
         if stable:
             self._last_good[binding.id] = pub_value
         self._last_published[binding.id] = (pub_value, quality)
@@ -661,9 +670,9 @@ class HomeAssistantAdapter(AdapterBase):
         """
         if self._http_client is None:
             raise HaActionError("Home Assistant adapter is not connected")
-        bc = HaBindingConfig(**binding.config)
+        bc, mapping = self._write_spec(binding)
         try:
-            call = select_action(bc, resolve(bc), value, logical_value)
+            call = select_action(bc, mapping, value, logical_value)
         except NoActionForValueError as exc:
             raise HaActionError(f"{bc.entity_id}: {exc}") from exc
         if call is None:
@@ -684,6 +693,16 @@ class HomeAssistantAdapter(AdapterBase):
             self._action_failed = False
             if self._connected:
                 await self._publish_connected()
+
+    def _write_spec(self, binding: Any) -> tuple[HaBindingConfig, ResolvedMapping]:
+        """Validated config + resolved mapping of a binding, cached until its config changes."""
+        cached = self._write_specs.get(binding.id)
+        if cached is not None and cached[0] == binding.config:
+            return cached[1], cached[2]
+        bc = HaBindingConfig(**binding.config)
+        mapping = resolve(bc)
+        self._write_specs[binding.id] = (copy.deepcopy(binding.config), bc, mapping)
+        return bc, mapping
 
     async def _report_action_failure(self, action: str) -> None:
         self._action_failed = True

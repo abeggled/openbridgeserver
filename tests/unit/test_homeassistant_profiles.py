@@ -284,6 +284,20 @@ class TestNormalize:
         bc = HaBindingConfig(entity_id="cover.t", profile="cover.position")
         assert normalize(resolve(bc), {"state": "open", "attributes": {"current_position": raw}}) == (None, "uncertain", False)
 
+    def test_state_map_applies_to_the_attribute_value(self):
+        cfg = {"entity_id": "climate.x", "attribute": "hvac_action", "state_map": {"heating": True, "idle": False, "true": 1, "null": 0}}
+        assert _read(cfg, "heat", {"hvac_action": "heating"}) == (True, "good", True)
+        assert _read(cfg, "heat", {"hvac_action": "idle"}) == (False, "good", True)
+        assert _read(cfg, "heat", {"hvac_action": True}) == (1, "good", True)  # non-text values as JSON
+        assert _read(cfg, "heat", {}) == (0, "good", True)
+        assert _read(cfg, "heat", {"hvac_action": "cooling"}) == (None, "uncertain", False)
+
+    def test_profile_state_map_only_applies_to_the_profile_value(self):
+        assert _read(
+            {"entity_id": "lock.x", "profile": "lock.boolean_locked", "attribute": "battery", "read_as": "number"}, "locked", {"battery": 80}
+        ) == (80, "good", True)
+        assert _read({"entity_id": "lock.x", "profile": "lock.boolean_locked"}, "locked") == (True, "good", True)
+
     def test_numeric_attribute_from_string_and_int(self):
         bc = HaBindingConfig(entity_id="cover.t", profile="cover.position")
         assert normalize(resolve(bc), {"state": "open", "attributes": {"current_position": "12"}}) == (12, "good", True)

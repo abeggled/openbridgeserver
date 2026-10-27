@@ -16,12 +16,12 @@
       @keydown.escape.prevent="close"
     />
     <div
-      v-if="open && (loading || suggestions.length || searched)"
+      v-if="open && (loading || suggestions.length || (searched && emptyText))"
       class="absolute z-50 mt-1 w-full bg-white dark:bg-surface-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl max-h-64 overflow-y-auto"
       :data-testid="`${testid}-dropdown`"
     >
       <div v-if="loading" class="px-3 py-2 text-xs text-slate-500">{{ $t('common.searching') }}</div>
-      <div v-else-if="!suggestions.length" class="px-3 py-2 text-xs text-slate-500" :data-testid="`${testid}-empty`">{{ $t('adapters.bindingForm.haNoSuggestions') }}</div>
+      <div v-else-if="!suggestions.length" class="px-3 py-2 text-xs text-slate-500" :data-testid="`${testid}-empty`">{{ emptyText }}</div>
       <ul v-else>
         <li
           v-for="(item, i) in suggestions"
@@ -56,6 +56,7 @@ const props = defineProps({
   testid: { type: String, default: 'suggest' },
   inputClass: { type: String, default: '' },
   debounceMs: { type: Number, default: 250 },
+  emptyText: { type: String, default: '' },  // shown when a search finds nothing
 })
 const emit = defineEmits(['update:modelValue', 'select'])
 

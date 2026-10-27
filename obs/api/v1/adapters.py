@@ -755,6 +755,7 @@ async def delete_instance(
             (str(instance_id),),
         )
         await db.execute("DELETE FROM adapter_instances WHERE id=?", (str(instance_id),))
+    _HA_IMPORT_LOCKS.pop(str(instance_id), None)
 
 
 @router.post(

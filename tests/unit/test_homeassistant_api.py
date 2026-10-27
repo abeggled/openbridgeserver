@@ -503,3 +503,13 @@ async def test_parallel_imports_of_one_instance_create_each_object_once(monkeypa
     )
     assert sorted((r.created_datapoints, r.skipped_existing) for r in (first, second)) == [(0, 1), (1, 0)]
     assert (await db.fetchone("SELECT COUNT(*) AS n FROM adapter_bindings"))["n"] == 1
+
+
+async def test_deleting_an_instance_drops_its_import_lock(monkeypatch, db):
+    instance_id = await _instance(db)
+    monkeypatch.setattr(adapters_api.adapter_registry, "stop_instance", AsyncMock())
+    adapters_api._HA_IMPORT_LOCKS[str(instance_id)] = asyncio.Lock()
+    await adapters_api.delete_instance(instance_id, _user=ADMIN, db=db)
+    assert str(instance_id) not in adapters_api._HA_IMPORT_LOCKS
+    other = await _instance(db)  # an instance that never imported has no lock to drop
+    await adapters_api.delete_instance(other, _user=ADMIN, db=db)

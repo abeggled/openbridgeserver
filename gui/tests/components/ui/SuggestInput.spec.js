@@ -82,17 +82,24 @@ describe('SuggestInput', () => {
   })
 
   it('shows an empty hint, survives errors and ignores keys without suggestions', async () => {
-    const { w } = mk({ fetchSuggestions: vi.fn().mockRejectedValue(new Error('offline')) })
+    const { w } = mk({ fetchSuggestions: vi.fn().mockRejectedValue(new Error('offline')), emptyText: 'Nichts gefunden' })
     const input = w.find('[data-testid="s"]')
     await input.trigger('focus')
     await flushPromises()
-    expect(w.find('[data-testid="s-empty"]').exists()).toBe(true)
+    expect(w.find('[data-testid="s-empty"]').text()).toBe('Nichts gefunden')
     await input.trigger('keydown', { key: 'ArrowDown' })
     await input.trigger('keydown', { key: 'ArrowUp' })
-    const other = mk({ fetchSuggestions: vi.fn().mockResolvedValue(null) })
+    const other = mk({ fetchSuggestions: vi.fn().mockResolvedValue(null), emptyText: 'Nichts gefunden' })
     await other.w.find('[data-testid="s"]').trigger('focus')
     await flushPromises()
     expect(other.w.find('[data-testid="s-empty"]').exists()).toBe(true)
+  })
+
+  it('stays closed on an empty result without an empty text', async () => {
+    const { w } = mk({ fetchSuggestions: vi.fn().mockResolvedValue([]) })
+    await w.find('[data-testid="s"]').trigger('focus')
+    await flushPromises()
+    expect(w.find('[data-testid="s-dropdown"]').exists()).toBe(false)
   })
 
   it('drops stale responses and shows a loading state', async () => {

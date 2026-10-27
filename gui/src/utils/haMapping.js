@@ -51,9 +51,12 @@ function materialize(action, entityId) {
 // legacy service_* > write_actions > action > profile > default.
 export function resolveHaMapping(cfg, catalog) {
   const profile = (catalog ?? []).find(p => p.id === cfg.profile) ?? null
+  const attribute = cfg.attribute || profile?.attribute || null
+  // The profile's state_map only applies to the value the profile itself reads.
+  const ownValue = profile !== null && attribute === profile.attribute
   const read = {
-    attribute: cfg.attribute || profile?.attribute || null,
-    state_map: hasValue(cfg.state_map) ? cfg.state_map : (profile?.state_map ?? null),
+    attribute,
+    state_map: hasValue(cfg.state_map) ? cfg.state_map : (ownValue ? profile.state_map ?? null : null),
     transitional_states: hasValue(cfg.transitional_states) ? cfg.transitional_states : (profile?.transitional_states ?? []),
     fault_states: hasValue(cfg.fault_states) ? cfg.fault_states : (profile?.fault_states ?? []),
   }

@@ -54,6 +54,13 @@ describe('haMapping keys', () => {
 })
 
 describe('resolveHaMapping', () => {
+  it('applies the profile state_map only to the value the profile reads', () => {
+    expect(resolveHaMapping({ entity_id: 'lock.x', profile: 'lock.boolean_locked' }, CATALOG).read.state_map).not.toBeNull()
+    expect(resolveHaMapping({ entity_id: 'lock.x', profile: 'lock.boolean_locked', attribute: 'battery' }, CATALOG).read.state_map).toBeNull()
+    expect(resolveHaMapping({ entity_id: 'sensor.x', profile: 'sensor.value' }, CATALOG).read.state_map).toBeNull()
+    expect(resolveHaMapping({ entity_id: 'lock.x', attribute: 'battery', state_map: { '1': true } }, CATALOG).read.state_map).toEqual({ '1': true })
+  })
+
   it('legacy fields win over everything', () => {
     for (const key of ['service_domain', 'service_name', 'service_data_key']) {
       const r = resolveHaMapping({ entity_id: 'lock.x', profile: 'lock.boolean_locked', [key]: 'x', action: { domain: 'a', name: 'b' } }, CATALOG)

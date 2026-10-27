@@ -209,9 +209,9 @@ class TestReconnect:
         flags = [(e.value, e.quality, e.suppress_write_propagation, e.suppress_action_triggers) for e in _events(mock_bus) if e.binding_id == b.id]
         assert flags == [
             (21.5, "good", False, False),  # first value of a new binding
-            (21.5, "bad", False, False),
+            (21.5, "bad", True, True),  # degraded: same value, only the quality changes
             (21.5, "good", True, True),  # reconnect snapshot: same value
-            (21.5, "uncertain", False, False),
+            (21.5, "uncertain", True, True),
             (21.5, "good", True, True),  # back from unknown: same value
             (22, "good", False, False),  # a real change propagates
         ]
@@ -836,6 +836,57 @@ class TestDataPointValue:
         flags = [(e.value, e.quality, e.suppress_write_propagation) for e in _events(mock_bus) if e.binding_id == b.id]
         assert flags == [
             (True, "good", False),
-            (False, "bad", False),  # degrading keeps the DataPoint's value, not HA's last one
+            (False, "bad", True),  # degrading keeps the DataPoint's value, not HA's last one
             (True, "good", False),  # HA's value differs from the DataPoint: propagate it
         ]
+
+    async def test_connection_loss_never_retriggers_with_the_old_value(self, adapter, mock_bus, fake_ha):
+        b = make_binding({"entity_id": "sensor.temp"})
+        await _bind(adapter, b)
+        await adapter._mark_connection_lost()
+        (lost,) = [e for e in _events(mock_bus) if e.binding_id == b.id and e.quality == "bad"]
+        assert (lost.value, lost.suppress_write_propagation, lost.suppress_action_triggers) == (21.5, True, True)
+
+
+class TestReviewFollowUps:
+    async def test_a_new_connection_retries_the_filtered_subscription(self, adapter, fake_ha):
+        b = make_binding({"entity_id": "sensor.temp"})
+        fake_ha.subscribe_error = ("invalid_format", "no filter")
+        await _bind(adapter, b)
+        assert adapter._sub_mode == "events"
+        fake_ha.subscribe_error = None
+        fake_ha.socket.drop()
+        await settle(40)
+        assert adapter._sub_mode == "entities"
+        assert fake_ha.socket.sent[-1]["type"] == "subscribe_entities"
+
+    async def test_failed_snapshot_request_ends_the_fresh_event_tracking(self, adapter, fake_ha):
+        fake_ha.subscribe_error = ("invalid_format", "no filter")
+        await _bind(adapter, make_binding({"entity_id": "sensor.temp"}))
+
+        async def failing(payload, *args, **kwargs):
+            raise RuntimeError("timeout")
+
+        conn = adapter._conn
+        conn.command = failing
+        adapter._sub_entities = None  # force a new snapshot on the existing event subscription
+        with pytest.raises(RuntimeError):
+            await adapter._subscribe(conn)
+        assert adapter._fresh_events is None
+
+    async def test_write_spec_is_cached_until_the_config_changes(self, monkeypatch, adapter, fake_ha):
+        b = make_binding({"entity_id": "lock.shed", "profile": "lock.boolean_locked"}, direction="DEST")
+        calls = []
+        real = ha_adapter.resolve
+        monkeypatch.setattr(ha_adapter, "resolve", lambda bc: calls.append(bc.entity_id) or real(bc))
+        await adapter.write(b, True)
+        await adapter.write(b, False)
+        assert calls == ["lock.shed"]
+        b.config = {"entity_id": "lock.door", "profile": "lock.boolean_locked"}
+        await adapter.write(b, True)
+        assert calls == ["lock.shed", "lock.door"]
+        assert fake_ha.service_calls[-1] == ("lock", "lock", {"entity_id": "lock.door"})
+        await _bind(adapter, b)
+        assert b.id in adapter._write_specs  # still bound: kept
+        await _bind(adapter, make_binding({"entity_id": "sensor.temp"}))  # b is no longer bound
+        assert b.id not in adapter._write_specs
