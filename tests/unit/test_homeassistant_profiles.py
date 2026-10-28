@@ -105,6 +105,11 @@ class TestBindingSchema:
             {"entity_id": "sensor.my-temp"},
             {"entity_id": "sensor"},
             {"entity_id": "sensor.a.b"},
+            # HA rejects these in subscribe_entities (whole request): leading/trailing/double _
+            {"entity_id": "sensor.temp_"},
+            {"entity_id": "light.foo__bar"},
+            {"entity_id": "_light.foo"},
+            {"entity_id": "light._foo"},
         ],
     )
     def test_invalid_mappings_rejected(self, config):

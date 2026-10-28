@@ -202,7 +202,8 @@ Verknüpfung verändern nur den gesendeten Wert, nie die Auswahl der Aktion.
   Aktionen werden nicht abgebildet.
 - *Token ungültig*: Token in Home Assistant neu erzeugen und in der Instanz eintragen.
 - Entity-IDs müssen dem Home-Assistant-Format `domain.name` entsprechen (Kleinbuchstaben,
-  Ziffern, `_`); eine ungültige Verknüpfung wird übersprungen, die übrigen laufen weiter.
+  Ziffern, `_` – aber kein `_` am Anfang oder Ende eines Teils und kein doppeltes `__`);
+  eine ungültige Verknüpfung wird übersprungen, die übrigen laufen weiter.
 - Keine Geräte-/Bereichsangaben im Browser: Token eines Administrators verwenden.
 - Ein Objekt zeigt Qualität *bad*: Entity in Home Assistant prüfen (`unavailable`, entfernt)
   oder Verbindung der Instanz prüfen.

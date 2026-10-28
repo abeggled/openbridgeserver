@@ -157,7 +157,8 @@ const props = defineProps({
 const emit = defineEmits(['advanced-validity'])
 
 const READ_AS = ['auto', 'boolean', 'number', 'string']
-const COMPLETE_ENTITY_ID = /^[a-z0-9_]+\.[a-z0-9_]+$/
+// HA's own rule: no leading, trailing or double underscore in either part.
+const COMPLETE_ENTITY_ID = /^[a-z0-9]+(?:_[a-z0-9]+)*\.[a-z0-9]+(?:_[a-z0-9]+)*$/
 const catalog = ref([])
 const advancedText = ref(advancedMappingText(props.cfg))
 const advancedInvalid = ref(false)

@@ -92,17 +92,20 @@ class HaConnection:
         await self._closed.wait()
 
     async def close(self) -> None:
-        for task in (self._reader, self._worker):
-            await self._stop(task)
-        with contextlib.suppress(Exception):
-            await self._ws.close()
-        self._mark_closed(ConnectionError("connection closed"))
+        tasks = [t for t in (self._reader, self._worker) if t is not None and t is not asyncio.current_task()]
+        # Cancel both up front: a caller cancelled while awaiting one must not leave the other running.
+        for task in tasks:
+            task.cancel()
+        try:
+            for task in tasks:
+                await self._stop(task)
+        finally:
+            with contextlib.suppress(Exception):
+                await self._ws.close()
+            self._mark_closed(ConnectionError("connection closed"))
 
     @staticmethod
-    async def _stop(task: asyncio.Task | None) -> None:
-        if task is None or task is asyncio.current_task():
-            return
-        task.cancel()
+    async def _stop(task: asyncio.Task) -> None:
         try:
             await task
         except asyncio.CancelledError:

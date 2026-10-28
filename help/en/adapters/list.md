@@ -186,7 +186,7 @@ change the value sent, never which action runs.
 - Complex actions (e.g. `play_media`, grouping, queues) and action responses are not mapped.
 - *Token invalid*: create a new token in Home Assistant and enter it in the instance.
 - Entity IDs must follow the Home Assistant format `domain.name` (lowercase letters, digits,
-  `_`); an invalid binding is skipped, the others keep running.
+  `_` – but no `_` at the start or end of a part and no double `__`); an invalid binding is skipped, the others keep running.
 - No device/area data in the browser: use an administrator's token.
 - An object shows quality *bad*: check the entity in Home Assistant (`unavailable`, removed)
   or the instance's connection.

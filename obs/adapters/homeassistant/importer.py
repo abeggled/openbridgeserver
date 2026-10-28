@@ -263,7 +263,12 @@ def plan_import(
     # Stored configs keep what the user typed; the adapter matches entity ids lowercased.
     existing = [(binding_id, {**cfg, "entity_id": str(cfg.get("entity_id")).strip().lower()}, direction) for binding_id, cfg, direction in existing]
     by_id = {item["entity_id"]: item for item in entities}
-    by_identity = {_identity(cfg): binding_id for binding_id, cfg, _direction in existing}
+    # identity → (binding_id, direction); a reading binding wins over a write-only one
+    by_identity: dict[tuple[str, str | None, str | None], tuple[str, str]] = {}
+    for binding_id, cfg, direction in existing:
+        known = by_identity.get(_identity(cfg))
+        if known is None or known[1] == "DEST":
+            by_identity[_identity(cfg)] = (binding_id, direction)
     # Same entity value, mapped by hand (no profile) on one side: importing it again
     # would create a second object for the same device value. Only reading bindings count.
     manual_reads: dict[tuple[str, str | None], str] = {}
@@ -308,9 +313,11 @@ def plan_import(
                 _register_planned_read(first, planned_manual, planned_profiled)
             continue
         planned[identity] = len(result)
-        if identity in by_identity:
+        known = by_identity.get(identity)
+        # A write-only binding reads nothing: the value itself can still be imported.
+        if known is not None and not (known[1] == "DEST" and candidate.direction != "DEST"):
             candidate.status, candidate.reason = "exists", "bindingExists"
-            candidate.existing_binding_id = by_identity[identity]
+            candidate.existing_binding_id = known[0]
         elif (uid_match := by_uid.get((candidate.config.get("ha_uid"), identity[1], identity[2]))) is not None:
             # Same HA registry entry under another entity_id: renamed in HA.
             candidate.status, candidate.reason = "conflict", "entityRenamed"

@@ -302,6 +302,9 @@ class TestPlan:
         with pytest.raises(ValidationError):
             HaImportSelection(entity_id="Not An Entity")
         with pytest.raises(ValidationError):
+            HaImportSelection(entity_id="sensor.temp_")
+        assert HaImportSelection(entity_id="sensor.temp_2").entity_id == "sensor.temp_2"
+        with pytest.raises(ValidationError):
             HaImportSelection(entity_id="a.b", attribute="x\ny")
         assert HaImportSelection(entity_id="a.b", attribute="Next Departure").attribute == "Next Departure"
         with pytest.raises(ValidationError):
@@ -349,6 +352,19 @@ class TestReviewFollowUps:
         assert _plan({"entity_id": "switch.fan"}, existing=existing)[0].status == "new"
         existing = [("r1", {"entity_id": "switch.fan", "service_name": "turn_on"}, "SOURCE")]
         assert _plan({"entity_id": "switch.fan"}, existing=existing)[0].reason == "entityAlreadyBound"
+
+    def test_write_only_binding_with_the_same_identity_does_not_hide_the_value(self):
+        legacy = [("w1", {"entity_id": "climate.living", "service_name": "set_temperature"}, "DEST")]
+        assert _plan({"entity_id": "climate.living"}, existing=legacy)[0].status == "new"
+        cfg = {"entity_id": "switch.fan", "profile": "switch.on_off"}
+        write_only = [("w1", cfg, "DEST")]
+        assert _plan({"entity_id": "switch.fan"}, existing=write_only)[0].status == "new"  # reads too
+        (c,) = _plan({"entity_id": "switch.fan", "direction": "DEST"}, existing=write_only)
+        assert (c.status, c.existing_binding_id) == ("exists", "w1")
+        # with both kinds present, the reading binding is the existing one, in either order
+        for existing in ([("r1", cfg, "SOURCE"), ("w1", cfg, "DEST")], [("w1", cfg, "DEST"), ("r1", cfg, "SOURCE")]):
+            (c,) = _plan({"entity_id": "switch.fan"}, existing=existing)
+            assert (c.status, c.existing_binding_id) == ("exists", "r1")
 
     def test_same_value_selected_twice_in_one_request(self):
         profiled, plain = _plan({"entity_id": "switch.fan"}, {"entity_id": "switch.fan", "profile": None})

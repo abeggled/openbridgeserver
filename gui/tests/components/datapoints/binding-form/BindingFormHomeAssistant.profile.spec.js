@@ -120,7 +120,8 @@ describe('BindingFormHomeAssistant — profiles (#1392)', () => {
   it('keeps the profile while the entity id is retyped', async () => {
     const { w, cfg } = await mk({ entity_id: 'lock.shed', profile: 'lock.boolean_locked' })
     const input = w.find('[data-testid="config-field-entity_id"]')
-    for (const partial of ['', 'l', 'lo', 'lock', 'lock.', 'lock.f', ' Lock.Front ']) {
+    // 'cover_.roof' is no valid id yet (HA rejects a trailing _): it never clears the profile
+    for (const partial of ['', 'l', 'lo', 'lock', 'lock.', 'lock.f', ' Lock.Front ', 'cover_.roof', 'cover.roof_']) {
       await input.setValue(partial)
       expect(cfg.profile).toBe('lock.boolean_locked')
     }

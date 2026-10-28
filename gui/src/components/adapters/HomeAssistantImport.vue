@@ -274,7 +274,8 @@ function errorText(e, fallbackKey) {
   const detail = e?.response?.data?.detail
   // FastAPI validation errors (422) carry a list of { loc, msg } objects
   if (Array.isArray(detail)) return detail.map(d => d?.msg ?? String(d)).join('; ') || t(fallbackKey)
-  return detail ?? t(fallbackKey)
+  // a structured detail object has no readable text of its own
+  return typeof detail === 'string' && detail ? detail : t(fallbackKey)
 }
 
 // Live search while typing; Enter still searches immediately.

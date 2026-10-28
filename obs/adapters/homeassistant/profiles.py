@@ -36,7 +36,8 @@ from obs.core.json import jsonable
 # ---------------------------------------------------------------------------
 
 _IDENT = r"^[a-z0-9_]+$"
-ENTITY_ID_PATTERN = r"^[a-z0-9_]+\.[a-z0-9_]+$"
+# HA's own rule: no leading, trailing or double underscore in either part.
+ENTITY_ID_PATTERN = r"^[a-z0-9]+(?:_[a-z0-9]+)*\.[a-z0-9]+(?:_[a-z0-9]+)*$"
 _ENTITY_ID = re.compile(ENTITY_ID_PATTERN)
 # HA attribute keys are free text (templates and custom integrations use spaces,
 # hyphens, capitals): only control characters are refused.
@@ -113,7 +114,7 @@ class HaBindingConfig(BaseModel):
         # lowercases entity ids in actions, so "Light.Kitchen" stays valid.
         value = value.strip().lower()
         if not _ENTITY_ID.match(value):
-            raise ValueError(f"invalid entity_id {value!r} (expected <domain>.<object_id>, lowercase a-z, 0-9, _)")
+            raise ValueError(f"invalid entity_id {value!r} (expected <domain>.<object_id>: lowercase a-z, 0-9, single _ between)")
         return value
 
     @model_validator(mode="after")

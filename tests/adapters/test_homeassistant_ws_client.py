@@ -196,6 +196,10 @@ async def test_close_propagates_callers_cancellation():
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+    # the interrupted close still stops the worker and closes the connection
+    await asyncio.sleep(0)
+    assert conn._worker.done()
+    assert conn.closed
 
 
 async def test_unknown_message_types_and_done_futures_are_harmless():

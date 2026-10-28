@@ -326,6 +326,8 @@ describe('HomeAssistantImport', () => {
     [[{ loc: ['body', 'selections'], msg: 'List should have at most 500 items' }, { msg: 'second' }], 'List should have at most 500 items; second'],
     [['plain'], 'plain'],
     [[], 'Vorschau konnte nicht erstellt werden'],
+    [{ code: 'forbidden' }, 'Vorschau konnte nicht erstellt werden'],
+    ['', 'Vorschau konnte nicht erstellt werden'],
   ])('renders validation error lists readably (%#)', async (detail, text) => {
     const w = await loaded()
     await w.find('[data-testid="ha-select-lock.shed"]').setValue(true)
