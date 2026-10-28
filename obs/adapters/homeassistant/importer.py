@@ -282,6 +282,20 @@ def plan_import(
     planned_profiled: dict[tuple[str, str | None], str] = {}
     by_uid = {(cfg.get("ha_uid"), *_identity(cfg)[1:]): (binding_id, cfg) for binding_id, cfg, _direction in existing if cfg.get("ha_uid")}
 
+    def match_existing(candidate: HaImportCandidate, identity: tuple[str, str | None, str | None]) -> None:
+        known = by_identity.get(identity)
+        uid_match = by_uid.get((candidate.config.get("ha_uid"), identity[1], identity[2]))
+        # A write-only binding reads nothing: the value itself can still be imported.
+        if known is not None and not (known[1] == "DEST" and candidate.direction != "DEST"):
+            candidate.status, candidate.reason = "exists", "bindingExists"
+            candidate.existing_binding_id = known[0]
+        elif uid_match is not None and uid_match[1]["entity_id"] != candidate.entity_id:
+            # Same HA registry entry under another entity_id: renamed in HA.
+            candidate.status, candidate.reason = "conflict", "entityRenamed"
+            candidate.existing_binding_id = uid_match[0]
+        else:
+            _check_read_overlap(candidate, manual_reads, profiled_reads, planned_manual, planned_profiled)
+
     result: list[HaImportCandidate] = []
     planned: dict[tuple[str, str | None, str | None], int] = {}
     for index, sel in enumerate(request.selections):
@@ -309,21 +323,16 @@ def plan_import(
             if candidate.direction != first.direction:
                 first.direction = "BOTH"  # SOURCE + DEST, or either + BOTH
                 # It may read only now: check and register that read like a new one.
-                _check_read_overlap(first, manual_reads, profiled_reads, planned_manual, planned_profiled)
+                if first.status == "exists":
+                    # Matched a write-only binding as DEST; reading, it may be new now.
+                    first.status, first.reason, first.existing_binding_id = "new", None, None
+                    match_existing(first, identity)
+                else:
+                    _check_read_overlap(first, manual_reads, profiled_reads, planned_manual, planned_profiled)
                 _register_planned_read(first, planned_manual, planned_profiled)
             continue
         planned[identity] = len(result)
-        known = by_identity.get(identity)
-        # A write-only binding reads nothing: the value itself can still be imported.
-        if known is not None and not (known[1] == "DEST" and candidate.direction != "DEST"):
-            candidate.status, candidate.reason = "exists", "bindingExists"
-            candidate.existing_binding_id = known[0]
-        elif (uid_match := by_uid.get((candidate.config.get("ha_uid"), identity[1], identity[2]))) is not None:
-            # Same HA registry entry under another entity_id: renamed in HA.
-            candidate.status, candidate.reason = "conflict", "entityRenamed"
-            candidate.existing_binding_id = uid_match[0]
-        else:
-            _check_read_overlap(candidate, manual_reads, profiled_reads, planned_manual, planned_profiled)
+        match_existing(candidate, identity)
         _register_planned_read(candidate, planned_manual, planned_profiled)
         result.append(candidate)
     return result

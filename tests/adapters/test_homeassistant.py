@@ -706,6 +706,15 @@ class TestWrite:
         await adapter.write(b, False)
         assert adapter.last_detail_code == "connectedHa"
 
+    async def test_rejected_action_keeps_the_invalid_bindings_warning(self, adapter, fake_ha):
+        await adapter._publish_status(True, "skipped", severity="warning", code="invalidBindingsSkipped")
+        fake_ha.service_errors["switch.turn_on"] = (400, {"message": "no"})
+        with pytest.raises(HaActionError):
+            await adapter.write(make_binding({"entity_id": "switch.fan"}), True)
+        assert adapter.last_detail_code == "invalidBindingsSkipped"
+        await adapter.write(make_binding({"entity_id": "switch.fan"}), False)  # success clears nothing it did not set
+        assert adapter.last_detail_code == "invalidBindingsSkipped"
+
     async def test_ha_error_without_json_message(self, adapter, fake_ha):
         fake_ha.service_errors["switch.turn_on"] = (500, "Internal Server Error")
         with pytest.raises(HaActionError, match=r"HTTP 500$"):

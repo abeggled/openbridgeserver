@@ -57,12 +57,22 @@ describe('BindingFormHomeAssistant — searchable fields', () => {
     expect(api.haEntities).toHaveBeenCalledTimes(1)
   })
 
-  it('asks only once for an entity HA does not know', async () => {
-    api.haEntities.mockResolvedValue({ data: { items: [], total: 0, facets: {} } })
-    const { w } = await mk({ entity_id: 'lock.gone' })
-    expect(await focus(w, 'attribute')).toEqual([])
-    await focus(w, 'attribute')
-    expect(api.haEntities).toHaveBeenCalledTimes(1)
+  it('remembers an entity HA does not know for 30 s only', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
+    try {
+      api.haEntities.mockResolvedValue({ data: { items: [], total: 0, facets: {} } })
+      const { w } = await mk({ entity_id: 'lock.shed' })
+      expect(await focus(w, 'attribute')).toEqual([])
+      await focus(w, 'attribute')
+      expect(api.haEntities).toHaveBeenCalledTimes(1)
+      // later HA knows it (e.g. after a restart): asked again, then found
+      now.mockReturnValue(1_030_000)
+      api.haEntities.mockResolvedValue({ data: { items: [SHED], total: 1, facets: {} } })
+      expect(await focus(w, 'attribute')).toEqual([expect.stringContaining('battery')])
+      expect(api.haEntities).toHaveBeenCalledTimes(2)
+    } finally {
+      now.mockRestore()
+    }
   })
 
   it('does not reuse attributes of another instance', async () => {

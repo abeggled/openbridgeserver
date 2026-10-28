@@ -742,6 +742,8 @@ class HomeAssistantAdapter(AdapterBase):
     async def _report_action_failure(self, action: str) -> None:
         if not self._connected:
             return  # the connection status ("reconnecting") says more than a rejected action
+        if self.last_detail_code == "invalidBindingsSkipped":
+            return  # lasts until the bindings are fixed; a success would clear it (the failure is logged)
         await self._publish_status(
             self._connected,
             f"Home Assistant hat {action} abgelehnt",

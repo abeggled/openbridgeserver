@@ -463,14 +463,28 @@ class TestThirdReview:
         )
         assert (merged.direction, merged.status, merged.reason) == ("BOTH", "conflict", "entityAlreadyBound")
 
-    def test_widening_a_conflicting_candidate_keeps_its_status(self):
-        existing = [("x1", {"entity_id": "switch.fan", "profile": "switch.on_off"}, "DEST")]
-        (merged,) = _plan(
-            {"entity_id": "switch.fan", "direction": "DEST"},
-            {"entity_id": "switch.fan", "direction": "SOURCE"},
-            existing=existing,
-        )
-        assert (merged.status, merged.reason) == ("exists", "bindingExists")
+    def test_widening_rechecks_against_existing_bindings(self):
+        cfg = {"entity_id": "switch.fan", "profile": "switch.on_off"}
+        selections = ({"entity_id": "switch.fan", "direction": "DEST"}, {"entity_id": "switch.fan", "direction": "SOURCE"})
+        # a write-only binding covered only the DEST half: the read half is new
+        (merged,) = _plan(*selections, existing=[("x1", cfg, "DEST")])
+        assert (merged.status, merged.reason, merged.direction) == ("new", None, "BOTH")
+        # ... unless someone reads that value already
+        manual = ("m1", {"entity_id": "switch.fan"}, "SOURCE")
+        (merged,) = _plan(*selections, existing=[("x1", cfg, "DEST"), manual])
+        assert (merged.status, merged.reason, merged.existing_binding_id) == ("conflict", "entityAlreadyBound", "m1")
+        # a reading binding of the same identity covers both halves
+        (merged,) = _plan(*selections, existing=[("x1", cfg, "BOTH")])
+        assert (merged.status, merged.existing_binding_id) == ("exists", "x1")
+
+    def test_write_only_binding_of_the_same_entity_is_no_rename(self):
+        cfg = {"entity_id": "cover.roof", "profile": "cover.position", "ha_uid": UID}
+        sel = {"entity_id": "cover.roof", "profile": "cover.position"}
+        (c,) = _plan(sel, existing=[("w1", cfg, "DEST")])
+        assert (c.status, c.reason) == ("new", None)
+        renamed = {**cfg, "entity_id": "cover.old_roof"}
+        (c,) = _plan(sel, existing=[("w1", renamed, "DEST")])
+        assert (c.status, c.reason) == ("conflict", "entityRenamed")
 
     def test_mapping_summary_names_the_write_kind(self):
         assert mapping_summary({"entity_id": "lock.t", "profile": "lock.boolean_locked"})["write_kind"] == "map"

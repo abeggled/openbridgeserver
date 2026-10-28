@@ -175,6 +175,10 @@ const typeMismatch = computed(() => profileTypeMismatch(catalog.value, props.cfg
 let servicesPromise = null
 let servicesFor = null
 const entityCache = new Map()  // `${instance}|${entity_id}` → entity, so a switched instance never answers
+// Entities HA did not know, same keys → when asked. Like the backend's browse cache, a
+// miss is remembered for a while only: the entity may appear (HA restart, new device).
+const entityMisses = new Map()
+const MISS_TTL_MS = 30000
 
 async function searchEntities(params) {
   if (!props.selectedInstanceId) return []
@@ -192,10 +196,11 @@ async function suggestAttributes(query) {
   if (!id) return []
   const key = `${props.selectedInstanceId}|${id}`
   // Exact lookup: a substring search may fill its page with similar ids first.
-  if (!entityCache.has(key)) {
+  // The field asks on every focus and keystroke: a recent miss answers without a request.
+  const missedRecently = Date.now() - (entityMisses.get(key) ?? -Infinity) < MISS_TTL_MS
+  if (!entityCache.has(key) && !missedRecently) {
     await searchEntities({ entity_id: id, limit: 1 })
-    // Remember a miss too: the field asks on every focus and keystroke.
-    if (!entityCache.has(key)) entityCache.set(key, null)
+    if (!entityCache.has(key)) entityMisses.set(key, Date.now())
   }
   return attributeSuggestions(entityCache.get(key), query)
 }
