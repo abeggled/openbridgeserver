@@ -183,6 +183,32 @@ describe('VisuViewer session end', () => {
     wrapper.unmount()
   })
 
+  it('retries instead of redirecting when a tree refresh brings the node while waiting for the profiles', async () => {
+    mocks.store.nodes = []
+    mocks.node.access = 'public'
+    mocks.getJwt.mockReturnValue(null)
+    mocks.loadBreadcrumb.mockRejectedValueOnce(new mocks.ApiRequestError('common.loadError', 404))
+    mocks.device.profile = { start_node_id: 'page-1', start_node_missing: false }
+    mocks.device.load.mockImplementation(async () => { mocks.store.nodes = [mocks.node] })  // renewal arrived meanwhile
+    const wrapper = mountViewer()
+    await flushPromises()
+
+    expect(mocks.push).not.toHaveBeenCalled()
+    expect(mocks.store.loadPage).toHaveBeenCalledWith('page-1')
+    expect(wrapper.text()).not.toContain('common.loadError')
+    wrapper.unmount()
+  })
+
+  it('shows the generic load error when something other than an Error is thrown', async () => {
+    mocks.loadBreadcrumb.mockRejectedValue('boom')
+    const wrapper = mountViewer()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('common.loadError')
+    expect(mocks.push).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it.each([
     ['a 503 while OBS restarts', () => { mocks.loadBreadcrumb.mockRejectedValue(new mocks.ApiRequestError('unavailable', 503)) }],
     ['a network error', () => { mocks.loadBreadcrumb.mockRejectedValue(new TypeError('Failed to fetch')) }],

@@ -6,7 +6,9 @@
  * nie aus dem Editor, der Verwaltung oder einer Login-/PIN-Eingabe.
  *
  * Bedienung innerhalb eines eingebetteten Fensters (IFrame-Widget) erreicht die
- * Visu nicht; solange so ein Fenster den Fokus hat, pausiert der Rücksprung.
+ * Visu nicht. Das Tippen hinein (der Fokus wandert in den Rahmen) zählt als
+ * Bedienung und startet die Wartezeit neu — mehr ist nicht zu sehen, und ein
+ * unbeaufsichtigtes Panel muss auch aus einem Rahmen heraus zurückspringen.
  */
 
 import { onMounted, onUnmounted, watch } from 'vue'
@@ -25,7 +27,8 @@ export function useIdleReturn() {
     const current = router.currentRoute.value
     if (!RETURN_FROM.has(String(current.name))) return
     const target = router.resolve(device.startRoute)
-    if (target.fullPath === current.fullPath) return
+    // Nur der Pfad zählt: ein Kiosk, der über `/visu/<start>?device=…` kam, ist schon dort.
+    if (target.path === current.path) return
     void router.push(target)
   }
 
@@ -39,9 +42,9 @@ export function useIdleReturn() {
     timer = null
   }
 
-  // Das Fenster verliert den Fokus an einen Rahmen: der Nutzer bedient dessen Inhalt.
+  // Das Fenster verliert den Fokus an einen Rahmen: der Nutzer hat hineingetippt.
   function onBlur() {
-    if (document.activeElement?.tagName === 'IFRAME') pause()
+    if (document.activeElement?.tagName === 'IFRAME') arm()
   }
 
   onMounted(() => {

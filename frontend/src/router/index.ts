@@ -24,7 +24,9 @@ const router = createRouter({
       component: () => import('@/views/VisuTree.vue'),
       beforeEnter: async () => {
         const device = useDeviceStore()
-        await device.load()
+        // Begrenzt gewartet: ein hängender Abruf darf die erste Navigation nicht
+        // blockieren — dann öffnet sich die Übersicht, keepFresh() holt die Profile nach.
+        await device.loadWithTimeout()
         return device.startRoute
       },
     },

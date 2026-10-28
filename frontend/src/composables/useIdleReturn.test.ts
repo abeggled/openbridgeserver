@@ -158,7 +158,7 @@ describe('useIdleReturn with an embedded frame', () => {
     delete (document as { activeElement?: unknown }).activeElement
   })
 
-  function focusIframe() {
+  function tapIntoIframe() {
     const iframe = document.createElement('iframe')
     document.body.appendChild(iframe)
     Object.defineProperty(document, 'activeElement', { value: iframe, configurable: true })
@@ -166,20 +166,24 @@ describe('useIdleReturn with an embedded frame', () => {
     return iframe
   }
 
-  it('pauses while a frame has the focus and re-arms when the focus comes back', async () => {
+  it('counts tapping into a frame as input: the idle time starts over', async () => {
+    await setup({ start_node_id: 'page-1', return_after_s: 5 })
+    vi.advanceTimersByTime(4_000)
+
+    tapIntoIframe()  // the focus leaves the window for the frame: re-armed
+    vi.advanceTimersByTime(4_500)  // 8.5 s after mount — without the re-arm it would have returned at 5 s
+    await settle()
+
+    expect(router.currentRoute.value.fullPath).toBe('/page-2')
+  })
+
+  it('still returns when the focus never comes back from the frame (unattended panel)', async () => {
     await setup({ start_node_id: 'page-1', return_after_s: 5 })
 
-    const iframe = focusIframe()
-    vi.advanceTimersByTime(60_000)
-    await settle()
-    expect(router.currentRoute.value.fullPath).toBe('/page-2')  // the user works inside the frame
-
-    iframe.remove()
-    delete (document as { activeElement?: unknown }).activeElement
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
-    window.dispatchEvent(new Event('focus'))
+    tapIntoIframe()
     vi.advanceTimersByTime(5_000)
     await settle()
+
     expect(router.currentRoute.value.fullPath).toBe('/page-1')
   })
 
@@ -190,5 +194,16 @@ describe('useIdleReturn with an embedded frame', () => {
     vi.advanceTimersByTime(5_000)
     await settle()
     expect(router.currentRoute.value.fullPath).toBe('/page-1')
+  })
+})
+
+describe('useIdleReturn on the start page itself', () => {
+  it('does nothing when only the query differs from the start page', async () => {
+    await setup({ start_node_id: 'page-1', return_after_s: 5 }, '/page-1?device=panel')
+
+    vi.advanceTimersByTime(5_000)
+    await settle()
+
+    expect(router.currentRoute.value.fullPath).toBe('/page-1?device=panel')
   })
 })

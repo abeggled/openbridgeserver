@@ -42,8 +42,8 @@ load; if the server was briefly unreachable when the Visu started, it fetches th
 
 - The Visu only returns from the normal view (a page or the overview) — never from the editor,
   the page management or a login or PIN prompt.
-- The Visu cannot see input inside an embedded frame (IFrame widget); while such a frame has the
-  focus, the return is paused.
+- The Visu cannot see input inside an embedded frame (IFrame widget). Tapping into it counts as
+  input; after that the idle time runs as usual.
 - A start page protected by a PIN or login still asks for it when opened. The profile itself
   holds no credentials.
 - If the start page is deleted, the device opens the overview instead; the row in the tab stays

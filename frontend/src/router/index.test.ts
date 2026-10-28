@@ -53,6 +53,23 @@ describe('Visu router — device start page', () => {
     expect(router.currentRoute.value.name).toBe('tree')
   })
 
+  it('does not wait longer than the start-load timeout for the profiles', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      localStorage.setItem('visu_device', 'panel')
+      list.mockReturnValue(new Promise(() => {}))  // OBS behind a proxy that never answers
+      const { router } = await freshRouter()
+
+      const navigation = router.push('/')
+      await vi.advanceTimersByTimeAsync(3_000)
+      await navigation
+
+      expect(router.currentRoute.value.name).toBe('tree')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('opens the start page of the stored profile', async () => {
     localStorage.setItem('visu_device', 'panel')
     const { router } = await freshRouter()
