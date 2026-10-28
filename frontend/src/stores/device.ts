@@ -20,6 +20,9 @@ export const DEVICE_STORAGE_KEY = 'visu_device'
 const RETRY_MIN_MS = 5_000
 const RETRY_MAX_MS = 60_000
 const REFRESH_INTERVAL_MS = 5 * 60_000
+// Länger wartet die erste Navigation nicht auf die Profile (hängender Abruf hinter
+// einem Proxy, wackliges WLAN): dann öffnet sich die Übersicht, der Rest kommt nach.
+const START_LOAD_TIMEOUT_MS = 3_000
 
 function readStoredSlug(): string | null {
   try {
@@ -36,6 +39,9 @@ export const useDeviceStore = defineStore('device', () => {
   const loaded = ref(false)
   let loading: Promise<void> | null = null
   let retryDelayMs = RETRY_MIN_MS
+  // Jeder reload() eröffnet eine Generation; eine ältere Antwort, die später
+  // eintrifft, darf weder die Liste überschreiben noch den Ladezustand zurücksetzen.
+  let generation = 0
 
   const profile = computed(() => devices.value.find(device => device.slug === slug.value) ?? null)
 
@@ -53,17 +59,34 @@ export const useDeviceStore = defineStore('device', () => {
    * Ein Fehler wird nicht gemerkt — der nächste Aufruf versucht es erneut, und
    * eine schon geladene Liste bleibt bei einem späteren Fehler erhalten.
    */
+  function fetchProfiles(own: number): Promise<void> {
+    return visuDevices.list()
+      .then((list) => {
+        if (own !== generation) return
+        devices.value = list
+        loaded.value = true
+        retryDelayMs = RETRY_MIN_MS
+      })
+      .catch(() => {
+        if (own === generation) loading = null
+      })
+  }
+
   function load(): Promise<void> {
-    loading ??= visuDevices.list()
-      .then((list) => { devices.value = list; loaded.value = true; retryDelayMs = RETRY_MIN_MS })
-      .catch(() => { loading = null })
+    loading ??= fetchProfiles(generation)
     return loading
   }
 
   /** Holt die Profile neu, auch wenn sie schon da sind. */
   function reload(): Promise<void> {
-    loading = null
-    return load()
+    generation += 1
+    loading = fetchProfiles(generation)
+    return loading
+  }
+
+  /** Wie load(), wartet aber höchstens `timeoutMs` — für die erste Navigation. */
+  function loadWithTimeout(timeoutMs = START_LOAD_TIMEOUT_MS): Promise<void> {
+    return Promise.race([load(), new Promise<void>((resolve) => setTimeout(resolve, timeoutMs))])
   }
 
   /**
@@ -77,8 +100,9 @@ export const useDeviceStore = defineStore('device', () => {
     const schedule = () => {
       clearTimeout(timer)
       timer = setTimeout(async () => {
-        if (!loaded.value) retryDelayMs = Math.min(retryDelayMs * 2, RETRY_MAX_MS)
         await reload()
+        // Nur ein fehlgeschlagener Versuch vergrößert den Abstand.
+        if (!loaded.value) retryDelayMs = Math.min(retryDelayMs * 2, RETRY_MAX_MS)
         schedule()
       }, loaded.value ? intervalMs : retryDelayMs)
     }
@@ -86,7 +110,9 @@ export const useDeviceStore = defineStore('device', () => {
     const onVisibility = () => { if (document.visibilityState === 'visible') refreshNow() }
     window.addEventListener('online', refreshNow)
     document.addEventListener('visibilitychange', onVisibility)
-    schedule()
+    // Erst wenn ein noch laufender Abruf entschieden ist, steht fest, ob ein
+    // Wiederholungs- oder ein Aktualisierungsabstand gilt (kein neuer Abruf hier).
+    void (loading ?? Promise.resolve()).then(schedule)
     return () => {
       window.removeEventListener('online', refreshNow)
       document.removeEventListener('visibilitychange', onVisibility)
@@ -111,5 +137,5 @@ export const useDeviceStore = defineStore('device', () => {
     select(typeof value === 'string' && value !== 'none' ? value : null)
   }
 
-  return { slug, devices, loaded, profile, startRoute, returnAfterMs, load, reload, keepFresh, select, applyQuery }
+  return { slug, devices, loaded, profile, startRoute, returnAfterMs, load, loadWithTimeout, reload, keepFresh, select, applyQuery }
 })

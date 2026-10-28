@@ -47,8 +47,8 @@ von selbst nach.
 
 - Zurückgesprungen wird nur aus der normalen Ansicht (Seite oder Übersicht) — nie aus dem
   Editor, der Seitenverwaltung oder einer Login- bzw. PIN-Eingabe.
-- Bedienung innerhalb eines eingebetteten Fensters (IFrame-Widget) sieht die Visu nicht; solange so
-  ein Fenster den Fokus hat, pausiert der Rücksprung.
+- Bedienung innerhalb eines eingebetteten Fensters (IFrame-Widget) sieht die Visu nicht. Das Tippen
+  hinein zählt als Bedienung; danach läuft die Wartezeit wie gewohnt.
 - Ist die Startseite mit PIN oder Login geschützt, fragt die Visu beim Öffnen wie gewohnt danach.
   Das Profil selbst enthält keine Zugangsdaten.
 - Wird die Startseite gelöscht, öffnet das Gerät stattdessen die Übersicht; im Reiter ist die Zeile

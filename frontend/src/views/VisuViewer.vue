@@ -136,6 +136,7 @@ async function load() {
   error.value = ''
   loadRunning = true
   nodeAppearedWhileLoading = false
+  let concealedProfileStart = false
   try {
     if (!visuStore.treeLoaded) await visuStore.loadTree()
     await visuStore.loadBreadcrumb(props.id)
@@ -172,18 +173,21 @@ async function load() {
       await dpStore.fetchInitialValues(allDpIds.value)
     }
   } catch (e: unknown) {
-    if (await isConcealedProfileStart(e)) {
-      router.push({ name: 'login', query: { redirect: router.currentRoute.value.fullPath } })
-      return
-    }
-    error.value = e instanceof Error ? e.message : t('common.loadError')
+    concealedProfileStart = await isConcealedProfileStart(e)
+    if (!concealedProfileStart) error.value = e instanceof Error ? e.message : t('common.loadError')
   } finally {
     loading.value = false
     loadRunning = false
   }
+  // Ist der Knoten während des Ladens (etwa beim Warten auf die Profile) im Baum
+  // aufgetaucht, geht der neue Versuch vor — er kennt den Zugriff, nicht der alte Stand.
   if (nodeAppearedWhileLoading) {
     nodeAppearedWhileLoading = false
     await load()
+    return
+  }
+  if (concealedProfileStart) {
+    router.push({ name: 'login', query: { redirect: router.currentRoute.value.fullPath } })
   }
 }
 
@@ -202,6 +206,7 @@ async function isConcealedProfileStart(e: unknown): Promise<boolean> {
   if (!(e instanceof ApiRequestError) || !CONCEALED_STATUS.has(e.status ?? 0)) return false
   // Bei einem Direktaufruf der Seite können die Profile nach dem Baum eintreffen.
   await device.load()
+  if (visuStore.getNode(props.id)) return false  // der Baum wurde derweil neu geholt
   const profile = device.profile
   return profile?.start_node_id === props.id && !profile.start_node_missing
 }

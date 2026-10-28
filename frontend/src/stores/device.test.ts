@@ -109,6 +109,61 @@ describe('useDeviceStore', () => {
     expect(store.devices).toEqual(DEVICES)
   })
 
+  it('loadWithTimeout() gives up waiting, but keeps the request running', async () => {
+    let resolveList!: (v: VisuDevice[]) => void
+    list.mockReturnValueOnce(new Promise((resolve) => { resolveList = resolve }))
+    const store = useDeviceStore()
+    store.select('panel')
+
+    await store.loadWithTimeout(20)
+    expect(store.loaded).toBe(false)
+    expect(store.startRoute).toEqual({ name: 'tree' })
+
+    resolveList(DEVICES)
+    await store.load()  // the same, still pending request — no second call
+    expect(list).toHaveBeenCalledTimes(1)
+    expect(store.startRoute).toEqual({ name: 'viewer', params: { id: 'page-1' } })
+  })
+
+  it('loadWithTimeout() returns as soon as the profiles are there', async () => {
+    const store = useDeviceStore()
+    await store.loadWithTimeout(60_000)
+    expect(store.loaded).toBe(true)
+  })
+
+  it('ignores an older response that arrives after a reload', async () => {
+    let resolveFirst!: (v: VisuDevice[]) => void
+    list.mockReturnValueOnce(new Promise((resolve) => { resolveFirst = resolve }))
+    const store = useDeviceStore()
+    const first = store.load()
+    list.mockResolvedValueOnce([{ slug: 'panel', name: 'Neu', start_node_id: 'page-9', return_after_s: 1 }])
+
+    await store.reload()
+    resolveFirst(DEVICES)  // the stale answer lands last
+    await first
+
+    expect(store.devices[0].name).toBe('Neu')
+  })
+
+  it('an older failure arriving after a reload does not break the deduplication', async () => {
+    let rejectFirst!: (e: Error) => void
+    list.mockReturnValueOnce(new Promise((_, reject) => { rejectFirst = reject }))
+    const store = useDeviceStore()
+    const first = store.load()
+    let resolveSecond!: (v: VisuDevice[]) => void
+    list.mockReturnValueOnce(new Promise((resolve) => { resolveSecond = resolve }))
+    const second = store.reload()
+
+    rejectFirst(new Error('offline'))
+    await first
+    const third = store.load()  // still the pending reload: no third request
+    expect(list).toHaveBeenCalledTimes(2)
+
+    resolveSecond(DEVICES)
+    await Promise.all([second, third])
+    expect(store.loaded).toBe(true)
+  })
+
   it('reload() fetches again even after a successful load', async () => {
     const store = useDeviceStore()
     await store.load()
@@ -212,6 +267,24 @@ describe('useDeviceStore.keepFresh', () => {
     stop()
     await vi.advanceTimersByTimeAsync(600_000)
     expect(list).toHaveBeenCalledTimes(9)
+  })
+
+  it('does not retry after a slow but successful first load', async () => {
+    let resolveList!: (v: VisuDevice[]) => void
+    list.mockReturnValueOnce(new Promise((resolve) => { resolveList = resolve }))
+    const store = useDeviceStore()
+    void store.load()
+    const stop = store.keepFresh(300_000)
+
+    await vi.advanceTimersByTimeAsync(10_000)  // still waiting for the first answer: no retry
+    expect(list).toHaveBeenCalledTimes(1)
+    resolveList(DEVICES)
+    await flush()
+    await vi.advanceTimersByTimeAsync(60_000)  // loaded: no 5 s retry either
+    expect(list).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(240_000)  // the regular refresh
+    expect(list).toHaveBeenCalledTimes(2)
+    stop()
   })
 
   it('refreshes when the connection comes back or the page becomes visible again', async () => {
