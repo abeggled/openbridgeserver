@@ -202,6 +202,9 @@ describe('HomeAssistantImport', () => {
     expect(row).toContain('cover.set_cover_position')
     expect(row).toContain('position')
     expect(row).toContain('Mehrdeutige Domain')
+    // the plan was made with these options: changing one invalidates it
+    await history.setValue(true)
+    expect(w.find('[data-testid="ha-plan"]').exists()).toBe(false)
   })
 
   it('loads on open and searches live while typing', async () => {

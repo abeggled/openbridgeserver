@@ -1396,6 +1396,11 @@ async def _create_imported_objects(
                 if dp is not None:
                     try:
                         await registry.delete(dp.id)
+                        if not principal.is_admin:
+                            await db.execute_and_commit(
+                                "DELETE FROM authz_node_roles WHERE node_type='datapoint' AND node_id=?",
+                                (str(dp.id),),
+                            )
                     except Exception:
                         logger.exception("%s-Import: verwaistes Objekt %s konnte nicht entfernt werden", label, dp.id)
     return created, errors

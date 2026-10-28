@@ -192,6 +192,19 @@ describe('BindingForm — HOME_ASSISTANT edit keeps the declarative mapping (#13
     w.unmount()
   })
 
+  it('keeps the import identity when only case or whitespace of the entity id differ', async () => {
+    const w = await mountForm({
+      initial: {
+        id: 'b5', adapter_type: 'HOME_ASSISTANT', adapter_instance_id: 'ha-1', direction: 'SOURCE', enabled: true,
+        config: { entity_id: 'Light.A ', profile: 'light.on_off', ha_uid: 'b'.repeat(32) },
+      },
+    })
+    await w.find('[data-testid="config-field-entity_id"]').setValue(' light.A')
+    await submit(w)
+    expect(updateBinding.mock.calls[0][2].config).toEqual({ entity_id: 'light.A', profile: 'light.on_off', ha_uid: 'b'.repeat(32) })
+    w.unmount()
+  })
+
   it('keeps read_as and blocks saving while the advanced JSON is invalid', async () => {
     const w = await mountForm({
       initial: {

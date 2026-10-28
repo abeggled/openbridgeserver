@@ -1374,7 +1374,9 @@ function buildConfig() {
       if (v != null && !(Array.isArray(v) && v.length === 0)) c[key] = v
     }
     // The import identity belongs to the imported entity: editing the entity drops it.
-    if (cfg.ha_uid && c.entity_id === props.initial?.config?.entity_id) c.ha_uid = cfg.ha_uid
+    // HA entity ids are case-insensitive: only a different entity counts as edited.
+    const initialEntity = String(props.initial?.config?.entity_id ?? '').trim().toLowerCase()
+    if (cfg.ha_uid && c.entity_id.toLowerCase() === initialEntity) c.ha_uid = cfg.ha_uid
     return c
   }
   if (type === 'IOBROKER') {

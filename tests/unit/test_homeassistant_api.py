@@ -296,6 +296,22 @@ async def test_delegated_import_grants_the_new_datapoint(monkeypatch, db):
     assert grant["role"] == "operator"
 
 
+async def test_delegated_import_rollback_removes_the_grant(monkeypatch, db):
+    instance_id = await _instance(db)
+    await _grant(db, instance_id)
+    _live(monkeypatch)
+    monkeypatch.setattr(adapters_api.adapter_registry, "supports_delegation", lambda t, c: True)
+    dp_id = uuid.uuid4()
+    registry = SimpleNamespace(create=AsyncMock(return_value=SimpleNamespace(id=dp_id)), delete=AsyncMock())
+    monkeypatch.setattr("obs.core.registry.get_registry", lambda: registry)
+    monkeypatch.setattr("obs.api.v1.bindings.create_binding", AsyncMock(side_effect=RuntimeError("boom")))
+    result = await adapters_api.ha_import_entities(instance_id, _request({"entity_id": "lock.shed"}), _user=ALICE, db=db)
+    assert result.errors == ["lock.shed: boom"]
+    registry.delete.assert_awaited_once_with(dp_id)
+    grant = await db.fetchone("SELECT 1 FROM authz_node_roles WHERE node_type='datapoint' AND node_id=?", (str(dp_id),))
+    assert grant is None
+
+
 def test_routes_are_classified_and_principal_scoped():
     routes = {(r.path, m): r for r in adapters_api.router.routes if isinstance(r, APIRoute) for m in r.methods}
     for path in ("/instances/{instance_id}/homeassistant/import-preview", "/instances/{instance_id}/homeassistant/import"):

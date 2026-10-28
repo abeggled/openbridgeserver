@@ -630,7 +630,8 @@ class HomeAssistantAdapter(AdapterBase):
             )
         items.sort(key=lambda item: item["entity_id"])
         result = {"entities": items, "metadata_available": entities_reg is not None}
-        self._browse_cache = (time.monotonic(), result)
+        if self._conn is conn:  # a fetch outliving its connection must not fill the new cache
+            self._browse_cache = (time.monotonic(), result)
         return result
 
     async def browse_services(self) -> list[dict[str, Any]]:

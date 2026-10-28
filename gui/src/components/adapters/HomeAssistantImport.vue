@@ -186,7 +186,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adapterApi } from '@/api/client'
 import Badge from '@/components/ui/Badge.vue'
@@ -220,6 +220,9 @@ const selected = ref(new Map())
 const plan = ref([])
 const result = ref(null)
 const refreshFailed = ref(false)
+
+// The plan shows tags and is imported with these options: a change needs a new preview.
+watch(options, () => { plan.value = [] })
 
 const selections = computed(() => [...selected.value.values()])
 const importableCount = computed(() => plan.value.filter(c => c.status === 'new').length)

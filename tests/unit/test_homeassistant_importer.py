@@ -285,6 +285,19 @@ class TestPlan:
         c = _plan({"entity_id": "cover.roof"}, existing=existing)[0]
         assert (c.status, c.reason, c.existing_binding_id) == ("conflict", "entityRenamed", "b9")
 
+    def test_profile_attribute_set_explicitly_is_the_same_binding(self):
+        # The profile reads its own attribute anyway: {attribute: current_position,
+        # profile: cover.position} is what an import of cover.position would create.
+        explicit = {"entity_id": "cover.roof", "attribute": "current_position", "profile": "cover.position"}
+        (c,) = _plan({"entity_id": "cover.roof", "profile": "cover.position"}, existing=[("b1", explicit)])
+        assert (c.status, c.existing_binding_id) == ("exists", "b1")
+        renamed = [("b2", {**explicit, "entity_id": "cover.old_roof", "ha_uid": UID})]
+        (c,) = _plan({"entity_id": "cover.roof", "profile": "cover.position"}, existing=renamed)
+        assert (c.status, c.reason, c.existing_binding_id) == ("conflict", "entityRenamed", "b2")
+        # Another attribute under the same profile stays a different binding.
+        other = [("b3", {**explicit, "attribute": "tilt"})]
+        assert _plan({"entity_id": "cover.roof", "profile": "cover.position"}, existing=other)[0].existing_binding_id != "b3"
+
     def test_request_validation(self):
         with pytest.raises(ValidationError):
             HaImportSelection(entity_id="Not An Entity")

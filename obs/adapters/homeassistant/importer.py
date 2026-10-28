@@ -238,7 +238,11 @@ def _tags(item: dict[str, Any], extra: list[str]) -> list[str]:
 
 
 def _identity(config: dict[str, Any]) -> tuple[str, str | None, str | None]:
-    return str(config.get("entity_id")), config.get("attribute") or None, config.get("profile") or None
+    attribute, profile_id = config.get("attribute") or None, config.get("profile") or None
+    profile = PROFILES.get(profile_id or "")
+    if profile is not None and attribute == profile.attribute:
+        attribute = None  # the profile reads its own attribute anyway: same binding
+    return str(config.get("entity_id")), attribute, profile_id
 
 
 def _read_source(config: dict[str, Any]) -> tuple[str, str | None] | None:
@@ -271,11 +275,7 @@ def plan_import(
     # The same check between candidates of this request.
     planned_manual: dict[tuple[str, str | None], str] = {}
     planned_profiled: dict[tuple[str, str | None], str] = {}
-    by_uid = {
-        (cfg.get("ha_uid"), cfg.get("attribute") or None, cfg.get("profile") or None): (binding_id, cfg)
-        for binding_id, cfg, _direction in existing
-        if cfg.get("ha_uid")
-    }
+    by_uid = {(cfg.get("ha_uid"), *_identity(cfg)[1:]): (binding_id, cfg) for binding_id, cfg, _direction in existing if cfg.get("ha_uid")}
 
     result: list[HaImportCandidate] = []
     planned: dict[tuple[str, str | None, str | None], int] = {}
@@ -404,12 +404,13 @@ def _candidate(item: dict[str, Any], sel: HaImportSelection, profile: HaProfile 
     if item.get("ha_uid"):
         config["ha_uid"] = item["ha_uid"]
 
+    proposed_name = _name(item, sel, profile)
     candidate = HaImportCandidate(
         entity_id=item["entity_id"],
         attribute=sel.attribute,
         profile=profile.id if profile else None,
-        name=sel.name or _name(item, sel, profile),
-        proposed_name=_name(item, sel, profile),
+        name=sel.name or proposed_name,
+        proposed_name=proposed_name,
         data_type=data_type,
         unit=unit,
         direction=direction,

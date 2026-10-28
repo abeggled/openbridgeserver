@@ -810,6 +810,29 @@ class TestBrowse:
         assert (await patient)["entities"]
         assert impatient.cancelled()
 
+    async def test_fetch_outliving_its_connection_is_not_cached(self, adapter):
+        gate = asyncio.Event()
+        conn = adapter._conn
+        command = conn.command
+
+        async def slow(payload, *args, **kwargs):
+            await gate.wait()
+            return await command(payload, *args, **kwargs)
+
+        conn.command = slow
+        browse = asyncio.create_task(adapter.browse_entities())
+        await settle()
+        adapter._conn = object()  # reconnected meanwhile
+        gate.set()
+        try:
+            assert (await browse)["entities"]
+            assert adapter._browse_cache is None
+        finally:
+            adapter._conn = conn
+            conn.command = command
+        await adapter.browse_entities()
+        assert adapter._browse_cache is not None
+
     def test_retrieve_exception_ignores_cancelled_futures(self):
         loop = asyncio.new_event_loop()
         try:
