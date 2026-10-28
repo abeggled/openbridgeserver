@@ -81,6 +81,9 @@ class TestBindingSchema:
         bc = HaBindingConfig(entity_id="light.a", profile="light.on_off", write_actions={})
         assert bc.write_actions is None
         assert resolve(bc).mode == "profile"  # the profile's actions stay in force
+        bc = HaBindingConfig(entity_id="lock.a", profile="lock.boolean_locked", state_map={})
+        assert bc.state_map is None
+        assert normalize(resolve(bc), {"state": "locked", "attributes": {}})[:2] == (True, "good")  # profile map stays
         assert HaBindingConfig(entity_id="sensor.bus", attribute="Next Departure").attribute == "Next Departure"
 
     @pytest.mark.parametrize(

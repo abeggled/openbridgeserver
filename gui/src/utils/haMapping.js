@@ -43,6 +43,8 @@ export function profilesForEntity(catalog, entityId) {
 function hasValue(value) {
   if (value == null || value === '') return false
   if (Array.isArray(value)) return value.length > 0
+  // {} counts as unset, as in the backend (state_map / write_actions)
+  if (typeof value === 'object') return Object.keys(value).length > 0
   return true
 }
 

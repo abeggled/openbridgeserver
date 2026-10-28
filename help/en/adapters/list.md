@@ -167,7 +167,7 @@ needed. *Advanced mapping (JSON)* additionally accepts:
   an empty `{}` counts as not set, the profile's actions stay;
 - `state_map`, `transitional_states`, `fault_states` — custom read normalization. With an
   attribute, `state_map` applies to its value; values that are not text are looked up as JSON
-  (`true`, `1`, `null`).
+  (`true`, `1`, `null`). An empty `state_map` `{}` counts as not set.
   An own attribute replaces the profile's value together with its type and mapping; the
   profile's actions stay.
 

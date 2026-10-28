@@ -880,6 +880,29 @@ class TestBrowse:
         assert await adapter.browse_services() is services
         assert len(fake_ha.socket.sent) == sent
 
+    async def test_services_fetch_outliving_its_connection_is_not_cached(self, adapter):
+        gate = asyncio.Event()
+        conn = adapter._conn
+        command = conn.command
+
+        async def slow(payload, *args, **kwargs):
+            await gate.wait()
+            return await command(payload, *args, **kwargs)
+
+        conn.command = slow
+        browse = asyncio.create_task(adapter.browse_services())
+        await settle()
+        adapter._conn = object()  # reconnected meanwhile
+        gate.set()
+        try:
+            await browse
+            assert adapter._services_cache is None
+        finally:
+            adapter._conn = conn
+            conn.command = command
+        await adapter.browse_services()
+        assert adapter._services_cache is not None
+
     async def test_services_non_dict_result(self, adapter, fake_ha):
         fake_ha.services = None
         assert await adapter.browse_services() == []

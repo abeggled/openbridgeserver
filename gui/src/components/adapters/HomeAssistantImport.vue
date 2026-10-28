@@ -221,8 +221,14 @@ const plan = ref([])
 const result = ref(null)
 const refreshFailed = ref(false)
 
+// Bumped by every change to selection or options: a reply to an older request is stale.
+let planSeq = 0
+function invalidatePlan() {
+  planSeq++
+  plan.value = []
+}
 // The plan shows tags and is imported with these options: a change needs a new preview.
-watch(options, () => { plan.value = [] })
+watch(options, invalidatePlan)
 
 const selections = computed(() => [...selected.value.values()])
 const importableCount = computed(() => plan.value.filter(c => c.status === 'new').length)
@@ -255,7 +261,7 @@ function toggle(s, on) {
     delete nameOverrides[selectionKey(s)]
   }
   selected.value = next
-  plan.value = []
+  invalidatePlan()
 }
 function toggleExpanded(entityId) {
   expanded[entityId] = !expanded[entityId]
@@ -335,9 +341,10 @@ async function preview() {
   busy.value = 'preview'
   error.value = null
   result.value = null
+  const mine = planSeq
   try {
     const { data } = await adapterApi.haImportPreview(props.instance.id, payload())
-    plan.value = data.preview
+    if (mine === planSeq) plan.value = data.preview
   } catch (e) {
     error.value = errorText(e, 'adapters.homeassistant.previewError')
   } finally {
@@ -357,10 +364,11 @@ async function runImport() {
     busy.value = null
     return
   }
+  const mine = planSeq
   try {
     // Re-plan so what was just created shows as existing.
     const { data: fresh } = await adapterApi.haImportPreview(props.instance.id, payload())
-    plan.value = fresh.preview
+    if (mine === planSeq) plan.value = fresh.preview
   } catch {
     // The import itself succeeded: never offer the stale plan for a second import.
     plan.value = []

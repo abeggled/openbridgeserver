@@ -252,6 +252,38 @@ describe('HomeAssistantImport', () => {
     expect(w.find('[data-testid="ha-load"]').attributes('disabled')).toBeUndefined()
   })
 
+  it('drops a preview reply that arrives after the selection changed', async () => {
+    const w = await loaded()
+    await w.find('[data-testid="ha-select-lock.shed"]').setValue(true)
+    let reply
+    api.haImportPreview.mockReturnValueOnce(new Promise(resolve => { reply = resolve }))
+    await w.find('[data-testid="ha-preview"]').trigger('click')
+    await w.find('[data-testid="ha-select-climate.living"]').setValue(true)
+    reply({ data: { preview: [NEW_LOCK] } })
+    await flushPromises()
+    expect(w.find('[data-testid="ha-plan"]').exists()).toBe(false)
+    expect(w.find('[data-testid="ha-preview"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('drops a refresh after import that arrives after the options changed', async () => {
+    const w = await loaded()
+    await w.find('[data-testid="ha-select-lock.shed"]').setValue(true)
+    api.haImportPreview.mockResolvedValueOnce({ data: { preview: [NEW_LOCK] } })
+    await w.find('[data-testid="ha-preview"]').trigger('click')
+    await flushPromises()
+    api.haImport.mockResolvedValue({ data: { created_datapoints: 1, created_bindings: 1, skipped_existing: 0, skipped_conflicts: 0, skipped_unsupported: 0, errors: [], preview: [] } })
+    let reply
+    api.haImportPreview.mockReturnValueOnce(new Promise(resolve => { reply = resolve }))
+    await w.find('[data-testid="ha-import-btn"]').trigger('click')
+    await flushPromises()
+    const [persist] = w.findAll('input[type="checkbox"]').slice(-2)
+    await persist.setValue(false)
+    reply({ data: { preview: [{ ...NEW_LOCK, status: 'exists', reason: 'bindingExists' }] } })
+    await flushPromises()
+    expect(w.find('[data-testid="ha-plan"]').exists()).toBe(false)
+    expect(w.find('[data-testid="ha-result"]').exists()).toBe(true)
+  })
+
   it('keeps a successful import successful when the refresh fails', async () => {
     const w = await loaded()
     await w.find('[data-testid="ha-select-lock.shed"]').setValue(true)

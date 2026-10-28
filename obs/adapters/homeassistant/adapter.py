@@ -652,7 +652,8 @@ class HomeAssistantAdapter(AdapterBase):
                 spec = spec if isinstance(spec, dict) else {}
                 entries.append({"service": service, "name": _text(spec.get("name")), "fields": _service_fields(spec.get("fields"))})
             domains.append({"domain": domain, "services": entries})
-        self._services_cache = (time.monotonic(), domains)
+        if self._conn is conn:  # a fetch outliving its connection must not fill the new cache
+            self._services_cache = (time.monotonic(), domains)
         return domains
 
     @staticmethod

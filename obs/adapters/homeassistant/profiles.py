@@ -98,10 +98,11 @@ class HaBindingConfig(BaseModel):
     # Stable import identity: hash of the HA registry unique_id (never the raw id).
     ha_uid: str | None = Field(default=None, pattern=r"^[0-9a-f]{16,64}$")
 
-    @field_validator("write_actions", mode="before")
+    @field_validator("write_actions", "state_map", mode="before")
     @classmethod
-    def _empty_write_actions(cls, value: Any) -> Any:
-        # {} would replace the profile's actions with none: every write a silent no-op.
+    def _empty_map(cls, value: Any) -> Any:
+        # {} would replace the profile's mapping with none: every write a silent
+        # no-op, every read unmapped (uncertain forever).
         return None if value == {} else value
 
     @field_validator("entity_id")

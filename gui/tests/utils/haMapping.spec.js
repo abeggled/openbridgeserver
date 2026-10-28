@@ -62,6 +62,12 @@ describe('resolveHaMapping', () => {
     expect(resolveHaMapping({ entity_id: 'lock.x', attribute: 'battery', state_map: { '1': true } }, CATALOG).read.state_map).toEqual({ '1': true })
   })
 
+  it('treats empty maps as unset, like the backend', () => {
+    const r = resolveHaMapping({ entity_id: 'lock.x', profile: 'lock.boolean_locked', state_map: {}, write_actions: {} }, CATALOG)
+    expect(r.mode).toBe('profile')
+    expect(r.read.state_map).not.toEqual({})
+  })
+
   it('legacy fields win over everything', () => {
     for (const key of ['service_domain', 'service_name', 'service_data_key']) {
       const r = resolveHaMapping({ entity_id: 'lock.x', profile: 'lock.boolean_locked', [key]: 'x', action: { domain: 'a', name: 'b' } }, CATALOG)
@@ -135,7 +141,9 @@ describe('writeRows', () => {
 
 describe('advanced mapping JSON', () => {
   it('serializes only set keys', () => {
-    expect(advancedMappingText({ action: null, transitional_states: [] })).toBe('')
+    expect(advancedMappingText({ action: null, transitional_states: [], write_actions: {} })).toBe('')
+    // a malformed stored value stays visible so it can be corrected
+    expect(JSON.parse(advancedMappingText({ action: 'lock.lock' }))).toEqual({ action: 'lock.lock' })
     expect(JSON.parse(advancedMappingText({ state_map: { a: 1 }, fault_states: ['x'], profile: 'p' }))).toEqual({ state_map: { a: 1 }, fault_states: ['x'] })
   })
 

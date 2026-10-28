@@ -191,7 +191,11 @@ async function suggestAttributes(query) {
   if (!id) return []
   const key = `${props.selectedInstanceId}|${id}`
   // Exact lookup: a substring search may fill its page with similar ids first.
-  if (!entityCache.has(key)) await searchEntities({ entity_id: id, limit: 1 })
+  if (!entityCache.has(key)) {
+    await searchEntities({ entity_id: id, limit: 1 })
+    // Remember a miss too: the field asks on every focus and keystroke.
+    if (!entityCache.has(key)) entityCache.set(key, null)
+  }
   return attributeSuggestions(entityCache.get(key), query)
 }
 
