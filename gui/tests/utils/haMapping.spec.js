@@ -75,6 +75,10 @@ describe('resolveHaMapping', () => {
     expect(r.read.state_map).not.toEqual({})
   })
 
+  it('ignores whitespace-only legacy fields, as saving trims them', () => {
+    expect(resolveHaMapping({ entity_id: 'lock.x', profile: 'lock.boolean_locked', service_name: '  ', service_domain: null }, CATALOG).mode).toBe('profile')
+  })
+
   it('legacy fields win over everything', () => {
     for (const key of ['service_domain', 'service_name', 'service_data_key']) {
       const r = resolveHaMapping({ entity_id: 'lock.x', profile: 'lock.boolean_locked', [key]: 'x', action: { domain: 'a', name: 'b' } }, CATALOG)

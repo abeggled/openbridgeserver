@@ -53,6 +53,7 @@ class HaConnection:
         self._worker: asyncio.Task | None = None
         self._events: asyncio.Queue[tuple[int, dict[str, Any]]] = asyncio.Queue()
         self._closed = asyncio.Event()
+        self._closing = False
         self.ha_version: str = ""
 
     # ------------------------------------------------------------------
@@ -70,6 +71,7 @@ class HaConnection:
             raise
         conn._reader = asyncio.create_task(conn._read_loop(), name="ha-ws-reader")
         conn._worker = asyncio.create_task(conn._event_loop(), name="ha-ws-events")
+        conn._worker.add_done_callback(conn._on_worker_done)
         return conn
 
     async def _authenticate(self, token: str) -> None:
@@ -91,8 +93,20 @@ class HaConnection:
     async def wait_closed(self) -> None:
         await self._closed.wait()
 
+    def _on_worker_done(self, task: asyncio.Task) -> None:
+        if not task.cancelled():
+            task.exception()  # retrieved: the reason is logged below
+        if self._closing or self.closed:
+            return
+        # Without the worker no value arrives, while pings still succeed: close the
+        # connection so the supervisor reconnects instead of freezing every value.
+        logger.warning("HA WebSocket: event worker stopped unexpectedly, reconnecting")
+        self._mark_closed(ConnectionError("event worker stopped"))
+
     async def close(self) -> None:
-        tasks = [t for t in (self._reader, self._worker) if t is not None and t is not asyncio.current_task()]
+        self._closing = True
+        # A task that already ended (a dead worker) has nothing left to stop.
+        tasks = [t for t in (self._reader, self._worker) if t is not None and not t.done() and t is not asyncio.current_task()]
         # Cancel both up front: a caller cancelled while awaiting one must not leave the other running.
         for task in tasks:
             task.cancel()

@@ -68,7 +68,8 @@ export function resolveHaMapping(cfg, catalog) {
   let mode = 'default'
   let write = null
   let writeKind = 'none'  // 'single' action or value-keyed 'map'
-  if (cfg.service_domain || cfg.service_name || cfg.service_data_key) {
+  // Saving trims these fields: whitespace alone is no legacy override.
+  if (['service_domain', 'service_name', 'service_data_key'].some(k => String(cfg[k] ?? '').trim())) {
     mode = 'legacy'
   } else if (hasValue(cfg.write_actions)) {
     mode = 'write_actions'

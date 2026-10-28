@@ -665,7 +665,7 @@ def normalize(mapping: ResolvedMapping, state_obj: dict[str, Any] | None) -> tup
             return mapping.missing_values[state], GOOD, True
         if mapping.state_map is not None:
             # Map keys are text: a non-text attribute value is looked up as JSON (true, 1, null).
-            return _mapped(mapping.state_map, raw if isinstance(raw, str) else json.dumps(raw))
+            return _mapped(mapping.state_map, _as_text(raw))
         if mapping.value_kind in ("auto", "string") and raw is None:
             return None, GOOD, True  # e.g. no media title while idle
         return _typed(raw, mapping.value_kind, coerce=False)
@@ -673,6 +673,11 @@ def normalize(mapping: ResolvedMapping, state_obj: dict[str, Any] | None) -> tup
     if mapping.state_map is not None:
         return _mapped(mapping.state_map, state)
     return _typed(state, mapping.value_kind, coerce=True)
+
+
+def _as_text(raw: Any) -> str:
+    """HA's own text form of a value: JSON for non-text (true, [255, 0]), never a Python repr."""
+    return raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False)
 
 
 def _mapped(state_map: dict[str, Any], key: Any) -> tuple[Any, str, bool]:
@@ -690,7 +695,7 @@ def _typed(raw: Any, kind: ValueKind, *, coerce: bool) -> tuple[Any, str, bool]:
     if kind == "auto":
         return (coerce_state(raw) if coerce else raw), GOOD, True
     if kind == "string":
-        return str(raw), GOOD, True
+        return _as_text(raw), GOOD, True
     if kind == "number":
         value = _to_number(raw)
     elif raw in _TRUE and not _is_number(raw):

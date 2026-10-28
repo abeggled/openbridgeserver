@@ -1630,8 +1630,8 @@ async def _ha_live_call(call: Any, failure: str) -> Any:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, failure) from exc
 
 
-async def _ha_entities(instance: Any) -> dict[str, Any]:
-    return await _ha_live_call(instance.browse_entities, "Home-Assistant-Entities konnten nicht geladen werden")
+async def _ha_entities(instance: Any, *, fresh: bool = False) -> dict[str, Any]:
+    return await _ha_live_call(lambda: instance.browse_entities(fresh=fresh), "Home-Assistant-Entities konnten nicht geladen werden")
 
 
 @router.get("/homeassistant/profiles")
@@ -1700,8 +1700,10 @@ async def _ensure_ha_import_authority(db: Database, principal: Principal, instan
 _HA_IMPORT_LOCKS: dict[str, asyncio.Lock] = {}
 
 
-async def _ha_import_plan(instance: Any, instance_id: str, body: HaImportRequest, db: Database) -> list[HaImportCandidate]:
-    data = await _ha_entities(instance)
+async def _ha_import_plan(instance: Any, instance_id: str, body: HaImportRequest, db: Database, *, fresh: bool = False) -> list[HaImportCandidate]:
+    # The import itself plans on fresh data: a rename or removal in HA within the
+    # browse cache's lifetime must not create a binding for the old entity id.
+    data = await _ha_entities(instance, fresh=fresh)
     rows = await db.fetchall("SELECT id, config, direction FROM adapter_bindings WHERE adapter_instance_id=?", (instance_id,))
     existing = []
     for row in rows:
@@ -1748,7 +1750,7 @@ async def ha_import_entities(
     instance = await _ensure_ha_import_authority(db, principal, str(instance_id))
 
     async with _HA_IMPORT_LOCKS.setdefault(str(instance_id), asyncio.Lock()):
-        candidates = await _ha_import_plan(instance, str(instance_id), body, db)
+        candidates = await _ha_import_plan(instance, str(instance_id), body, db, fresh=True)
         result = HaImportResult(preview=candidates)
         skipped = {"exists": "skipped_existing", "conflict": "skipped_conflicts", "unsupported": "skipped_unsupported"}
         specs: list[_ImportSpec] = []

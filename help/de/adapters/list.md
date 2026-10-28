@@ -186,7 +186,8 @@ Unter *Erweiterte Zuordnung (JSON)* sind zusätzlich möglich:
   Aktionen des Profils bleiben.
 
 **Lesen als** legt fest, in welchen Typ der Wert umgewandelt wird (Boolean, Zahl, Text oder
-automatisch); ein unpassender Wert behält den letzten Wert mit Qualität *unsicher*. Ein Profil
+automatisch); ein unpassender Wert behält den letzten Wert mit Qualität *unsicher*. Als Text
+erscheinen Werte, die kein Text sind, in der JSON-Form von Home Assistant (`true`, `[255, 0]`). Ein Profil
 muss zur Richtung passen: ein reines Leseprofil kann nicht schreiben, ein Befehlsprofil nicht
 lesen — solche Verknüpfungen lehnt OBS beim Speichern ab. Ungültiges JSON in der erweiterten
 Zuordnung verhindert das Speichern.

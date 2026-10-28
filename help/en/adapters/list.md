@@ -172,7 +172,8 @@ needed. *Advanced mapping (JSON)* additionally accepts:
   profile's actions stay.
 
 **Read as** sets the type the value is converted to (Boolean, number, text or automatic); a
-value that does not fit keeps the last value with quality *uncertain*. A profile must fit the
+value that does not fit keeps the last value with quality *uncertain*. Read as text, values that
+are not text appear in Home Assistant's JSON form (`true`, `[255, 0]`). A profile must fit the
 direction: a read-only profile cannot write and a command profile cannot read — OBS rejects such
 bindings when saving. Invalid JSON in the advanced mapping prevents saving.
 

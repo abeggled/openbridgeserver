@@ -465,6 +465,28 @@ class TestSubscription:
         assert _values(mock_bus, b) == [(21.5, "good")]
         assert len(fake_ha.sockets) == 1
 
+    async def test_fallback_learned_on_a_dropped_connection_is_not_kept(self, adapter, fake_ha):
+        from obs.adapters.homeassistant.ws_client import HaCommandError
+
+        await _bind(adapter, make_binding({"entity_id": "sensor.temp"}))
+        conn = adapter._conn
+        subscribe = conn.subscribe
+
+        async def rejected(payload, callback):
+            if payload["type"] == "subscribe_entities":
+                adapter._conn = object()  # the supervisor reconnected meanwhile
+                raise HaCommandError("invalid_format", "x")
+            return await subscribe(payload, callback)
+
+        conn.subscribe = rejected
+        adapter._entity_map["lock.shed"] = []
+        try:
+            await adapter._subscribe(conn)
+        finally:
+            adapter._conn = conn
+            conn.subscribe = subscribe
+        assert adapter._sub_mode == "entities"  # the new connection tries the filter again
+
     async def test_malformed_entity_id_is_skipped_not_fatal(self, adapter, mock_bus, fake_ha):
         good = make_binding({"entity_id": " sensor.temp "})
         bad = make_binding({"entity_id": "sensor.my-temp"})
@@ -818,6 +840,13 @@ class TestBrowse:
         sent = len(fake_ha.socket.sent)
         await adapter.browse_entities()
         assert len(fake_ha.socket.sent) == sent
+
+    async def test_fresh_browse_skips_the_cache(self, adapter, fake_ha):
+        await adapter.browse_entities()
+        before = [m["type"] for m in fake_ha.socket.sent].count("get_states")
+        await adapter.browse_entities()
+        await adapter.browse_entities(fresh=True)
+        assert [m["type"] for m in fake_ha.socket.sent].count("get_states") == before + 1
 
     async def test_concurrent_browses_share_one_fetch(self, adapter, fake_ha):
         before = [m["type"] for m in fake_ha.socket.sent].count("get_states")

@@ -250,6 +250,10 @@ class TestNormalize:
             ({"entity_id": "media_player.t", "profile": "media_player.title"}, "on", {}, (None, "good", True)),
             ({"entity_id": "media_player.t", "profile": "media_player.title"}, "on", {"media_title": 5}, ("5", "good", True)),
             ({"entity_id": "sensor.t", "read_as": "string"}, "21", None, ("21", "good", True)),
+            # non-text values read as text in HA's JSON form, as the state_map looks them up
+            ({"entity_id": "sensor.t", "attribute": "x", "read_as": "string"}, "1", {"x": True}, ("true", "good", True)),
+            ({"entity_id": "sensor.t", "attribute": "x", "read_as": "string"}, "1", {"x": [255, 0]}, ("[255, 0]", "good", True)),
+            ({"entity_id": "sensor.t", "attribute": "x", "read_as": "string"}, "1", {"x": {"a": "ä"}}, ('{"a": "ä"}', "good", True)),
             ({"entity_id": "sensor.t", "read_as": "number"}, "eco", None, (None, "uncertain", False)),
             ({"entity_id": "automation.t", "read_as": "boolean"}, "on", None, (True, "good", True)),
             ({"entity_id": "automation.t", "read_as": "boolean"}, "false", None, (False, "good", True)),

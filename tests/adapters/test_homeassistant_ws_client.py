@@ -171,6 +171,36 @@ async def test_reader_error_closes_connection():
     assert conn.closed
 
 
+class _Boom(BaseException):
+    pass
+
+
+async def test_a_dead_event_worker_closes_the_connection(caplog):
+    # pings would still succeed: without this nothing reconnects and every value freezes
+    conn = await _open(FakeHomeAssistant(token=TOKEN))
+
+    async def fatal(_event):
+        raise _Boom
+
+    conn._subscriptions[99] = fatal
+    conn._events.put_nowait((99, {}))
+    await asyncio.wait_for(conn.wait_closed(), 1)
+    assert "event worker stopped" in caplog.text
+    await conn.close()
+
+    cancelled = await _open(FakeHomeAssistant(token=TOKEN))
+    cancelled._worker.cancel()
+    await asyncio.wait_for(cancelled.wait_closed(), 1)
+    await cancelled.close()
+
+
+async def test_a_regular_close_is_no_worker_failure(caplog):
+    conn = await _open(FakeHomeAssistant(token=TOKEN))
+    await conn.close()
+    await asyncio.sleep(0)
+    assert "event worker stopped" not in caplog.text
+
+
 async def test_close_propagates_callers_cancellation():
     fake = FakeHomeAssistant(token=TOKEN)
     conn = await _open(fake)

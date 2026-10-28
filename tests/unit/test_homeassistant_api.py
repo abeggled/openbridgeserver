@@ -216,7 +216,7 @@ async def test_preview_does_not_mutate(monkeypatch, db):
 async def test_import_creates_only_new_and_reports_skips(monkeypatch, db):
     instance_id = await _instance(db)
     await _binding(db, instance_id, {"entity_id": "sensor.temp", "profile": "sensor.value"})
-    _live(monkeypatch)
+    live = _live(monkeypatch)
     dp_id = uuid.uuid4()
     registry = SimpleNamespace(create=AsyncMock(return_value=SimpleNamespace(id=dp_id)), delete=AsyncMock())
     create_binding = AsyncMock()
@@ -228,6 +228,8 @@ async def test_import_creates_only_new_and_reports_skips(monkeypatch, db):
         _user=ADMIN,
         db=db,
     )
+    # the import plans on fresh entities, never on the browse cache
+    live.browse_entities.assert_awaited_once_with(fresh=True)
     assert (result.created_datapoints, result.created_bindings, result.skipped_existing, result.skipped_unsupported) == (1, 1, 1, 1)
     created = registry.create.await_args.args[0]
     assert (created.name, created.data_type, created.tags) == ("Shed", "BOOLEAN", ["homeassistant", "lock", "nuki"])

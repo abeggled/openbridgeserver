@@ -432,7 +432,8 @@ class HomeAssistantAdapter(AdapterBase):
                 if exc.code not in ("unknown_command", "invalid_format"):
                     raise
                 logger.info("HA WebSocket: filtered subscribe_entities unsupported (%s), using state_changed events", exc.code)
-                self._sub_mode = "events"
+                if self._conn is conn:  # a reconnect meanwhile tries the filtered subscription again
+                    self._sub_mode = "events"
         if self._sub_id is None:
             self._sub_id = await conn.subscribe({"type": "subscribe_events", "event_type": "state_changed"}, self._on_state_changed_event)
         # state_changed events applied while get_states was pending are newer than its answer.
@@ -573,13 +574,16 @@ class HomeAssistantAdapter(AdapterBase):
     # Entity browser
     # ------------------------------------------------------------------
 
-    async def browse_entities(self) -> dict[str, Any]:
-        """All HA entities with display metadata (scalar, non-sensitive attributes only)."""
+    async def browse_entities(self, *, fresh: bool = False) -> dict[str, Any]:
+        """All HA entities with display metadata (scalar, non-sensitive attributes only).
+
+        *fresh* skips the browse cache (a fetch already running is still shared).
+        """
         conn = self._conn
         if conn is None or conn.closed:
             raise HaNotConnectedError
         cached = self._browse_cache
-        if cached is not None and time.monotonic() - cached[0] < BROWSE_CACHE_SECONDS:
+        if not fresh and cached is not None and time.monotonic() - cached[0] < BROWSE_CACHE_SECONDS:
             return cached[1]
         # Concurrent callers share one fetch: a full get_states can be megabytes.
         if self._browse_inflight is None or self._browse_inflight.done():
