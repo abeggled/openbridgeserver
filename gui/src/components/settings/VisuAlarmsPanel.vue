@@ -226,15 +226,32 @@ const alarms = ref([])
 const pages = ref([])
 const devices = ref([])
 const dpNames = ref({})
+// Datapoints the alarms still name but that no longer exist (deleted meanwhile).
+const missingDatapoints = ref(new Set())
 const loading = ref(true)
 const loadFailed = ref(false)
 const saving = ref(false)
 const msg = ref(null)
 
+function compareText(value) {
+  return value === null || value === undefined ? '' : String(value)
+}
+
+/** The text field's value back to what the API stores: the original value while the text is unchanged. */
+function compareValue(row) {
+  if (row.compare_value === compareText(row._compare)) return row._compare
+  const text = row.compare_value.trim()
+  if (text === '') return null
+  if (text === 'true' || text === 'false') return text === 'true'
+  if (/^-?\d+(\.\d+)?$/.test(text)) return Number(text)
+  return row.compare_value
+}
+
 function toRow(alarm, open = false) {
   return {
     ...alarm,
-    compare_value: alarm.compare_value === null || alarm.compare_value === undefined ? '' : String(alarm.compare_value),
+    compare_value: compareText(alarm.compare_value),
+    _compare: alarm.compare_value,
     page_id: alarm.page_id ?? '',
     devices: [...alarm.devices],
     _open: open,
@@ -285,6 +302,7 @@ function missingDevices(alarm) {
 function rowError(alarm) {
   if (!alarm.name.trim()) return 'settings.visuAlarms.errorName'
   if (!alarm.datapoint_id) return 'settings.visuAlarms.errorDatapoint'
+  if (missingDatapoints.value.has(alarm.datapoint_id)) return 'settings.visuAlarms.errorMissingDatapoint'
   if (alarm.display === 'message' && !alarm.title.trim() && !alarm.text.trim()) return 'settings.visuAlarms.errorMessage'
   if (alarm.display === 'page' && !alarm.page_id) return 'settings.visuAlarms.errorPage'
   if (alarm.display === 'page' && !pageIds.value.has(alarm.page_id)) return 'settings.visuAlarms.errorMissingPage'
@@ -302,7 +320,7 @@ function addAlarm() {
     enabled: true,
     datapoint_id: '',
     operator: '==',
-    compare_value: 'true',
+    compare_value: true,
     display: 'message',
     title: '',
     text: '',
@@ -319,14 +337,23 @@ function addAlarm() {
 
 async function loadDatapointNames(ids) {
   const names = {}
+  const missing = new Set(missingDatapoints.value)
   await Promise.all(ids.map(async (id) => {
     try {
       const { data } = await dpApi.get(id)
       names[id] = data.name
-    } catch {
-      names[id] = id
+    } catch (err) {
+      // 404 = deleted meanwhile: the alarm can never fire and PUT would reject the whole list.
+      // Any other failure (network) only leaves the name unresolved.
+      if (err?.response?.status === 404) {
+        missing.add(id)
+        names[id] = t('settings.visuAlarms.missingDatapoint')
+      } else {
+        names[id] = id
+      }
     }
   }))
+  missingDatapoints.value = missing
   dpNames.value = { ...dpNames.value, ...names }
 }
 
@@ -335,7 +362,11 @@ async function save() {
   msg.value = null
   try {
     // eslint-disable-next-line no-unused-vars
-    const payload = alarms.value.map(({ _open, ...alarm }) => ({ ...alarm, page_id: alarm.page_id || null }))
+    const payload = alarms.value.map(({ _open, _compare, ...alarm }) => ({
+      ...alarm,
+      compare_value: compareValue({ ...alarm, _compare }),
+      page_id: alarm.page_id || null,
+    }))
     const { data } = await visuAlarmsApi.update(payload)
     const open = new Set(alarms.value.filter(a => a._open).map(a => a.id))
     alarms.value = data.map(alarm => toRow(alarm, open.has(alarm.id)))

@@ -108,6 +108,12 @@ describe('AlarmOverlay', () => {
     ;(q('alarm-acknowledge') as HTMLButtonElement).click()
     await flushPromises()
     expect(q('alarm-failed')).not.toBeNull()
+
+    // The note belongs to the alarm whose acknowledge failed, not to the next one shown.
+    alarms.value = [make({ id: 'phone' })]
+    await flushPromises()
+    expect(q('alarm-title')?.textContent).toBe('title-post')
+    expect(q('alarm-failed')).toBeNull()
   })
 
   it('page alarms without acknowledge button and without page id', async () => {

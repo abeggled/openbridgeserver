@@ -33,6 +33,8 @@ const waiting = computed(() => forThisDevice.value.length - 1)
 const hasWaiting = computed(() => forThisDevice.value.length > 1)
 const acknowledging = ref(false)
 const failed = ref(false)
+// Der Hinweis gehört zu dem Alarm, bei dem das Quittieren scheiterte — nicht zum nächsten.
+watch(() => current.value?.id, () => { failed.value = false })
 
 // Ton nur für neu hinzugekommene Alarme, nicht bei jeder Listen-Aktualisierung.
 const announced = new Set<string>()

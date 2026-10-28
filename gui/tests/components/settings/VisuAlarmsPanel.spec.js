@@ -137,7 +137,7 @@ describe('VisuAlarmsPanel', () => {
     const [payload] = visuAlarmsApi.update.mock.calls[0]
     expect(payload).toHaveLength(1)
     expect(payload[0]).toMatchObject({
-      name: 'Post ist da', enabled: false, datapoint_id: '33333333-3333-3333-3333-333333333333', operator: '>', compare_value: '0',
+      name: 'Post ist da', enabled: false, datapoint_id: '33333333-3333-3333-3333-333333333333', operator: '>', compare_value: 0,
       display: 'message', title: '', text: 'Der Briefkasten wurde geöffnet', icon: '📬', severity: 'warning', page_id: null,
       ack_button: true, end_on_clear: true, sound: true, devices: ['panel'],
     })
@@ -239,5 +239,49 @@ describe('VisuAlarmsPanel', () => {
     await w.get('[data-testid="btn-save-visu-alarms"]').trigger('click')
     await flushPromises()
     expect(w.get('[data-testid="visu-alarms-msg"]').text()).toBe('Speichern fehlgeschlagen.')
+  })
+
+  it('flags an alarm whose datapoint was deleted and blocks saving until another one is chosen', async () => {
+    dpApi.get.mockImplementation(async id => (id === DP ? Promise.reject({ response: { status: 404 } }) : { data: { name: 'Klingel' } }))
+    const w = await mountPanel()
+
+    expect(card(w, 0).text()).toContain('⚠')
+    expect(card(w, 1).text()).not.toContain('⚠')
+    await open(w, 0)
+    await open(w, 1)
+    expect(card(w, 0).get('[data-testid="input-visu-alarm-datapoint"]').attributes('data-name')).toBe('(gelöschter Datenpunkt)')
+    expect(card(w, 1).get('[data-testid="input-visu-alarm-datapoint"]').attributes('data-name')).toBe('Klingel')
+    expect(card(w, 0).get('[data-testid="visu-alarm-error"]').text()).toBe('Der gewählte Datenpunkt existiert nicht mehr. Bitte einen anderen wählen oder den Alarm entfernen.')
+    expect(w.get('[data-testid="btn-save-visu-alarms"]').attributes('disabled')).toBeDefined()
+
+    await card(w, 0).get('[data-testid="input-visu-alarm-datapoint"]').trigger('click')
+    expect(card(w, 0).find('[data-testid="visu-alarm-error"]').exists()).toBe(false)
+    expect(w.get('[data-testid="btn-save-visu-alarms"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('keeps the stored type of an untouched compare value and reads a changed text back as number, boolean, text or nothing', async () => {
+    visuAlarmsApi.list.mockResolvedValueOnce({ data: [
+      alarm({ id: 'a', compare_value: 5 }), alarm({ id: 'b', compare_value: 5 }), alarm({ id: 'c', compare_value: 5 }),
+      alarm({ id: 'd', compare_value: 'on' }), alarm({ id: 'e', compare_value: 'on' }), alarm({ id: 'f', compare_value: '7' }),
+      alarm({ id: 'g', compare_value: null }),
+    ] })
+    const w = await mountPanel()
+    for (const i of [1, 2, 3, 4, 6]) await open(w, i)
+    await card(w, 1).get('[data-testid="input-visu-alarm-compare"]').setValue('25 W')
+    await card(w, 2).get('[data-testid="input-visu-alarm-compare"]').setValue(' -7.5 ')
+    await card(w, 3).get('[data-testid="input-visu-alarm-compare"]').setValue('')
+    await card(w, 4).get('[data-testid="input-visu-alarm-compare"]').setValue('false')
+    await card(w, 6).get('[data-testid="input-visu-alarm-compare"]').setValue('true')
+
+    await w.get('[data-testid="btn-save-visu-alarms"]').trigger('click')
+    await flushPromises()
+
+    const [payload] = visuAlarmsApi.update.mock.calls[0]
+    expect(payload.map(a => a.compare_value)).toEqual([5, '25 W', -7.5, null, false, '7', true])
+    expect(payload[0]).not.toHaveProperty('_compare')
+    // After saving, the returned values are the new "untouched" ones.
+    await w.get('[data-testid="btn-save-visu-alarms"]').trigger('click')
+    await flushPromises()
+    expect(visuAlarmsApi.update.mock.calls[1][0].map(a => a.compare_value)).toEqual([5, '25 W', -7.5, null, false, '7', true])
   })
 })

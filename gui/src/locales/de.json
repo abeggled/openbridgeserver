@@ -3609,6 +3609,8 @@
       "missingDevice": "Gerät „{slug}“ (umbenannt oder gelöscht)",
       "errorName": "Bitte einen Namen angeben.",
       "errorDatapoint": "Bitte einen Datenpunkt wählen.",
+      "errorMissingDatapoint": "Der gewählte Datenpunkt existiert nicht mehr. Bitte einen anderen wählen oder den Alarm entfernen.",
+      "missingDatapoint": "(gelöschter Datenpunkt)",
       "errorMessage": "Bitte einen Titel oder Text angeben.",
       "errorPage": "Bitte eine Seite wählen.",
       "errorMissingPage": "Die gewählte Seite existiert nicht mehr.",

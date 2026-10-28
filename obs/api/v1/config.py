@@ -48,7 +48,7 @@ from obs.logic.validation import validate_timer_durations, validate_write_target
 from obs.models.authz import AuthzPrincipalGrant
 from obs.models.datapoint import DataPoint
 from obs.regional_format import REGIONAL_SETTING_KEYS, validate_regional_setting
-from obs.visu_alarms import VISU_ALARMS_KEY, parse_visu_alarms, reload_visu_alarms
+from obs.visu_alarms import VISU_ALARMS_KEY, parse_visu_alarms, reload_visu_alarms, unknown_alarm_references
 from obs.visu_devices import VISU_DEVICES_KEY, parse_visu_devices
 
 logger = logging.getLogger(__name__)
@@ -1281,6 +1281,7 @@ async def import_config(
     # does: an unchecked region_format or currency from a hand-edited backup would
     # otherwise reach the frontends, where Intl rejects it (issue #1073).
     imported_datetime_settings: dict[str, str] = {}
+    deferred_alarms = None
     for s in body.app_settings:
         if s.key.startswith(_UPDATE_SETTING_PREFIX):
             # Installation-specific (#1370): the channel follows the installed
@@ -1294,7 +1295,10 @@ async def import_config(
             elif s.key == VISU_DEVICES_KEY:
                 parse_visu_devices(s.value)
             elif s.key == VISU_ALARMS_KEY:
-                parse_visu_alarms(s.value)
+                # Checked last: the alarms refer to datapoints, pages and device
+                # profiles, and the profiles may be in this very import.
+                deferred_alarms = s
+                continue
             await db.execute_and_commit(
                 "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?,?)",
                 (s.key, s.value),
@@ -1302,6 +1306,22 @@ async def import_config(
             result.app_settings_upserted += 1
             if s.key in DATETIME_SETTING_KEYS or s.key in REGIONAL_SETTING_KEYS:
                 imported_datetime_settings[s.key] = s.value
+        except Exception as exc:
+            logger.exception(f"AppSetting {s.key} failed")
+            result.errors.append(f"AppSetting {s.key}: {exc}")
+
+    if deferred_alarms is not None:
+        s = deferred_alarms
+        try:
+            # Same checks as PUT /system/visu-alarms: an alarm pointing at nothing could
+            # never fire and would block every later save in the panel.
+            if problems := await unknown_alarm_references(db, parse_visu_alarms(s.value)):
+                raise ValueError("; ".join(problems))
+            await db.execute_and_commit(
+                "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?,?)",
+                (s.key, s.value),
+            )
+            result.app_settings_upserted += 1
         except Exception as exc:
             logger.exception(f"AppSetting {s.key} failed")
             result.errors.append(f"AppSetting {s.key}: {exc}")

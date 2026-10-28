@@ -7,6 +7,7 @@ import json
 import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -313,6 +314,46 @@ async def test_editing_an_active_alarm_to_end_on_clear_only_keeps_it_while_the_c
     assert engine.active() == []
 
 
+@pytest.mark.parametrize("state", [None, SimpleNamespace(value=None), SimpleNamespace(value=True, quality="bad")])
+async def test_editing_an_active_alarm_to_end_on_clear_only_keeps_it_while_the_value_is_unknown(state):
+    # A failed read (bus down, broker gone) is not "the condition is false": the alarm
+    # must not end just because the admin saved the panel in that moment.
+    registry = {"state": SimpleNamespace(value=False)}
+    engine = VisuAlarmEngine(value_getter=lambda _dp: registry["state"])
+    engine.configure([alarm()])
+    await engine.handle_value_event(event(True))
+
+    registry["state"] = state
+    engine.configure([alarm(ack_button=False, end_on_clear=True)])
+    assert [a["id"] for a in engine.active()] == ["post"]
+    await engine.handle_value_event(event(False, quality="bad"))  # still unknown
+    assert [a["id"] for a in engine.active()] == ["post"]
+    await engine.handle_value_event(event(False))  # the first good value is clear: that is the end
+    assert engine.active() == []
+
+
+async def test_an_unknown_value_that_turns_out_met_keeps_the_edited_alarm_until_it_clears():
+    registry = {"state": SimpleNamespace(value=False)}
+    engine = VisuAlarmEngine(value_getter=lambda _dp: registry["state"])
+    engine.configure([alarm()])
+    await engine.handle_value_event(event(True))
+    registry["state"] = None
+    engine.configure([alarm(ack_button=False, end_on_clear=True)])
+
+    await engine.handle_value_event(event(True))  # baseline, condition still met
+    assert [a["id"] for a in engine.active()] == ["post"]
+    await engine.handle_value_event(event(False))
+    assert engine.active() == []
+
+
+async def test_a_clear_baseline_ends_nothing_that_is_not_active():
+    engine = VisuAlarmEngine(value_getter=_Registry())
+    engine.configure([alarm(ack_button=False, end_on_clear=True)])
+    await engine.handle_value_event(event(False))
+    await engine.handle_value_event(event(True))
+    assert [a["id"] for a in engine.active()] == ["post"]
+
+
 async def test_editing_an_active_alarm_keeps_it_while_it_still_has_a_button():
     engine = VisuAlarmEngine()
     engine.configure([alarm()])
@@ -396,7 +437,11 @@ async def test_put_stores_applies_and_audits(db):
 
 @pytest.mark.parametrize(
     ("overrides", "detail"),
-    [({"datapoint_id": DP2}, f"Unknown datapoint: {DP2}"), ({"display": "page", "page_id": "gone"}, "Unknown page: gone")],
+    [
+        ({"datapoint_id": DP2}, f"Unknown datapoint: {DP2}"),
+        ({"display": "page", "page_id": "gone"}, "Unknown page: gone"),
+        ({"datapoint_id": DP2, "display": "page", "page_id": "gone"}, f"Unknown datapoint: {DP2}; Unknown page: gone"),
+    ],
 )
 async def test_put_rejects_unknown_references(db, overrides, detail):
     with pytest.raises(HTTPException) as exc:
@@ -453,6 +498,38 @@ async def test_config_import_validates_visu_alarms_and_applies_them(db, monkeypa
     assert await alarms_api.get_visu_alarms(db=db, _admin="admin") == [alarm()]
     await get_visu_alarm_engine().handle_value_event(event(True))  # the import applied the alarm
     assert [a["id"] for a in await alarms_api.get_active_visu_alarms()] == ["post"]
+
+
+async def test_config_import_checks_alarm_references_after_the_device_profiles(db, monkeypatch):
+    devices = json.dumps([{"slug": "panel", "name": "Panel", "start_node_id": None, "return_after_s": 0}])
+    body = config_api.ConfigExport(
+        obs_version="test",
+        exported_at="2026-10-19T00:00:00+00:00",
+        datapoints=[],
+        bindings=[],
+        app_settings=[
+            # The alarms before the profiles they refer to: the order in the export must not matter.
+            config_api.ExportedAppSetting(key=VISU_ALARMS_KEY, value=dump_visu_alarms([alarm(devices=["panel"])])),
+            config_api.ExportedAppSetting(key="visu.devices", value=devices),
+        ],
+    )
+    monkeypatch.setattr(config_api, "get_registry", lambda: _EmptyRegistry())
+    with (
+        patch("obs.adapters.registry.stop_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.start_all", new_callable=AsyncMock),
+        patch("obs.adapters.registry.get_all_instances", return_value={}),
+        patch("obs.core.event_bus.get_event_bus", return_value=MagicMock()),
+    ):
+        accepted = await config_api.import_config(body=body, _user="admin", db=db)
+        # An alarm pointing at a datapoint this installation does not have is not imported
+        # (it could never fire and would block every later save in the panel).
+        body.app_settings[0] = config_api.ExportedAppSetting(key=VISU_ALARMS_KEY, value=dump_visu_alarms([alarm(datapoint_id=DP2)]))
+        rejected = await config_api.import_config(body=body, _user="admin", db=db)
+
+    assert (accepted.errors, accepted.app_settings_upserted) == ([], 2)
+    assert rejected.errors == [f"AppSetting {VISU_ALARMS_KEY}: Unknown datapoint: {DP2}"]
+    assert rejected.app_settings_upserted == 1
+    assert await alarms_api.get_visu_alarms(db=db, _admin="admin") == [alarm(devices=["panel"])]  # the earlier import stays
 
 
 async def test_acknowledge_route_ends_the_alarm_and_audits_it(db):
@@ -537,6 +614,13 @@ async def test_put_rejects_unknown_device_profiles_and_accepts_known_ones(db):
     assert await alarms_api.update_visu_alarms(body=body, request=_request(), db=db, _admin="admin") == body.alarms
 
 
+async def test_put_rejects_device_profiles_when_none_are_stored(db):
+    body = VisuAlarmsIn(alarms=[alarm(devices=["panel"]).model_dump()])
+    with pytest.raises(HTTPException) as exc:
+        await alarms_api.update_visu_alarms(body=body, request=_request(), db=db, _admin="admin")
+    assert (exc.value.status_code, exc.value.detail) == (422, "Unknown device profile: panel")
+
+
 async def test_put_without_device_restriction_needs_no_profiles(db):
     body = VisuAlarmsIn(alarms=[alarm().model_dump()])
     assert await alarms_api.update_visu_alarms(body=body, request=_request(), db=db, _admin="admin") == body.alarms
@@ -588,8 +672,22 @@ def test_channel_sends_keepalive_pings(monkeypatch):
         assert ws.receive_json() == {"action": "ping"}
 
 
+def test_channel_refuses_pages_of_other_sites_and_accepts_the_visu_itself():
+    url = "/api/v1/system/visu-alarms/ws"
+    with TestClient(_app()) as client:
+        with pytest.raises(WebSocketDisconnect) as exc, client.websocket_connect(url, headers={"Origin": "http://evil.example"}):
+            pass
+        assert exc.value.code == 1008
+        assert get_visu_alarm_engine()._listeners == set()
+
+        with client.websocket_connect(url, headers={"Origin": "http://testserver"}) as ws:
+            assert ws.receive_json() == {"action": "visu_alarms", "alarms": []}
+
+
 async def test_channel_ends_quietly_when_sending_fails():
     class GoneSocket:
+        headers: ClassVar[dict[str, str]] = {}
+
         async def accept(self):
             return None
 

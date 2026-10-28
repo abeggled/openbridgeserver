@@ -29,8 +29,6 @@ if (!embedded) useIdleReturn()
 
 let stopDeviceRefresh: (() => void) | null = null
 
-let stopDeviceRefresh: (() => void) | null = null
-
 onMounted(() => {
   format.load()
   device.load()

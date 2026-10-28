@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi import status as http_status
+from starlette.requests import HTTPConnection
 
 from obs.api.audit import AuditLogWriter, build_audit_context
 from obs.api.auth import get_admin_user, limiter
@@ -33,8 +34,8 @@ from obs.visu_alarms import (
     dump_visu_alarms,
     get_visu_alarm_engine,
     load_visu_alarms,
+    unknown_alarm_references,
 )
-from obs.visu_devices import VISU_DEVICES_KEY, load_visu_devices
 
 router = APIRouter(tags=["visu-alarms"])
 
@@ -59,9 +60,8 @@ async def update_visu_alarms(
     _admin: str = Depends(get_admin_user),
 ) -> list[VisuAlarm]:
     """Replace all alarm definitions and apply them right away. Admin only."""
-    await _require_existing("datapoints", {a.datapoint_id for a in body.alarms}, db, "Unknown datapoint")
-    await _require_existing("visu_nodes", {a.page_id for a in body.alarms if a.page_id}, db, "Unknown page")
-    await _require_known_device_profiles({slug for a in body.alarms for slug in a.devices}, db)
+    if problems := await unknown_alarm_references(db, body.alarms):
+        raise HTTPException(http_status.HTTP_422_UNPROCESSABLE_CONTENT, "; ".join(problems))
     async with db.transaction():
         await db.execute(
             "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
@@ -73,28 +73,7 @@ async def update_visu_alarms(
     return body.alarms
 
 
-async def _require_existing(table: str, ids: set[str], db: Database, message: str) -> None:
-    if not ids:
-        return
-    placeholders = ", ".join("?" for _ in ids)
-    rows = await db.fetchall(f"SELECT id FROM {table} WHERE id IN ({placeholders})", tuple(ids))
-    unknown = sorted(ids - {str(r["id"]) for r in rows})
-    if unknown:
-        raise HTTPException(http_status.HTTP_422_UNPROCESSABLE_CONTENT, f"{message}: {', '.join(unknown)}")
-
-
-async def _require_known_device_profiles(slugs: set[str], db: Database) -> None:
-    """An alarm restricted to a device profile that does not exist would never show anywhere."""
-    if not slugs:
-        return
-    row = await db.fetchone("SELECT value FROM app_settings WHERE key = ?", (VISU_DEVICES_KEY,))
-    known = {device.slug for device in load_visu_devices(row["value"] if row else None)}
-    unknown = sorted(slugs - known)
-    if unknown:
-        raise HTTPException(http_status.HTTP_422_UNPROCESSABLE_CONTENT, f"Unknown device profile: {', '.join(unknown)}")
-
-
-def _is_cross_origin(request: Request) -> bool:
+def _is_cross_origin(request: HTTPConnection) -> bool:
     """True when a browser sends the request from a page of another site.
 
     A body-less POST is a CORS "simple request": a page on any other host or port
@@ -147,7 +126,14 @@ async def acknowledge_visu_alarm(alarm_id: str, request: Request, db: Database =
 
 @router.websocket("/visu-alarms/ws")
 async def visu_alarms_ws(ws: WebSocket) -> None:
-    """Push the active alarm list on connect and after every change. Public."""
+    """Push the active alarm list on connect and after every change. Public.
+
+    Browsers do not apply CORS to WebSockets, so the same origin guard as for the
+    acknowledge applies here: a page of another site gets the handshake refused.
+    """
+    if _is_cross_origin(ws):
+        await ws.close(code=1008)  # policy violation
+        return
     await ws.accept()
     engine = get_visu_alarm_engine()
     queue = engine.listen()

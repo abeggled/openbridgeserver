@@ -213,17 +213,22 @@ class VisuAlarmEngine:
         # An active alarm whose new definition has no acknowledge button ends only when
         # its condition clears. If the condition is already false now, that end has
         # passed — the alarm ends here instead of staying on every Visu with no button
-        # until the condition happens to go true and false again.
-        self._active = {aid: act for aid, act in self._active.items() if act.alarm.ack_button or self._condition[aid]}
+        # until the condition happens to go true and false again. An *unknown*
+        # condition (no value, failed read) is not "false": such an alarm stays.
+        self._active = {aid: act for aid, act in self._active.items() if act.alarm.ack_button or aid in self._unknown or self._condition[aid]}
         self._notify()
 
     def _current_condition(self, alarm: VisuAlarm) -> bool | None:
-        """The condition for the datapoint's current value; None when there is no value yet."""
+        """The condition for the datapoint's current value; None when it is not known.
+
+        No value yet, or a failed read (quality bad/uncertain, usually value None),
+        both mean "unknown" — not "false".
+        """
         if self._value_getter is None:
             # No registry wired (tests): nothing to know, start from "not met".
             return False
         state = self._value_getter(uuid.UUID(alarm.datapoint_id))
-        if state is None or getattr(state, "value", None) is None:
+        if state is None or getattr(state, "value", None) is None or getattr(state, "quality", "good") != "good":
             return None
         return evaluate_condition(state.value, alarm.operator, alarm.compare_value)
 
@@ -242,8 +247,13 @@ class VisuAlarmEngine:
             was = self._condition.get(alarm.id, False)
             self._condition[alarm.id] = met
             if alarm.id in self._unknown:
-                # First value since the restart: the baseline, not a change.
+                # First value since the restart: the baseline, not a change — except for
+                # an alarm edited to end on clear while its value was unknown: a clear
+                # first value is the end it was waiting for.
                 self._unknown.discard(alarm.id)
+                if not met and alarm.end_on_clear and alarm.id in self._active:
+                    del self._active[alarm.id]
+                    changed = True
                 continue
             if event.initialization:
                 # Start-up values (e.g. a logic sheet's first run) only set the baseline,
@@ -325,6 +335,36 @@ def get_visu_alarm_engine() -> VisuAlarmEngine:
 def reset_visu_alarm_engine() -> None:
     global _engine
     _engine = None
+
+
+async def unknown_alarm_references(db: Any, alarms: list[VisuAlarm]) -> list[str]:
+    """What the alarms refer to but does not exist: datapoints, pages, device profiles.
+
+    Shared by the PUT route (422) and the configuration import (import error), so an
+    alarm that can never fire — and would block every later save — is never stored.
+    """
+    from obs.visu_devices import VISU_DEVICES_KEY, load_visu_devices
+
+    problems: list[str] = []
+
+    async def missing(table: str, ids: set[str]) -> list[str]:
+        if not ids:
+            return []
+        placeholders = ", ".join("?" for _ in ids)
+        rows = await db.fetchall(f"SELECT id FROM {table} WHERE id IN ({placeholders})", tuple(ids))
+        return sorted(ids - {str(r["id"]) for r in rows})
+
+    if unknown := await missing("datapoints", {a.datapoint_id for a in alarms}):
+        problems.append(f"Unknown datapoint: {', '.join(unknown)}")
+    if unknown := await missing("visu_nodes", {a.page_id for a in alarms if a.page_id}):
+        problems.append(f"Unknown page: {', '.join(unknown)}")
+    slugs = {slug for a in alarms for slug in a.devices}
+    if slugs:
+        row = await db.fetchone("SELECT value FROM app_settings WHERE key = ?", (VISU_DEVICES_KEY,))
+        known = {device.slug for device in load_visu_devices(row["value"] if row else None)}
+        if unknown := sorted(slugs - known):
+            problems.append(f"Unknown device profile: {', '.join(unknown)}")
+    return problems
 
 
 async def reload_visu_alarms(db: Any) -> None:

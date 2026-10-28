@@ -3609,6 +3609,8 @@
       "missingDevice": "Device \"{slug}\" (renamed or deleted)",
       "errorName": "Please enter a name.",
       "errorDatapoint": "Please choose a datapoint.",
+      "errorMissingDatapoint": "The chosen datapoint no longer exists. Please choose another one or remove the alarm.",
+      "missingDatapoint": "(deleted datapoint)",
       "errorMessage": "Please enter a title or a text.",
       "errorPage": "Please choose a page.",
       "errorMissingPage": "The chosen page no longer exists.",
