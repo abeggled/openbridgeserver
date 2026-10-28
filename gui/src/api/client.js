@@ -225,6 +225,14 @@ export const settingsApi = {
   displaySettings: () => api.get('/system/display-settings'),
 }
 
+// ── Visu device profiles ───────────────────────────────────────────────────
+export const visuDevicesApi = {
+  list:   ()        => api.get('/system/visu-devices'),
+  update: (devices) => api.put('/system/visu-devices', { devices }),
+  // Visu pages for the start-page selector; an admin sees the whole tree.
+  pages:  ()        => api.get('/visu/tree'),
+}
+
 // ── Update Check (#1370) ──────────────────────────────────────────────────
 export const updatesApi = {
   status:       ()        => api.get('/system/update-status'),

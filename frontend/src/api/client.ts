@@ -939,3 +939,19 @@ export interface DisplaySettings {
 export const displaySettings = {
   get: () => request<DisplaySettings>('/system/display-settings', { silent401: true }),
 }
+
+// ── Visu-Geräteprofile (öffentlich, ohne Login) ──────────────────────────────
+
+export interface VisuDevice {
+  slug: string
+  name: string
+  start_node_id: string | null
+  /** 0 = kein automatischer Rücksprung */
+  return_after_s: number
+  /** Startseite existiert nicht mehr (z. B. gelöscht) → Übersicht statt Fehlermeldung */
+  start_node_missing?: boolean
+}
+
+export const visuDevices = {
+  list: () => request<VisuDevice[]>('/system/visu-devices', { silent401: true }),
+}
