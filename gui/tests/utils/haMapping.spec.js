@@ -165,6 +165,34 @@ describe('advanced mapping JSON', () => {
   it.each(['{', '[]', 'null', '"x"', '{"template": "{{x}}"}'])('rejects %s', (text) => {
     expect(parseAdvancedMapping(text)).toEqual({ ok: false })
   })
+
+  it('accepts every key in its own shape', () => {
+    const text = JSON.stringify({
+      action: { domain: 'lock', name: 'lock' },
+      write_actions: { true: { domain: 'lock', name: 'lock' } },
+      state_map: { locked: true },
+      transitional_states: ['locking'],
+      fault_states: ['jammed'],
+    })
+    expect(parseAdvancedMapping(text).ok).toBe(true)
+    expect(parseAdvancedMapping('{"action": null, "write_actions": null, "state_map": null}').ok).toBe(true)
+    expect(parseAdvancedMapping('{"action": {}, "write_actions": {}}').ok).toBe(true)  // {} = unset
+  })
+
+  // the form renders these values: a wrong type must be invalid input, not a render crash
+  it.each([
+    '{"transitional_states": "opening"}',
+    '{"fault_states": [1]}',
+    '{"write_actions": {"true": null}}',
+    '{"write_actions": {"true": {"domain": "lock"}}}',
+    '{"write_actions": []}',
+    '{"action": "lock.lock"}',
+    '{"action": {"domain": 1, "name": "lock"}}',
+    '{"state_map": ["a"]}',
+    '{"state_map": "a"}',
+  ])('rejects the wrongly typed %s', (text) => {
+    expect(parseAdvancedMapping(text)).toEqual({ ok: false })
+  })
 })
 
 describe('suggestion lists', () => {

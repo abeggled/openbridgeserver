@@ -497,9 +497,9 @@ class HomeAssistantAdapter(AdapterBase):
         await self._publish_entity(entity_id)
 
     async def _publish_entity(self, entity_id: str) -> None:
-        state_obj = self._entity_cache.get(entity_id)
         for binding in list(self._entity_map.get(entity_id, [])):
-            await self._publish_binding(binding, state_obj)
+            # Read per binding: a newer state may arrive while an earlier publish awaits.
+            await self._publish_binding(binding, self._entity_cache.get(entity_id))
 
     async def _mark_connection_lost(self) -> None:
         self._entity_cache.clear()

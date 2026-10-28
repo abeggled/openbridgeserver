@@ -107,6 +107,18 @@ export function advancedMappingText(cfg) {
   return Object.keys(out).length ? JSON.stringify(out, null, 2) : ''
 }
 
+const isObject = v => v !== null && typeof v === 'object' && !Array.isArray(v)
+const isAction = a => isObject(a) && typeof a.domain === 'string' && typeof a.name === 'string'
+const isStringList = v => Array.isArray(v) && v.every(s => typeof s === 'string')
+// The shape each key must have; the form renders these values, so a wrong type is invalid input.
+const MAPPING_SHAPES = {
+  action: v => v === null || (isObject(v) && (Object.keys(v).length === 0 || isAction(v))),
+  write_actions: v => v === null || (isObject(v) && Object.values(v).every(isAction)),
+  state_map: v => v === null || isObject(v),
+  transitional_states: isStringList,
+  fault_states: isStringList,
+}
+
 // Parse the advanced JSON. Returns { ok, value } with every mapping key present
 // (missing keys reset to their empty value), or { ok: false } on invalid input.
 export function parseAdvancedMapping(text) {
@@ -120,6 +132,7 @@ export function parseAdvancedMapping(text) {
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { ok: false }
   if (Object.keys(parsed).some(k => !HA_MAPPING_KEYS.includes(k))) return { ok: false }
+  if (Object.entries(parsed).some(([k, v]) => !MAPPING_SHAPES[k](v))) return { ok: false }
   return { ok: true, value: { ...empty, ...parsed } }
 }
 

@@ -520,6 +520,20 @@ class TestSubscription:
         assert _values(mock_bus, b) == [(21.5, "bad")]
         assert _values(mock_bus, other) == [(None, "bad")]
 
+    async def test_newer_state_arriving_mid_publish_is_used_for_the_remaining_bindings(self, adapter):
+        b1, b2 = make_binding({"entity_id": "sensor.temp"}), make_binding({"entity_id": "sensor.temp"})
+        adapter._entity_map = {"sensor.temp": [b1, b2]}
+        adapter._entity_cache["sensor.temp"] = {"state": "1"}
+        seen = []
+
+        async def publish(binding, state_obj):
+            seen.append((binding.id, state_obj["state"]))
+            adapter._entity_cache["sensor.temp"] = {"state": "2"}  # the event worker, meanwhile
+
+        adapter._publish_binding = publish
+        await adapter._publish_entity("sensor.temp")
+        assert seen == [(b1.id, "1"), (b2.id, "2")]
+
     async def test_binding_removed_during_connection_loss_is_skipped(self, adapter, mock_bus):
         b1, b2 = make_binding({"entity_id": "sensor.temp"}), make_binding({"entity_id": "lock.shed"})
         await _bind(adapter, b1, b2)
