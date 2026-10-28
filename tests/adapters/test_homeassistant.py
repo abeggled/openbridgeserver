@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import datetime
 import json
+import logging
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -495,6 +496,35 @@ class TestSubscription:
         assert fake_ha.socket.sent[-1]["entity_ids"] == ["sensor.temp"]
         assert len(fake_ha.sockets) == 1
 
+    async def test_action_target_binding_is_never_subscribed(self, adapter, mock_bus, fake_ha):
+        good = make_binding({"entity_id": "sensor.temp"})
+        target = make_binding({"entity_id": "light.desk, sensor.temp"}, direction="BOTH")
+        await _bind(adapter, good, target)
+        assert _values(mock_bus, good) == [(21.5, "good")]
+        assert _values(mock_bus, target) == []
+        assert fake_ha.socket.sent[-1]["entity_ids"] == ["sensor.temp"]
+
+    async def test_attribute_binding_reads_while_state_is_unknown(self, adapter, mock_bus, fake_ha):
+        # a template sensor without a state whose attribute carries the value
+        fake_ha.set_state("sensor.outdoor", "unknown", {"temperature": 12.5})
+        b = make_binding({"entity_id": "sensor.outdoor", "attribute": "temperature"})
+        await _bind(adapter, b)
+        fake_ha.set_state("sensor.outdoor", "unknown", {"temperature": 13.0})
+        await settle()
+        assert _values(mock_bus, b) == [(12.5, "good"), (13.0, "good")]
+
+    async def test_refused_resubscribe_is_not_blamed_on_home_assistant(self, adapter, mock_bus, fake_ha, caplog):
+        await _bind(adapter, make_binding({"entity_id": "sensor.temp"}))
+        before = len(_statuses(mock_bus))
+        fake_ha.subscribe_error = ("not_allowed", "User is not allowed to subscribe")
+        caplog.set_level(logging.INFO, logger="obs.adapters.homeassistant.adapter")
+        await _bind(adapter, make_binding({"entity_id": "lock.shed"}))  # entity set changes → _resync
+        await settle(5)
+        after = _statuses(mock_bus)[before:]
+        # the cause stays reported across the reconnect, which is refused the same way
+        assert after[:3] == ["subscribeFailed", "connectedHa", "subscribeFailed"]
+        assert not any("closed by Home Assistant" in r.getMessage() for r in caplog.records)
+
     async def test_failed_resubscribe_closes_only_the_connection_it_used(self, adapter, fake_ha):
         await _bind(adapter, make_binding({"entity_id": "sensor.temp"}))
         adapter._ws_task.cancel()  # keep the supervisor out of this scenario
@@ -674,6 +704,18 @@ class TestWrite:
     )
     async def test_legacy_writes_unchanged(self, adapter, fake_ha, config, value, expected):
         await adapter.write(make_binding(config, direction="DEST"), value)
+        assert fake_ha.service_calls == [expected]
+
+    @pytest.mark.parametrize(
+        ("config", "expected"),
+        [
+            ({"entity_id": "all", "service_domain": "light", "service_name": "turn_off"}, ("light", "turn_off", {"entity_id": "all"})),
+            ({"entity_id": "light.a, light.b", "service_name": "turn_off"}, ("light", "turn_off", {"entity_id": "light.a, light.b"})),
+        ],
+        ids=["entity_id-all", "comma-list"],
+    )
+    async def test_legacy_dest_targets_all_and_lists_still_write(self, adapter, fake_ha, config, expected):
+        await adapter.write(make_binding(config, direction="DEST"), False)
         assert fake_ha.service_calls == [expected]
 
     async def test_lock_profile_dispatches_by_boolean(self, adapter, fake_ha):

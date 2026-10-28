@@ -74,6 +74,14 @@ class TestBindingSchema:
         # pre-#1392 bindings like "Light.Kitchen" worked: HA lowercases ids in actions
         assert HaBindingConfig(entity_id="Light.Kitchen").entity_id == "light.kitchen"
 
+    @pytest.mark.parametrize(
+        ("entity_id", "expected"),
+        [("ALL", "all"), (" Light.A ,light.b ", "light.a, light.b")],
+    )
+    def test_action_targets_of_legacy_dest_bindings_stay_valid(self, entity_id, expected):
+        # pre-#1392 DEST bindings target "all" or a list; HA accepts both in actions
+        assert HaBindingConfig(entity_id=entity_id).entity_id == expected
+
     def test_minimal_config_is_default_mode(self):
         assert resolve(HaBindingConfig(entity_id="switch.fan")).mode == "default"
 
@@ -110,6 +118,9 @@ class TestBindingSchema:
             {"entity_id": "light.foo__bar"},
             {"entity_id": "_light.foo"},
             {"entity_id": "light._foo"},
+            # a target list is only as valid as each of its ids
+            {"entity_id": "light.a, light.my-b"},
+            {"entity_id": "light.a,"},
         ],
     )
     def test_invalid_mappings_rejected(self, config):
@@ -228,6 +239,9 @@ class TestNormalize:
             ({"entity_id": "sensor.t"}, None, None, (None, "bad", False)),
             ({"entity_id": "sensor.t"}, "unavailable", None, (None, "bad", False)),
             ({"entity_id": "sensor.t"}, "unknown", None, (None, "uncertain", False)),
+            # an attribute carries its own value while the state is unknown (pre-#1392)
+            ({"entity_id": "sensor.t", "attribute": "x"}, "unknown", {"x": 12.5}, (12.5, "good", True)),
+            ({"entity_id": "sensor.t", "attribute": "x"}, "unknown", {}, (None, "uncertain", False)),
             # lock profile
             ({"entity_id": "lock.t", "profile": "lock.boolean_locked"}, "locked", None, (True, "good", True)),
             ({"entity_id": "lock.t", "profile": "lock.boolean_locked"}, "unlocked", None, (False, "good", True)),
@@ -481,6 +495,11 @@ class TestDirection:
             ({"entity_id": "cover.t", "profile": "cover.stop", "state_map": {"open": True}}, "SOURCE", False),
             ({"entity_id": "lock.t", "profile": "lock.boolean_locked"}, "BOTH", False),
             ({"entity_id": "lock.t"}, "DEST", False),
+            # "all" and lists are action targets: writable, never subscribable
+            ({"entity_id": "all", "service_domain": "light", "service_name": "turn_off"}, "DEST", False),
+            ({"entity_id": "all"}, "SOURCE", True),
+            ({"entity_id": "light.a, light.b"}, "BOTH", True),
+            ({"entity_id": "light.a, light.b", "profile": "light.on_off"}, "DEST", False),
         ],
     )
     def test_direction_problem(self, config, direction, problem):

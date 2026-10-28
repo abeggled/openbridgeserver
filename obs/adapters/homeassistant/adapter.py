@@ -53,6 +53,7 @@ from obs.adapters.homeassistant.profiles import (
     direction_problem,
     entity_domain,
     identity_hash,
+    is_single_entity,
     normalize,
     resolve,
     select_action,
@@ -95,6 +96,10 @@ class HaAdapterConfig(BaseModel):
 
 class HaNotConnectedError(Exception):
     """The instance has no live WebSocket connection."""
+
+
+class _SubscribeRefusedError(Exception):
+    """Home Assistant refused the subscription right after (re)connecting."""
 
 
 class HaActionError(Exception):
@@ -202,6 +207,8 @@ class HomeAssistantAdapter(AdapterBase):
         self._sub_id: int | None = None
         self._sub_entities: tuple[str, ...] | None = None
         self._sub_mode = "entities"  # falls back to "events" on HA < 2022.4
+        # The connection a failed resubscribe closed itself: not a close by Home Assistant.
+        self._closed_by_resync: HaConnection | None = None
         self._snapshot_expected: set[str] | None = None
         self._browse_cache: tuple[float, dict[str, Any]] | None = None
         self._services_cache: tuple[float, list[dict[str, Any]]] | None = None
@@ -295,17 +302,25 @@ class HomeAssistantAdapter(AdapterBase):
                 self._ha_version = conn.ha_version
                 logger.info("HA WebSocket authenticated (ha_version=%s)", conn.ha_version or "?")
                 await self._publish_connected()
-                await self._sync_subscription()
+                try:
+                    await self._sync_subscription()
+                except HaCommandError as exc:
+                    raise _SubscribeRefusedError(f"{type(exc).__name__}: {exc}") from exc
                 up_since = time.monotonic()
                 await self._heartbeat(conn)
-                logger.warning("HA WebSocket closed by Home Assistant, reconnecting")
-                await self._publish_status(False, "WebSocket Fehler — reconnecting", code="wsErrorReconnecting")
+                # A failed resubscribe closed it itself and already reported why.
+                if self._closed_by_resync is not conn:
+                    logger.warning("HA WebSocket closed by Home Assistant, reconnecting")
+                    await self._publish_status(False, "WebSocket Fehler — reconnecting", code="wsErrorReconnecting")
             except asyncio.CancelledError:
                 raise
             except HaAuthError:
                 logger.error("HA WebSocket: authentication failed — check token")
                 await self._publish_status(False, "Token ungültig", code="tokenInvalid")
                 backoff = BACKOFF_MAX
+            except _SubscribeRefusedError as exc:
+                logger.warning("HA adapter: subscribe failed (%s), reconnecting", exc)
+                await self._publish_status(False, "Abonnement fehlgeschlagen", code="subscribeFailed")
             except Exception as exc:  # noqa: BLE001 -- the supervisor must survive any failure and retry
                 logger.warning("HA adapter WebSocket error (%s: %s), reconnecting", type(exc).__name__, exc)
                 await self._publish_status(False, "WebSocket Fehler — reconnecting", code="wsErrorReconnecting")
@@ -353,6 +368,10 @@ class HomeAssistantAdapter(AdapterBase):
             except (ValidationError, TypeError):
                 logger.warning("Ungültige HA Binding-Konfiguration für %s — übersprungen", binding.id)
                 continue
+            if not is_single_entity(bc.entity_id):
+                # "all" or a list is an action target only: HA refuses it in subscribe_entities.
+                logger.warning("HA Binding %s: %r kann nicht gelesen werden — übersprungen", binding.id, bc.entity_id)
+                continue
             entity_map.setdefault(bc.entity_id, []).append(binding)
             mappings[binding.id] = resolve(bc)
             signatures[binding.id] = (bc.model_dump_json(), binding.value_formula, repr(binding.value_map))
@@ -396,6 +415,7 @@ class HomeAssistantAdapter(AdapterBase):
                 await self._subscribe(conn)
             except Exception:
                 if close_on_error:
+                    self._closed_by_resync = conn
                     await conn.close()
                 raise
 

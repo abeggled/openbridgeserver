@@ -84,6 +84,21 @@ describe('BindingFormHomeAssistant — searchable fields', () => {
     expect(api.haEntities).toHaveBeenLastCalledWith('ha-2', { entity_id: 'lock.shed', limit: 1 })
   })
 
+  it('files a search answer under the instance it asked, even after a switch', async () => {
+    let answerA
+    api.haEntities
+      .mockImplementationOnce(() => new Promise((resolve) => { answerA = resolve }))  // ha-1 is slow
+      .mockResolvedValue({ data: { items: [{ ...SHED, attributes: { only_on_b: 1 } }], total: 1, facets: {} } })
+    const { w } = await mk({ entity_id: 'lock.shed' }, 'ha-1')
+    await w.find('[data-testid="config-field-entity_id"]').trigger('focus')
+    await flushPromises()
+    await w.setProps({ selectedInstanceId: 'ha-2' })  // switched before ha-1 answers
+    answerA({ data: { items: [SHED], total: 1, facets: {} } })
+    await flushPromises()
+    expect(await focus(w, 'attribute')).toEqual([expect.stringContaining('only_on_b')])
+    expect(api.haEntities).toHaveBeenLastCalledWith('ha-2', { entity_id: 'lock.shed', limit: 1 })
+  })
+
   it('offers no attributes without an entity', async () => {
     const { w } = await mk()
     expect(await focus(w, 'attribute')).toEqual([])

@@ -39,6 +39,7 @@ _IDENT = r"^[a-z0-9_]+$"
 # HA's own rule: no leading, trailing or double underscore in either part.
 ENTITY_ID_PATTERN = r"^[a-z0-9]+(?:_[a-z0-9]+)*\.[a-z0-9]+(?:_[a-z0-9]+)*$"
 _ENTITY_ID = re.compile(ENTITY_ID_PATTERN)
+ENTITY_MATCH_ALL = "all"
 # HA attribute keys are free text (templates and custom integrations use spaces,
 # hyphens, capitals): only control characters are refused.
 ATTRIBUTE_PATTERN = r"^[^\x00-\x1f\x7f]*$"
@@ -112,10 +113,16 @@ class HaBindingConfig(BaseModel):
         # HA rejects anything else in subscribe_entities for the whole request,
         # so one malformed binding must never reach the subscription. HA itself
         # lowercases entity ids in actions, so "Light.Kitchen" stays valid.
+        # Action targets may also be "all" or a comma-separated list (pre-#1392
+        # DEST bindings): those are write-only, see direction_problem().
         value = value.strip().lower()
-        if not _ENTITY_ID.match(value):
-            raise ValueError(f"invalid entity_id {value!r} (expected <domain>.<object_id>: lowercase a-z, 0-9, single _ between)")
-        return value
+        if value == ENTITY_MATCH_ALL:
+            return value
+        parts = [part.strip() for part in value.split(",")]
+        for part in parts:
+            if not _ENTITY_ID.match(part):
+                raise ValueError(f"invalid entity_id {part!r} (expected <domain>.<object_id>: lowercase a-z, 0-9, single _ between)")
+        return ", ".join(parts)
 
     @model_validator(mode="after")
     def _check_mapping(self) -> HaBindingConfig:
@@ -138,11 +145,13 @@ def direction_problem(bc: HaBindingConfig, direction: str) -> str | None:
     A read-only profile has nothing to write and a command profile nothing to
     read, unless the binding supplies that side explicitly.
     """
+    writes = direction in ("DEST", "BOTH")
+    reads = direction in ("SOURCE", "BOTH")
+    if reads and not is_single_entity(bc.entity_id):
+        return f"{bc.entity_id!r} ist nur als Aktionsziel gültig und kann nicht gelesen werden ({direction})"
     profile = PROFILES.get(bc.profile or "")
     if profile is None:
         return None
-    writes = direction in ("DEST", "BOTH")
-    reads = direction in ("SOURCE", "BOTH")
     explicit_write = uses_legacy_write(bc) or bc.action is not None or bc.write_actions is not None
     explicit_read = bool(bc.attribute) or bc.state_map is not None
     if writes and profile.direction == "SOURCE" and not explicit_write:
@@ -150,6 +159,11 @@ def direction_problem(bc: HaBindingConfig, direction: str) -> str | None:
     if reads and profile.direction == "DEST" and not explicit_read:
         return f"Profil {profile.id} ist ein reiner Befehl und kann nicht lesen ({direction})"
     return None
+
+
+def is_single_entity(entity_id: str) -> bool:
+    """True for one entity; False for an action target such as "all" or a list."""
+    return bool(_ENTITY_ID.match(entity_id))
 
 
 def uses_legacy_write(bc: HaBindingConfig) -> bool:
@@ -652,7 +666,9 @@ def normalize(mapping: ResolvedMapping, state_obj: dict[str, Any] | None) -> tup
     state = state_obj.get("state")
     if state == "unavailable":
         return None, BAD, False
-    if state == "unknown":
+    # An attribute can carry a value of its own while the state is unknown
+    # (e.g. a template sensor without a state): read it, as before #1392.
+    if state == "unknown" and (not mapping.attribute or (state_obj.get("attributes") or {}).get(mapping.attribute) is None):
         return None, UNCERTAIN, False
     if state in mapping.fault_states:
         return None, BAD, False

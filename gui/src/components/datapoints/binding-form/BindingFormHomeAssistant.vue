@@ -181,9 +181,11 @@ const entityMisses = new Map()
 const MISS_TTL_MS = 30000
 
 async function searchEntities(params) {
-  if (!props.selectedInstanceId) return []
-  const { data } = await adapterApi.haEntities(props.selectedInstanceId, params)
-  for (const item of data.items) entityCache.set(`${props.selectedInstanceId}|${item.entity_id}`, item)
+  // Captured before the request: an instance switched meanwhile must not file A's answer under B.
+  const instanceId = props.selectedInstanceId
+  if (!instanceId) return []
+  const { data } = await adapterApi.haEntities(instanceId, params)
+  for (const item of data.items) entityCache.set(`${instanceId}|${item.entity_id}`, item)
   return data.items
 }
 
