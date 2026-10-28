@@ -541,14 +541,16 @@ class HomeAssistantAdapter(AdapterBase):
             logger.exception("HA adapter: error processing binding %s", binding.id)
             return
 
+        # A degraded state always carries the DataPoint's current value.
+        in_sync = not stable or _same_value(pub_value, self._last_known(binding))
         last = self._last_published.get(binding.id)
-        if last is not None and last[1] == quality and _same_value(last[0], pub_value):
+        # Drop a repeat only while the DataPoint still holds it: another writer may
+        # have changed it since (HA not following), and HA's value must win back.
+        if in_sync and last is not None and last[1] == quality and _same_value(last[0], pub_value):
             return
         # The value HA reports again after a reconnect, an OBS start or a degraded
         # state is no new value: update the DataPoint (quality), but never re-send it
         # to other bindings or re-trigger logic — that could re-fire actuators.
-        # A degraded state always carries the DataPoint's current value.
-        unchanged = not stable or _same_value(pub_value, self._last_known(binding))
         if stable:
             self._last_good[binding.id] = pub_value
         self._last_published[binding.id] = (pub_value, quality)
@@ -562,8 +564,8 @@ class HomeAssistantAdapter(AdapterBase):
                 quality=quality,
                 source_adapter=self.adapter_type,
                 binding_id=binding.id,
-                suppress_write_propagation=unchanged,
-                suppress_action_triggers=unchanged,
+                suppress_write_propagation=in_sync,
+                suppress_action_triggers=in_sync,
             ),
         )
 

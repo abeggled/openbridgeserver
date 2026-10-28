@@ -225,6 +225,23 @@ class TestReconnect:
         (event,) = [e for e in _events(mock_bus) if e.binding_id == b.id]
         assert (event.value, event.quality, event.suppress_write_propagation) == (21.5, "good", True)
 
+    async def test_repeat_resyncs_a_datapoint_another_writer_changed(self, monkeypatch, adapter, mock_bus, fake_ha):
+        b = make_binding({"entity_id": "sensor.temp"})
+        current = {}
+        registry = MagicMock()
+        registry.get_value = lambda dp_id: MagicMock(value=current["v"]) if "v" in current else None
+        monkeypatch.setattr("obs.core.registry.get_registry", lambda: registry)
+        await _bind(adapter, b)
+        current["v"] = 21.5  # the DataPoint took HA's value
+        fake_ha.set_state("sensor.temp", "21.5", {"friendly_name": "Renamed"})
+        await settle()
+        current["v"] = 99  # a visu/logic write HA did not follow
+        fake_ha.set_state("sensor.temp", "21.5", {"friendly_name": "Again"})
+        await settle()
+        flags = [(e.value, e.quality, e.suppress_write_propagation) for e in _events(mock_bus) if e.binding_id == b.id]
+        # the repeat while in sync is dropped; once the DataPoint diverged, HA's value wins back
+        assert flags == [(21.5, "good", False), (21.5, "good", False)]
+
     async def test_unanswered_ping_reconnects(self, monkeypatch, adapter, fake_ha):
         monkeypatch.setattr(ha_adapter, "PING_INTERVAL", 0.01)
         monkeypatch.setattr(ha_adapter, "PING_TIMEOUT", 0.01)

@@ -496,3 +496,14 @@ class TestMissingAttributeValues:
         # it reads like a manual attribute binding
         assert _read({"entity_id": "light.t", "profile": "light.brightness", "attribute": "color_temp"}, "off", {}) == (None, "good", True)
         assert _read({"entity_id": "media_player.t", "profile": "media_player.volume"}, "off", {}) == (None, "uncertain", False)
+
+    @pytest.mark.parametrize("state", ["locking", "jammed"])
+    def test_other_attribute_ignores_the_profiles_transitional_and_fault_states(self, state):
+        lock = {"entity_id": "lock.x", "profile": "lock.boolean_locked"}
+        assert _read({**lock, "attribute": "battery"}, state, {"battery": 80}) == (80, "good", True)
+        assert _read(lock, state, {})[1] in ("uncertain", "bad")  # the profile's own value still degrades
+        # explicit states on the binding apply to any attribute
+        assert _read({**lock, "attribute": "battery", "fault_states": ["jammed"]}, "jammed", {"battery": 80})[1] == "bad"
+
+    def test_empty_action_means_none(self):
+        assert HaBindingConfig(entity_id="lock.x", profile="lock.boolean_locked", action={}).action is None

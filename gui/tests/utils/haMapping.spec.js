@@ -62,6 +62,13 @@ describe('resolveHaMapping', () => {
     expect(resolveHaMapping({ entity_id: 'lock.x', attribute: 'battery', state_map: { '1': true } }, CATALOG).read.state_map).toEqual({ '1': true })
   })
 
+  it('applies the profile transitional and fault states only to the value the profile reads', () => {
+    expect(resolveHaMapping({ entity_id: 'lock.x', profile: 'lock.boolean_locked', attribute: 'battery' }, CATALOG).read)
+      .toMatchObject({ transitional_states: [], fault_states: [] })
+    const bare = [{ id: 'x.raw', domains: ['x'], attribute: null }]
+    expect(resolveHaMapping({ entity_id: 'x.a', profile: 'x.raw' }, bare).read).toMatchObject({ transitional_states: [], fault_states: [] })
+  })
+
   it('treats empty maps as unset, like the backend', () => {
     const r = resolveHaMapping({ entity_id: 'lock.x', profile: 'lock.boolean_locked', state_map: {}, write_actions: {} }, CATALOG)
     expect(r.mode).toBe('profile')

@@ -98,11 +98,11 @@ class HaBindingConfig(BaseModel):
     # Stable import identity: hash of the HA registry unique_id (never the raw id).
     ha_uid: str | None = Field(default=None, pattern=r"^[0-9a-f]{16,64}$")
 
-    @field_validator("write_actions", "state_map", mode="before")
+    @field_validator("action", "write_actions", "state_map", mode="before")
     @classmethod
     def _empty_map(cls, value: Any) -> Any:
-        # {} would replace the profile's mapping with none: every write a silent
-        # no-op, every read unmapped (uncertain forever).
+        # {} means "not set": it must neither replace the profile's mapping with none
+        # (every write a silent no-op, every read unmapped) nor fail as an empty action.
         return None if value == {} else value
 
     @field_validator("entity_id")
@@ -192,7 +192,8 @@ class HaProfile:
     fault_states: tuple[str, ...] = ()
     action: ProfileAction | None = None
     write_actions: dict[str, ProfileAction] | None = None
-    # supported_features bits the entity must advertise (when it advertises any)
+    # supported_features bits the entity must advertise; checked only when it reports the attribute
+    # (0 reports no features at all)
     required_features: int = 0
     unit: str | None = None
     # i18n key suffix for the Boolean/command convention shown in previews
@@ -570,11 +571,12 @@ def _materialize(action: ProfileAction, entity_id: str) -> HaAction:
 def resolve(bc: HaBindingConfig) -> ResolvedMapping:
     profile = PROFILES.get(bc.profile) if bc.profile else None
     attribute = bc.attribute or (profile.attribute if profile else None)
-    # A profile's state_map, value type and "missing attribute" values only apply to the value it reads.
+    # A profile's read normalization (state_map, transitional/fault states, value type,
+    # "missing attribute" values) only applies to the value it reads.
     own_value = profile is not None and attribute == profile.attribute
     state_map = bc.state_map if bc.state_map is not None else (profile.state_map if own_value else None)
-    transitional = frozenset(bc.transitional_states or (profile.transitional_states if profile else ()))
-    fault = frozenset(bc.fault_states or (profile.fault_states if profile else ()))
+    transitional = frozenset(bc.transitional_states or (profile.transitional_states if own_value else ()))
+    fault = frozenset(bc.fault_states or (profile.fault_states if own_value else ()))
     value_kind: ValueKind = bc.read_as or (_KIND_BY_TYPE.get(profile.data_type, "auto") if own_value else "auto")
 
     action: HaAction | None = None
