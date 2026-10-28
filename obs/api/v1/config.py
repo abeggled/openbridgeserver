@@ -48,6 +48,7 @@ from obs.logic.validation import validate_timer_durations, validate_write_target
 from obs.models.authz import AuthzPrincipalGrant
 from obs.models.datapoint import DataPoint
 from obs.regional_format import REGIONAL_SETTING_KEYS, validate_regional_setting
+from obs.visu_devices import VISU_DEVICES_KEY, parse_visu_devices
 
 logger = logging.getLogger(__name__)
 
@@ -1280,6 +1281,8 @@ async def import_config(
                 validate_datetime_setting(s.key, s.value)
             elif s.key in REGIONAL_SETTING_KEYS:
                 validate_regional_setting(s.key, s.value)
+            elif s.key == VISU_DEVICES_KEY:
+                parse_visu_devices(s.value)
             await db.execute_and_commit(
                 "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?,?)",
                 (s.key, s.value),

@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useVisuStore } from '@/stores/visu'
 import { useThemeStore } from '@/stores/theme'
+import { useDeviceStore } from '@/stores/device'
 import type { VisuNode } from '@/types'
 import { storeToRefs } from 'pinia'
 import AuthButton from '@/components/AuthButton.vue'
@@ -13,6 +14,7 @@ const { t } = useI18n()
 const store = useVisuStore()
 const { rootNodes, isAdmin } = storeToRefs(store)
 const router = useRouter()
+const device = useDeviceStore()
 const loading = ref(true)
 const error = ref('')
 
@@ -34,7 +36,7 @@ function navigate(node: VisuNode) {
 <template>
   <div class="min-h-screen bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100">
     <!-- Header -->
-    <header class="border-b border-gray-200 dark:border-gray-800 px-6 py-4 flex items-center justify-between bg-gray-50 dark:bg-gray-900">
+    <header class="border-b border-gray-200 dark:border-gray-800 px-6 py-4 flex flex-wrap items-center justify-between gap-3 bg-gray-50 dark:bg-gray-900">
       <div class="flex items-center gap-3">
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" class="w-8 h-8 rounded-lg shrink-0">
           <rect width="64" height="64" rx="14" fill="#085041"/>
@@ -50,11 +52,30 @@ function navigate(node: VisuNode) {
           <line x1="36" y1="16" x2="36" y2="42" stroke="#9FE1CB" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
           <line x1="42" y1="22" x2="42" y2="42" stroke="#9FE1CB" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
         </svg>
-        <span class="font-semibold text-gray-800 dark:text-gray-100">open bridge server</span>
+        <span class="font-semibold text-gray-800 dark:text-gray-100">{{ $t('tree.productName') }}</span>
         <span class="text-gray-300 dark:text-gray-600">|</span>
         <span class="text-gray-600 dark:text-gray-300">{{ $t('tree.visualization') }}</span>
       </div>
       <div class="flex items-center gap-3">
+        <!-- Geräteprofil (Startseite + Rücksprung), nur wenn Profile angelegt sind -->
+        <label
+          v-if="device.devices.length > 0"
+          class="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400"
+        >
+          <span class="hidden sm:inline">{{ $t('tree.device') }}</span>
+          <select
+            class="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded px-1.5 py-1 text-xs text-gray-700 dark:text-gray-200"
+            data-testid="device-select"
+            :value="device.slug ?? ''"
+            @change="device.select(($event.target as HTMLSelectElement).value)"
+          >
+            <option value="">{{ $t('tree.deviceNone') }}</option>
+            <option v-if="device.slug && !device.profile" :value="device.slug">
+              {{ $t('tree.deviceUnknown', { slug: device.slug }) }}
+            </option>
+            <option v-for="d in device.devices" :key="d.slug" :value="d.slug">{{ d.name }}</option>
+          </select>
+        </label>
         <!-- Hell/Dunkel-Umschalter -->
         <button
           class="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200 transition-colors px-2 py-1 rounded"
