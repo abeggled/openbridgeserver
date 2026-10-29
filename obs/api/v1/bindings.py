@@ -315,12 +315,6 @@ def _validate_adapter_binding(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "WEBHOOK-Bindings unterstützen nur Richtung SOURCE",
         )
-    if adapter_type == "KNX" and direction == "DEST" and config.get("read_interval_s"):
-        # Only SOURCE/BOTH bindings poll; a DEST binding would store it and never read (#1402)
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "read_interval_s ist nur für KNX-Bindings mit Richtung SOURCE oder BOTH erlaubt",
-        )
     if adapter_type != "MESSAGE" and not validate_schema:
         return
 

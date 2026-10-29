@@ -161,6 +161,12 @@ class KnxAdapter(AdapterBase):
     config_schema = KnxAdapterConfig
     binding_config_schema = KnxBindingConfig
 
+    @staticmethod
+    def validate_binding_direction(binding_config: KnxBindingConfig, direction: str) -> None:
+        """Reject a polling interval on a DEST binding, which never polls (raises ValueError, #1402)."""
+        if direction == "DEST" and binding_config.read_interval_s:
+            raise ValueError("read_interval_s ist nur für KNX-Bindings mit Richtung SOURCE oder BOTH erlaubt")
+
     def __init__(self, event_bus: Any, config: dict | None = None, **kwargs) -> None:
         super().__init__(event_bus, config, **kwargs)
         self._xknx: Any = None

@@ -1902,6 +1902,8 @@ class TestCreateBinding:
 
     def test_validate_knx_binding_rejects_read_interval_on_dest(self):
         """Issue #1402: only SOURCE/BOTH poll, so DEST would store an interval that never reads."""
+        import obs.adapters.knx.adapter  # noqa: F401 — registers KNX and its direction check
+
         with pytest.raises(HTTPException) as exc:
             bindings_api._validate_adapter_binding("KNX", "DEST", {"group_address": "1/1/1", "read_interval_s": 60})
 
@@ -1915,10 +1917,20 @@ class TestCreateBinding:
             ("BOTH", {"group_address": "1/1/1", "read_interval_s": 60}),
             ("DEST", {"group_address": "1/1/1"}),
             ("DEST", {"group_address": "1/1/1", "read_interval_s": 0}),
+            # pydantic coerces "0" to 0 (= off) before the direction check sees it
+            ("DEST", {"group_address": "1/1/1", "read_interval_s": "0"}),
         ],
     )
     def test_validate_knx_binding_accepts_read_interval_where_it_polls(self, direction, config):
+        import obs.adapters.knx.adapter  # noqa: F401 — registers KNX and its direction check
+
         bindings_api._validate_adapter_binding("KNX", direction, config)
+
+    def test_validate_knx_binding_skips_direction_check_when_config_is_not_validated(self):
+        """A PATCH touching neither config nor direction must not trip over the stored config."""
+        import obs.adapters.knx.adapter  # noqa: F401 — registers KNX and its direction check
+
+        bindings_api._validate_adapter_binding("KNX", "DEST", {"group_address": "1/1/1", "read_interval_s": 60}, validate_schema=False)
 
 
 # ---------------------------------------------------------------------------
