@@ -6,7 +6,7 @@ title: Settings
 
 Settings bundles every configuration and administration area of the Admin GUI into a single
 tabbed page. Which tabs are visible depends on the signed-in user's permissions — **Users**,
-**Security**, **Support**, and **Data Management** are admin-only.
+**Security**, **Support**, **Visu devices**, **Visu alarms**, and **Data Management** are admin-only.
 
 | Tab | Contents |
 |---|---|
@@ -18,6 +18,8 @@ tabbed page. Which tabs are visible depends on the signed-in user's permissions 
 | [Support](./support) | Diagnostics package, debug mode, and remote support access |
 | [Updates](./updates) | Update channel, update check, release notes and system data points |
 | [Links](./links) | Custom links in the sidebar |
+| [Visu devices](./visu-devices) | Start page and automatic return per Visu device |
+| [Visu alarms](./visu-alarms) | Bring messages or pages to the foreground of the Visu on events |
 | [Hierarchy](./hierarchy) | Tree structures (e.g. building, floor, room) for grouping data points and Logic graphs |
 | [Data Management](./importexport) | Import and export of configuration, database, and KNX project |
 | [Icons](./icons) | Browse, import, and clean up the icon library |
