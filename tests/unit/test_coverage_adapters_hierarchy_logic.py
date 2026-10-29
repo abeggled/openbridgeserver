@@ -99,7 +99,7 @@ class TestInstanceOut:
 
         monkeypatch.setattr(adp_api.adapter_registry, "get_class", lambda t: None)
         row = _inst_row()
-        result = adp_api._instance_out(row, None)
+        result = adp_api._instance_out(row, None, privileged=True)
         assert result.running is False
         assert result.connected is False
         assert result.registered is False
@@ -135,7 +135,7 @@ class TestInstanceOut:
             },
         )
 
-        result = adp_api._instance_out(row, None)
+        result = adp_api._instance_out(row, None, privileged=True)
 
         assert result.config["providers"]["pushover"]["api_token"] == REDACTED
         assert result.config["providers"]["pushover"]["targets"]["ops"]["user_key"] == REDACTED
@@ -158,7 +158,7 @@ class TestInstanceOut:
         inst.last_detail_params = {}
         inst.get_bindings.return_value = [1, 2, 3]
         row = _inst_row()
-        result = adp_api._instance_out(row, inst)
+        result = adp_api._instance_out(row, inst, privileged=True)
         assert result.running is True
         assert result.connected is True
         assert result.severity == "warning"
