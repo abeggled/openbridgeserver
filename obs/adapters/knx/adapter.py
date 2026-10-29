@@ -198,8 +198,8 @@ class KnxAdapter(AdapterBase):
         self._value_getter: Any = None
         self._reconnect_task: asyncio.Task | None = None
         self._echo_cleanup_task: asyncio.Task | None = None
-        # Issue #1402: binding id → ((interval_s, read GA), poll task)
-        self._read_poll_tasks: dict[str, tuple[tuple[int, str], asyncio.Task]] = {}
+        # Issue #1402: read GA → (interval_s, poll task); one poller per GA
+        self._read_poll_tasks: dict[str, tuple[int, asyncio.Task]] = {}
         self._stopped: bool = False
         # Tunnel-overload detection (issue #466)
         self._disconnect_times: deque[datetime] = deque()
@@ -250,8 +250,6 @@ class KnxAdapter(AdapterBase):
         # Clean up any previous xknx instance before creating a new one
         self._sniffer = None
         if self._xknx:
-            # Pollers are recreated by _on_bindings_reloaded() once connected again
-            await self._sync_read_pollers({})
             try:
                 await self._xknx.stop()
             except Exception:
@@ -431,34 +429,40 @@ class KnxAdapter(AdapterBase):
     # Periodic GroupValueRead — issue #1402
     # ------------------------------------------------------------------
 
-    async def _sync_read_pollers(self, wanted: dict[str, tuple[Any, tuple[int, str]]]) -> None:
-        """Reconcile the poll tasks with ``wanted`` (binding id → (binding, (interval_s, GA))).
+    def _sync_read_pollers(self, wanted: dict[str, tuple[Any, int]]) -> list[asyncio.Task]:
+        """Reconcile the poll tasks with ``wanted`` (read GA → (binding, interval_s)).
 
-        Pollers whose interval and read GA are unchanged keep running, so editing
-        one binding does not re-trigger reads for all others. Nothing polls
-        while the adapter is stopped or not connected.
+        Runs without awaiting, so overlapping binding reloads cannot interleave
+        and resurrect a poller a newer reload removed. Pollers whose interval is
+        unchanged keep running, so editing one binding does not re-trigger reads
+        for all others. Nothing polls while the adapter is stopped or not
+        connected. Returns the cancelled tasks for callers that must await them.
         """
         if self._stopped or not self._connected:
             wanted = {}
         stale: list[asyncio.Task] = []
-        for binding_id, (spec, task) in list(self._read_poll_tasks.items()):
-            target = wanted.get(binding_id)
-            if target is not None and target[1] == spec:
+        for ga, (interval_s, task) in list(self._read_poll_tasks.items()):
+            target = wanted.get(ga)
+            if target is not None and target[1] == interval_s:
                 continue
-            del self._read_poll_tasks[binding_id]
+            del self._read_poll_tasks[ga]
             task.cancel()
             stale.append(task)
-        if stale:
-            await asyncio.gather(*stale, return_exceptions=True)
-        for binding_id, (binding, spec) in wanted.items():
-            if binding_id not in self._read_poll_tasks:
-                self._read_poll_tasks[binding_id] = (spec, asyncio.ensure_future(self._read_poll_loop(binding, spec[0])))
+        for ga, (binding, interval_s) in wanted.items():
+            if ga not in self._read_poll_tasks:
+                self._read_poll_tasks[ga] = (interval_s, asyncio.ensure_future(self._read_poll_loop(binding, interval_s)))
+        return stale
+
+    def _bus_connected(self) -> bool:
+        """True while OBS considers the instance connected and xknx's own tunnel is up."""
+        return self._connected and self._xknx is not None and self._xknx.connection_manager.connected.is_set()
 
     async def _read_poll_loop(self, binding: Any, interval_s: int) -> None:
         """Background task: send a GroupValueRead for ``binding`` every ``interval_s``."""
         await asyncio.sleep(self._read_poll_start_delay(interval_s))
         while True:
-            if self._connected:
+            # Skipped while xknx reconnects on its own, so no reads pile up for a burst afterwards
+            if self._bus_connected():
                 try:
                     await self.read(binding)
                 except Exception:
@@ -549,7 +553,7 @@ class KnxAdapter(AdapterBase):
             except asyncio.CancelledError:
                 pass
         self._echo_cleanup_task = None
-        await self._sync_read_pollers({})
+        await asyncio.gather(*self._sync_read_pollers({}), return_exceptions=True)
         if self._xknx:
             try:
                 await self._xknx.stop()
@@ -650,7 +654,7 @@ class KnxAdapter(AdapterBase):
             )
         self._ga_source_map.clear()
         self._ga_respond_map.clear()
-        read_pollers: dict[str, tuple[Any, tuple[int, str]]] = {}
+        read_pollers: dict[str, tuple[Any, int]] = {}
         for binding in self._bindings:
             if binding.direction not in ("SOURCE", "BOTH"):
                 continue
@@ -670,8 +674,13 @@ class KnxAdapter(AdapterBase):
                 self._ga_respond_map.setdefault(bc.group_address, []).append(entry)
 
             if bc.read_interval_s:
-                # Same target as read(): state GA before command GA
-                read_pollers[str(binding.id)] = (binding, (bc.read_interval_s, bc.state_group_address or bc.group_address))
+                # Same target as read(): state GA before command GA. Bindings sharing
+                # a GA share one poller at the shortest interval — the response fans
+                # out to all of them through _ga_source_map.
+                read_ga = bc.state_group_address or bc.group_address
+                current = read_pollers.get(read_ga)
+                if current is None or bc.read_interval_s < current[1]:
+                    read_pollers[read_ga] = (binding, bc.read_interval_s)
 
         logger.info(
             "KNX: %d source GAs from %d bindings: %s",
@@ -680,7 +689,7 @@ class KnxAdapter(AdapterBase):
             list(self._ga_source_map.keys()),
         )
 
-        await self._sync_read_pollers(read_pollers)
+        self._sync_read_pollers(read_pollers)
 
         if not self._xknx:
             return

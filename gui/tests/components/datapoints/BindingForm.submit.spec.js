@@ -147,6 +147,23 @@ describe('BindingForm — KNX periodic read interval (#1402)', () => {
     w.unmount()
   })
 
+  it('does not save an interval hidden by switching the direction to DEST', async () => {
+    const w = await mountForm({ initial: { ...knxInitial({ read_interval_s: 120 }), direction: 'DEST' } })
+    expect(w.find('#read_interval_s').exists()).toBe(false)
+    await submit(w)
+    expect(updateBinding.mock.calls[0][2].config).not.toHaveProperty('read_interval_s')
+    w.unmount()
+  })
+
+  it('rounds a fractional interval to whole seconds', async () => {
+    const w = await mountForm()
+    await selectInstance(w, 'knx-1')
+    await w.find('#read_interval_s').setValue('30.6')
+    await submit(w)
+    expect(createBinding.mock.calls[0][1].config.read_interval_s).toBe(31)
+    w.unmount()
+  })
+
   it('drops the interval when it was cleared or set to 0', async () => {
     const w = await mountForm({ initial: knxInitial({ read_interval_s: 0 }) })
     await submit(w)

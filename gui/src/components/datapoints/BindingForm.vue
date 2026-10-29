@@ -1326,7 +1326,9 @@ function buildConfig() {
     const c = { group_address: cfg.group_address, dpt_id: cfg.dpt_id || 'DPT9.001' }
     if (cfg.state_group_address?.trim()) c.state_group_address = cfg.state_group_address.trim()
     if (cfg.respond_to_read) c.respond_to_read = true
-    if (Number(cfg.read_interval_s) > 0) c.read_interval_s = Number(cfg.read_interval_s)
+    // Only SOURCE/BOTH poll; a value hidden by switching to DEST is not saved (#1402)
+    const readInterval = Math.round(Number(cfg.read_interval_s))
+    if (form.direction !== 'DEST' && readInterval > 0) c.read_interval_s = readInterval
     return c
   }
   if (type === 'MODBUS_TCP' || type === 'MODBUS_RTU') {
