@@ -38,8 +38,17 @@ def test_missing_node_placeholder_is_reported_with_its_original_type():
     assert "'legacy_block'" in warnings[0]["message"]
 
 
+def test_missing_node_placeholder_falls_back_to_the_type_carried_in_label():
+    # Same resolution as the read path (_normalize_missing_node_placeholders): an older or
+    # hand-edited placeholder carries its type in `label` alone (review finding F4 on PR #1405).
+    warnings = config_schema_warnings(_flow("missing_node", {"label": "legacy_block"}))
+
+    assert [w["code"] for w in warnings] == ["missing_node_type"]
+    assert "'legacy_block'" in warnings[0]["message"]
+
+
 def test_missing_node_placeholder_without_original_type_is_still_reported():
-    for data in ({}, {"original_type": "   "}, {"original_type": 42}):
+    for data in ({}, {"original_type": "   "}, {"original_type": 42}, {"label": "  "}):
         warnings = config_schema_warnings(_flow("missing_node", data))
 
         assert [w["code"] for w in warnings] == ["missing_node_type"], data
@@ -206,9 +215,28 @@ def test_unknown_config_field_on_a_type_without_any_config():
     assert _codes(_flow("not", {"operator": ">"})) == ["unknown_config_field"]
 
 
-def test_generic_extra_keys_are_never_flagged():
-    data = {"label": "Mein Block", "negate_in1": True, "negate_in2": False, "negate_out": True}
-    assert _codes(_flow("and", data)) == []
+def test_label_is_accepted_on_every_type():
+    assert _codes(_flow("compare", {"label": "Mein Block"})) == []
+    assert _codes(_flow("not", {"label": "Mein Block"})) == []
+
+
+def test_negation_keys_are_accepted_for_the_gates_and_binary_stats():
+    for node_type in ("and", "or", "xor"):
+        data = {"negate_in1": True, "negate_in30": False, "negate_out": True}
+        assert _codes(_flow(node_type, data)) == [], node_type
+    # A slot above the current input_count is left behind when the editor lowers the count;
+    # the runtime ignores it, so it is not reported.
+    assert _codes(_flow("and", {"input_count": 2, "negate_in5": True})) == []
+    assert _codes(_flow("binary_stats", {"negate_in1": True, "negate_in30": True})) == []
+
+
+def test_negation_typos_and_negation_on_other_types_are_flagged():
+    # Review finding F3 on PR #1405: a blanket negate_* allowance hid exactly these typos.
+    for key in ("negate_inn1", "negate_value", "negate_in0", "negate_in31"):
+        assert _codes(_flow("and", {key: True})) == ["unknown_config_field"], key
+    # binary_stats has no output negation; other blocks have no per-port negation at all.
+    assert _codes(_flow("binary_stats", {"negate_out": True})) == ["unknown_config_field"]
+    assert _codes(_flow("compare", {"negate_in1": True})) == ["unknown_config_field"]
 
 
 def test_type_specific_extra_keys_are_accepted_only_on_their_own_type():
@@ -216,12 +244,49 @@ def test_type_specific_extra_keys_are_accepted_only_on_their_own_type():
     assert _codes(_flow("datapoint_write", {"value_map": {"1": "ein"}})) == []
     assert _codes(_flow("api_client", {"headers_value_file": "/run/secrets/h", "auth_value_file": "/run/secrets/t"})) == []
     assert _codes(_flow("heating_circuit", {"temp_winter": 15, "temp_summer": 18})) == []
+    assert _codes(_flow("heating_circuit", {"temp_winter": "15"})) == []
     # The same keys elsewhere are typos for that type.
     assert _codes(_flow("compare", {"value_map": {}})) == ["unknown_config_field"]
 
 
 def test_string_concat_static_text_slots_follow_their_pattern():
-    assert _codes(_flow("string_concat", {"text_1": "a", "text_12": "b"})) == []
-    assert _codes(_flow("string_concat", {"text_x": "a"})) == ["unknown_config_field"]
+    assert _codes(_flow("string_concat", {"text_1": "a", "text_20": "b"})) == []
+    # Above the current count: left behind when the editor lowers it, ignored by the runtime.
+    assert _codes(_flow("string_concat", {"count": 2, "text_5": "a"})) == []
+    for key in ("text_x", "text_0", "text_21"):
+        assert _codes(_flow("string_concat", {key: "a"})) == ["unknown_config_field"], key
     # The pattern is string_concat's own — not a free pass for other types.
     assert _codes(_flow("compare", {"text_1": "a"})) == ["unknown_config_field"]
+
+
+def test_unknown_config_field_suggests_known_extra_keys_too():
+    # Review finding F5 on PR #1405: hints used to consider config_schema keys only.
+    lable = config_schema_warnings(_flow("compare", {"lable": "Pumpe"}))
+    value_mapp = config_schema_warnings(_flow("datapoint_read", {"value_mapp": {}}))
+
+    assert "Did you mean 'label'?" in lable[0]["message"]
+    assert "Did you mean 'value_map'?" in value_mapp[0]["message"]
+
+
+def test_heating_legacy_thresholds_are_ignored_once_threshold_temp_is_set():
+    warnings = config_schema_warnings(_flow("heating_circuit", {"threshold_temp": 14, "temp_winter": 10, "temp_summer": 12}))
+
+    assert [w["code"] for w in warnings] == ["ignored_config_field", "ignored_config_field"]
+    assert warnings[0]["message"] == "temp_winter: legacy field, ignored because threshold_temp is set."
+
+
+def test_heating_temp_summer_alone_is_ignored():
+    for data in ({"temp_summer": 18}, {"temp_winter": None, "temp_summer": 18}):
+        warnings = config_schema_warnings(_flow("heating_circuit", data))
+
+        assert [w["code"] for w in warnings] == ["ignored_config_field"], data
+        assert warnings[0]["message"] == "temp_summer: legacy field, ignored because temp_winter is not set."
+
+
+def test_heating_legacy_thresholds_must_convert_to_float():
+    # GraphExecutor converts them with float(): unlike schema numbers, "" is not "unset" here.
+    assert _codes(_flow("heating_circuit", {"temp_winter": "abc"})) == ["config_schema_type_mismatch"]
+    assert _codes(_flow("heating_circuit", {"temp_winter": 10, "temp_summer": ""})) == ["config_schema_type_mismatch"]
+    # A None value is "not set" in the runtime as well and never flagged.
+    assert _codes(_flow("heating_circuit", {"temp_winter": 10, "temp_summer": None})) == []
+    assert _codes(_flow("heating_circuit", {"temp_winter": None})) == []
