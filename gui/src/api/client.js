@@ -238,6 +238,12 @@ export const visuDevicesApi = {
   pages:  ()        => api.get('/visu/tree'),
 }
 
+// ── Visu alarms ────────────────────────────────────────────────────────────
+export const visuAlarmsApi = {
+  list:   ()       => api.get('/system/visu-alarms'),
+  update: (alarms) => api.put('/system/visu-alarms', { alarms }),
+}
+
 // ── Update Check (#1370) ──────────────────────────────────────────────────
 export const updatesApi = {
   status:       ()        => api.get('/system/update-status'),

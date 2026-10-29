@@ -20,6 +20,7 @@ import {
   parseBackgroundPresentation,
 } from '@/utils/backgroundPresentation'
 import type { WidgetInstance } from '@/types'
+import { isEmbedded } from '@/utils/embed'
 
 // Alle Widgets registrieren (self-registering via import)
 import '@/widgets/ValueDisplay/index'
@@ -58,6 +59,8 @@ const theme = useThemeStore()
 
 const loading = ref(true)
 const error = ref('')
+// Als Alarm-Popup eingebettet: nur die Seite, ohne Kopfzeile.
+const embedded = isEmbedded()
 
 const node = computed(() => visuStore.getNode(props.id))
 const isPage = computed(() => node.value?.type === 'PAGE')
@@ -305,7 +308,7 @@ function widgetChrome(w: WidgetInstance): string {
 <template>
   <div class="min-h-screen bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100 flex flex-col">
     <!-- Header -->
-    <header class="border-b border-gray-200 dark:border-gray-800 px-6 py-3 flex items-center justify-between gap-4 flex-shrink-0 bg-gray-50 dark:bg-gray-900">
+    <header v-if="!embedded" class="border-b border-gray-200 dark:border-gray-800 px-6 py-3 flex items-center justify-between gap-4 flex-shrink-0 bg-gray-50 dark:bg-gray-900">
       <Breadcrumb />
       <div class="flex items-center gap-2">
         <button

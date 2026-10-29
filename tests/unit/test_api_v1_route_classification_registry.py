@@ -51,3 +51,10 @@ def test_public_allowlist_is_explicit() -> None:
 def test_weather_fetch_requires_authenticated_read_classification() -> None:
     assert ROUTE_CLASSIFICATIONS[("GET", "/api/v1/weather/fetch")] == "read_live"
     assert ("GET", "/api/v1/weather/fetch") not in PUBLIC_ROUTE_ALLOWLIST
+
+
+def test_visu_alarm_acknowledge_is_an_explicitly_public_mutation() -> None:
+    # Public on purpose (wall panels without login); the route guards itself by origin and audits.
+    route = ("POST", "/api/v1/system/visu-alarms/{alarm_id}/acknowledge")
+    assert ROUTE_CLASSIFICATIONS[route] == "public"
+    assert route in PUBLIC_ROUTE_ALLOWLIST

@@ -410,6 +410,7 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
     ),
     ("POST", "/api/v1/system/history/test"): _admin("history_settings", "system.history.connection_tested", result=True),
     ("PUT", "/api/v1/system/visu-devices"): _admin("visu_devices", "system.visu_devices.updated"),
+    ("PUT", "/api/v1/system/visu-alarms"): _admin("visu_alarms", "system.visu_alarms.updated"),
     ("POST", "/api/v1/system/nav-links"): _admin("nav_link", "system.nav_link.created"),
     ("PATCH", "/api/v1/system/nav-links/{link_id}"): _admin("nav_link", "system.nav_link.updated"),
     ("DELETE", "/api/v1/system/nav-links/{link_id}"): _admin("nav_link", "system.nav_link.deleted"),

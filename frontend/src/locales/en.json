@@ -1107,5 +1107,10 @@
     "weekdaysTwo": "Mo|Tu|We|Th|Fr|Sa|Su",
     "months": "January|February|March|April|May|June|July|August|September|October|November|December",
     "monthsShort": "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec"
+  },
+  "alarm": {
+    "acknowledge": "Acknowledge",
+    "acknowledgeFailed": "Could not acknowledge — the alarm may already have ended.",
+    "waiting": "{n} more alarm(s) waiting"
   }
 }
