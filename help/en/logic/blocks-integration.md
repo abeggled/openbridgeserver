@@ -118,6 +118,10 @@ regular expressions to **summary**, **location**, and/or **description**, combin
 **AND**/**OR**, and can optionally be case-sensitive. An empty pattern field is ignored (not
 treated as an exclusion criterion).
 
+To show the events as a list in the Visu, write a filter's **Array** output to a `STRING`
+object and pick that object as a source in the [Event list](../visu/widgets#widget-terminliste)
+widget.
+
 ## API Client {#logic-block-api-client}
 
 Sends HTTP requests (GET/POST/PUT/PATCH/DELETE) to a configurable **URL**; the **Trigger**

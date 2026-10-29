@@ -101,6 +101,10 @@ export default defineConfig({
             ],
           },
           {
+            text: 'Visu',
+            items: [{ text: 'Widgets', link: '/de/visu/widgets' }],
+          },
+          {
             text: 'Einstellungen',
             items: [
               { text: 'Einstellungen', link: '/de/settings/' },
@@ -192,6 +196,10 @@ export default defineConfig({
               { text: 'Blocks: Script', link: '/en/logic/blocks-script' },
               { text: 'Blocks: AI', link: '/en/logic/blocks-ai' },
             ],
+          },
+          {
+            text: 'Visu',
+            items: [{ text: 'Widgets', link: '/en/visu/widgets' }],
           },
           {
             text: 'Settings',
