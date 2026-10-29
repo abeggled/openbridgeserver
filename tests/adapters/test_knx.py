@@ -24,6 +24,7 @@ from xknx.telegram.telegram import TelegramDirection
 from obs.adapters.base import ConfirmationActionToken, ConfirmationOrderTracker
 from obs.adapters.knx.adapter import (
     ECHO_SUPPRESSION_WINDOW_S,
+    READ_INTERVAL_MAX_S,
     READ_INTERVAL_MIN_S,
     READ_POLL_START_SPREAD_S,
     STATE_CONFIRMATION_WINDOW_S,
@@ -233,12 +234,12 @@ class TestKnxBindingConfig:
     def test_read_interval_defaults_to_disabled(self):
         assert KnxBindingConfig(group_address="1/2/3").read_interval_s is None
 
-    @pytest.mark.parametrize("interval", [0, READ_INTERVAL_MIN_S, 3600])
-    def test_read_interval_accepts_off_and_minimum(self, interval):
+    @pytest.mark.parametrize("interval", [0, READ_INTERVAL_MIN_S, 3600, READ_INTERVAL_MAX_S])
+    def test_read_interval_accepts_off_and_bounds(self, interval):
         assert KnxBindingConfig(group_address="1/2/3", read_interval_s=interval).read_interval_s == interval
 
-    @pytest.mark.parametrize("interval", [-1, 1, READ_INTERVAL_MIN_S - 1])
-    def test_read_interval_rejects_negative_and_below_minimum(self, interval):
+    @pytest.mark.parametrize("interval", [-1, 1, READ_INTERVAL_MIN_S - 1, READ_INTERVAL_MAX_S + 1, 10**12])
+    def test_read_interval_rejects_negative_and_out_of_bounds(self, interval):
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError):

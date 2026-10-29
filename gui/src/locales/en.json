@@ -434,7 +434,7 @@
       "respondToReadPersistHint": "Requires enabled “Persist last value” on the object.",
       "readIntervalLabel": "Read periodically (seconds)",
       "readIntervalPlaceholder": "Off",
-      "readIntervalHint": "Sends a GroupValueRead to the state group address (otherwise the group address) at this interval. Empty or 0 = off, at least {min} s. Every poll adds load to the KNX bus — only use it for devices that do not send their state on their own.",
+      "readIntervalHint": "Sends a GroupValueRead to the state group address (otherwise the group address) at this interval. Empty or 0 = off, otherwise {min} to {max} s. Every poll adds load to the KNX bus — only use it for devices that do not send their state on their own.",
       "groupAddressLoading": "Searching …",
       "groupAddressNoResults": "No group addresses found",
       "groupAddressNoImport": "(.knxproj not imported yet)",

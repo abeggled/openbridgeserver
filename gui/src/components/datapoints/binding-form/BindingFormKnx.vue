@@ -42,21 +42,24 @@
       v-model.number="cfg.read_interval_s"
       type="number"
       min="0"
+      :max="READ_INTERVAL_MAX_S"
       step="any"
       class="input"
       :placeholder="$t('adapters.bindingForm.readIntervalPlaceholder')"
     />
-    <p class="hint">{{ $t('adapters.bindingForm.readIntervalHint', { min: READ_INTERVAL_MIN_S }) }}</p>
+    <p class="hint">{{ $t('adapters.bindingForm.readIntervalHint', { min: READ_INTERVAL_MIN_S, max: READ_INTERVAL_MAX_S }) }}</p>
   </div>
 </template>
 
 <script setup>
 import GaCombobox from '@/components/ui/GaCombobox.vue'
 
-// Mirrors READ_INTERVAL_MIN_S in obs/adapters/knx/adapter.py (issue #1402). Only
-// the hint uses it: 0 must stay enterable (= off) and buildConfig rounds fractions,
-// so the browser's min/step checks would block valid input; the API rejects 1–9.
+// Mirror READ_INTERVAL_MIN_S/_MAX_S in obs/adapters/knx/adapter.py (issue #1402).
+// The minimum only feeds the hint: 0 must stay enterable (= off) and buildConfig
+// rounds fractions, so the browser's min/step checks would block valid input; the
+// API rejects 1–9. The maximum is a plain upper bound the browser may enforce.
 const READ_INTERVAL_MIN_S = 10
+const READ_INTERVAL_MAX_S = 86400
 
 defineProps({
   cfg: { type: Object, required: true },

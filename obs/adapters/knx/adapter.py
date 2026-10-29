@@ -13,7 +13,7 @@ Binding-Konfiguration (pro AdapterBinding.config):
   state_group_address: str?  — Rückmelde-GA für DEST-Bindings (optional)
   respond_to_read:     bool  — SOURCE/BOTH: beantwortet fremde GroupValueReads
   read_interval_s:     int?  — SOURCE/BOTH: sendet periodisch einen GroupValueRead
-                               (None/0 = aus, sonst mindestens READ_INTERVAL_MIN_S)
+                               (None/0 = aus, sonst READ_INTERVAL_MIN_S..READ_INTERVAL_MAX_S)
 
 Adapter-Konfiguration (adapter_configs.config in DB):
   connection_type:   "tunneling" | "tunneling_tcp" | "tunneling_secure" |
@@ -60,9 +60,10 @@ from obs.core.event_bus import DataValueEvent
 TUNNEL_OVERLOAD_DETAIL = "KNX-Tunnel-Slot wahrscheinlich von anderem Client belegt — Gateway-Pool überlastet."
 ECHO_SUPPRESSION_WINDOW_S = 2.0
 STATE_CONFIRMATION_WINDOW_S = 30.0
-# Issue #1402: periodic GroupValueRead — lower bound for the interval and the
+# Issue #1402: periodic GroupValueRead — bounds for the interval and the
 # window across which the first reads of all pollers are spread out.
 READ_INTERVAL_MIN_S = 10
+READ_INTERVAL_MAX_S = 86400
 READ_POLL_START_SPREAD_S = 30.0
 
 # Import APCI classes at module level so missing symbols fail loudly at startup
@@ -138,7 +139,7 @@ class KnxBindingConfig(BaseModel):
     dpt_id: str = "DPT1.001"
     state_group_address: str | None = None  # DEST-Bindings Rückmelde-GA
     respond_to_read: bool = False  # SOURCE: antworte auf GroupValueRead mit aktuellem Wert
-    read_interval_s: int | None = Field(default=None, ge=0)  # SOURCE/BOTH: periodischer GroupValueRead, None/0 = aus
+    read_interval_s: int | None = Field(default=None, ge=0, le=READ_INTERVAL_MAX_S)  # SOURCE/BOTH: periodischer GroupValueRead, None/0 = aus
 
     @field_validator("read_interval_s")
     @classmethod

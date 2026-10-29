@@ -95,7 +95,10 @@ describe('BindingFormKnx', () => {
       // 0 (= off) and fractions must pass the browser's own form validation
       expect(input.attributes('min')).toBe('0')
       expect(input.attributes('step')).toBe('any')
-      expect(w.find('#read_interval_s + .hint').text()).toContain('10')
+      expect(input.attributes('max')).toBe('86400')
+      const hint = w.find('#read_interval_s + .hint').text()
+      expect(hint).toContain('10')
+      expect(hint).toContain('86400')
     })
 
     it('hides the interval input for direction=DEST', () => {
