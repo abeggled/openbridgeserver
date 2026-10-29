@@ -264,24 +264,28 @@ describe('VisuAlarmsPanel', () => {
       alarm({ id: 'a', compare_value: 5 }), alarm({ id: 'b', compare_value: 5 }), alarm({ id: 'c', compare_value: 5 }),
       alarm({ id: 'd', compare_value: 'on' }), alarm({ id: 'e', compare_value: 'on' }), alarm({ id: 'f', compare_value: '7' }),
       alarm({ id: 'g', compare_value: null }),
+      // Text operators keep the typed text: "007" is not 7, "5.0" is not 5.
+      alarm({ id: 'h', operator: 'starts with', compare_value: null }), alarm({ id: 'i', operator: 'contains', compare_value: 5 }),
     ] })
     const w = await mountPanel()
-    for (const i of [1, 2, 3, 4, 6]) await open(w, i)
+    for (const i of [1, 2, 3, 4, 6, 7, 8]) await open(w, i)
     await card(w, 1).get('[data-testid="input-visu-alarm-compare"]').setValue('25 W')
     await card(w, 2).get('[data-testid="input-visu-alarm-compare"]').setValue(' -7.5 ')
     await card(w, 3).get('[data-testid="input-visu-alarm-compare"]').setValue('')
     await card(w, 4).get('[data-testid="input-visu-alarm-compare"]').setValue('false')
     await card(w, 6).get('[data-testid="input-visu-alarm-compare"]').setValue('true')
+    await card(w, 7).get('[data-testid="input-visu-alarm-compare"]').setValue('007')
+    await card(w, 8).get('[data-testid="input-visu-alarm-compare"]').setValue('5.0')
 
     await w.get('[data-testid="btn-save-visu-alarms"]').trigger('click')
     await flushPromises()
 
     const [payload] = visuAlarmsApi.update.mock.calls[0]
-    expect(payload.map(a => a.compare_value)).toEqual([5, '25 W', -7.5, null, false, '7', true])
+    expect(payload.map(a => a.compare_value)).toEqual([5, '25 W', -7.5, null, false, '7', true, '007', '5.0'])
     expect(payload[0]).not.toHaveProperty('_compare')
     // After saving, the returned values are the new "untouched" ones.
     await w.get('[data-testid="btn-save-visu-alarms"]').trigger('click')
     await flushPromises()
-    expect(visuAlarmsApi.update.mock.calls[1][0].map(a => a.compare_value)).toEqual([5, '25 W', -7.5, null, false, '7', true])
+    expect(visuAlarmsApi.update.mock.calls[1][0].map(a => a.compare_value)).toEqual([5, '25 W', -7.5, null, false, '7', true, '007', '5.0'])
   })
 })

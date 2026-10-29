@@ -219,6 +219,8 @@ import VisuIcon from '@/components/ui/VisuIcon.vue'
 
 // Mirrors AlarmOperator in obs/visu_alarms.py (the MESSAGE conditions without "any").
 const OPERATORS = ['==', '!=', '<', '<=', '>', '>=', 'contains', 'contains not', 'starts with', 'ends with']
+// These compare the value as text — "007" must stay "007", not become 7.
+const TEXT_OPERATORS = new Set(['contains', 'contains not', 'starts with', 'ends with'])
 
 const { t } = useI18n()
 
@@ -242,6 +244,7 @@ function compareValue(row) {
   if (row.compare_value === compareText(row._compare)) return row._compare
   const text = row.compare_value.trim()
   if (text === '') return null
+  if (TEXT_OPERATORS.has(row.operator)) return row.compare_value
   if (text === 'true' || text === 'false') return text === 'true'
   if (/^-?\d+(\.\d+)?$/.test(text)) return Number(text)
   return row.compare_value
