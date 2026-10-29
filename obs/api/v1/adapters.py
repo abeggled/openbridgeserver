@@ -26,6 +26,7 @@ import asyncio
 import json
 import logging
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -34,6 +35,10 @@ from pydantic import BaseModel, ValidationError
 
 from obs.adapters import registry as adapter_registry
 from obs.adapters.base import AdapterDelegationCapability
+from obs.adapters.homeassistant.importer import HaImportCandidate, HaImportRequest
+from obs.adapters.homeassistant.importer import filter_entities as filter_ha_entities
+from obs.adapters.homeassistant.importer import plan_import as plan_ha_import
+from obs.adapters.homeassistant.profiles import profile_catalog
 from obs.adapters.knx.dpt_registry import DPTRegistry
 from obs.api.audit import (
     AuditOutcome,
@@ -49,12 +54,13 @@ from obs.api.authz_service import adapter_delegates, authorize_adapter_instance,
 from obs.api.v1.application_audit import audit_application_contract, write_application_success
 from obs.api.v1.bindings import (
     _ensure_binding_mutation_scope,
+    _is_admin_principal,
     _json_config,
     _resend_system_value,
     _validate_adapter_binding,
     system_datapoint_bindable,
 )
-from obs.api.v1.redaction import REDACTED
+from obs.api.v1.redaction import REDACTED, redact_sensitive_fields
 from obs.db.database import Database, get_db
 
 logger = logging.getLogger(__name__)
@@ -387,19 +393,30 @@ def _preserve_redacted_message_config_secrets(stored_config: dict[str, Any], inc
     return merged
 
 
-def _redact_instance_config(adapter_type: str, config: dict[str, Any]) -> dict[str, Any]:
+def _redact_instance_config(adapter_type: str, config: dict[str, Any], *, privileged: bool = False) -> dict[str, Any]:
     if adapter_type == "MESSAGE":
         return _redact_message_config(config)
+    if adapter_type == "HOME_ASSISTANT" and not privileged:
+        # Only admins configure HA instances; a delegated reader never sees the token (#1392).
+        return redact_sensitive_fields(config, ("token",))
     return config
 
 
-def _instance_out(row: Any, instance: Any | None) -> AdapterInstanceOut:
+def _restore_redacted_token(adapter_type: str, stored: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    """Keep the stored HA token when a client sends the redacted placeholder back."""
+    if adapter_type == "HOME_ASSISTANT" and incoming.get("token") == REDACTED:
+        return {**incoming, "token": stored.get("token", "")}
+    return incoming
+
+
+def _instance_out(row: Any, instance: Any | None, *, privileged: bool) -> AdapterInstanceOut:
+    """Serialize an instance; secrets are only shown to callers known to be admins."""
     cls = adapter_registry.get_class(row["adapter_type"])
     return AdapterInstanceOut(
         id=uuid.UUID(row["id"]),
         adapter_type=row["adapter_type"],
         name=row["name"],
-        config=_redact_instance_config(row["adapter_type"], json.loads(row["config"]) if row["config"] else {}),
+        config=_redact_instance_config(row["adapter_type"], json.loads(row["config"]) if row["config"] else {}, privileged=privileged),
         enabled=bool(row["enabled"]),
         registered=cls is not None,
         running=instance is not None,
@@ -526,7 +543,7 @@ async def list_instances(
         except HTTPException:
             continue
         instance = adapter_registry.get_instance_by_id(row["id"])
-        result.append(_instance_out(row, instance))
+        result.append(_instance_out(row, instance, privileged=_is_admin_principal(principal)))
     return result
 
 
@@ -594,7 +611,7 @@ async def create_instance(
 
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (instance_id,))
     instance = adapter_registry.get_instance_by_id(instance_id)
-    return _instance_out(row, instance)
+    return _instance_out(row, instance, privileged=True)  # get_admin_user route
 
 
 @router.get("/instances/{instance_id}", response_model=AdapterInstanceOut)
@@ -606,9 +623,10 @@ async def get_instance(
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
-    await _ensure_instance_read(db, _principal_from_dependency(_user), str(instance_id))
+    principal = _principal_from_dependency(_user)
+    await _ensure_instance_read(db, principal, str(instance_id))
     instance = adapter_registry.get_instance_by_id(str(instance_id))
-    return _instance_out(row, instance)
+    return _instance_out(row, instance, privileged=_is_admin_principal(principal))
 
 
 # Serializes the read-modify-write of a ONEWIRE instance's config JSON per
@@ -652,7 +670,7 @@ async def update_instance(
         enabled_new = body.enabled if body.enabled is not None else bool(row["enabled"])
         config_raw = row["config"]
         if body.config is not None:
-            config_new = body.config
+            config_new = _restore_redacted_token(row["adapter_type"], json.loads(config_raw) if config_raw else {}, body.config)
             if row["adapter_type"] == "MESSAGE":
                 stored_config = json.loads(config_raw) if config_raw else {}
                 try:
@@ -703,7 +721,7 @@ async def update_instance(
 
         row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
         instance = adapter_registry.get_instance_by_id(str(instance_id))
-    return _instance_out(row, instance)
+    return _instance_out(row, instance, privileged=_is_admin_principal(principal))
 
 
 @router.delete(
@@ -737,6 +755,7 @@ async def delete_instance(
             (str(instance_id),),
         )
         await db.execute("DELETE FROM adapter_instances WHERE id=?", (str(instance_id),))
+    _HA_IMPORT_LOCKS.pop(str(instance_id), None)
 
 
 @router.post(
@@ -777,7 +796,8 @@ async def test_instance(
         )
 
     if body and body.config:
-        config_dict = body.config  # bereits dict durch Pydantic
+        stored = json.loads(row["config"]) if row["config"] else {}
+        config_dict = _restore_redacted_token(row["adapter_type"], stored, body.config)  # bereits dict durch Pydantic
     else:
         raw = row["config"] or "{}"
         config_dict = json.loads(raw) if isinstance(raw, str) else raw
@@ -845,7 +865,7 @@ async def restart_instance_route(
 
     row = await db.fetchone("SELECT * FROM adapter_instances WHERE id=?", (str(instance_id),))
     instance = adapter_registry.get_instance_by_id(str(instance_id))
-    return _instance_out(row, instance)
+    return _instance_out(row, instance, privileged=_is_admin_principal(principal))
 
 
 @router.post(
@@ -1306,6 +1326,86 @@ async def onewire_set_alias(
     return body
 
 
+@dataclass(frozen=True)
+class _ImportSpec:
+    """One DataPoint + binding an adapter import creates."""
+
+    key: str  # shown in error messages (state id / entity id)
+    name: str
+    data_type: str
+    unit: str | None
+    tags: list[str]
+    direction: str
+    config: dict[str, Any]
+
+
+async def _create_imported_objects(
+    specs: list[_ImportSpec],
+    *,
+    instance_id: uuid.UUID,
+    principal: Principal,
+    db: Database,
+    persist_value: bool,
+    record_history: bool,
+    label: str,
+) -> tuple[int, list[str]]:
+    """Create a DataPoint and its binding per spec; returns (created, errors).
+
+    A binding that cannot be created takes its DataPoint with it, so no orphan
+    object is left behind. The adapter reloads its bindings once, after all of them.
+    """
+    from obs.api.v1.bindings import create_binding
+    from obs.core.registry import get_registry
+    from obs.models.binding import AdapterBindingCreate
+    from obs.models.datapoint import DataPointCreate
+
+    registry = get_registry()
+    created = 0
+    errors: list[str] = []
+    async with adapter_registry.deferred_binding_reloads(db):
+        for spec in specs:
+            dp = None
+            try:
+                dp = await registry.create(
+                    DataPointCreate(
+                        name=spec.name,
+                        data_type=spec.data_type,
+                        unit=spec.unit,
+                        tags=spec.tags,
+                        persist_value=persist_value,
+                        record_history=record_history,
+                    ),
+                )
+                if not principal.is_admin:
+                    await db.execute_and_commit(
+                        """INSERT INTO authz_node_roles
+                           (principal_type, principal_id, node_type, node_id, role, effect)
+                           VALUES ('user', ?, 'datapoint', ?, 'operator', 'allow')""",
+                        (principal.subject, str(dp.id)),
+                    )
+                await create_binding(
+                    dp.id,
+                    AdapterBindingCreate(adapter_instance_id=instance_id, direction=spec.direction, config=spec.config, enabled=True),
+                    principal,
+                    db,
+                )
+                created += 1
+            except Exception as exc:
+                logger.exception("%s-Import fehlgeschlagen für %s", label, spec.key)
+                errors.append(f"{spec.key}: {exc.detail if isinstance(exc, HTTPException) else exc}")
+                if dp is not None:
+                    try:
+                        await registry.delete(dp.id)
+                        if not principal.is_admin:
+                            await db.execute_and_commit(
+                                "DELETE FROM authz_node_roles WHERE node_type='datapoint' AND node_id=?",
+                                (str(dp.id),),
+                            )
+                    except Exception:
+                        logger.exception("%s-Import: verwaistes Objekt %s konnte nicht entfernt werden", label, dp.id)
+    return created, errors
+
+
 def _iobroker_obs_type(state_type: str | None) -> tuple[str, str | None]:
     t = (state_type or "").lower()
     if t == "boolean":
@@ -1450,57 +1550,225 @@ async def iobroker_import_states(
     principal = _principal_from_dependency(_user)
     await _ensure_iobroker_import_authority(db, principal, str(instance_id))
 
-    from obs.api.v1.bindings import create_binding
-    from obs.core.registry import get_registry
-    from obs.models.binding import AdapterBindingCreate
-    from obs.models.datapoint import DataPointCreate
-
     candidates = await _iobroker_candidates(str(instance_id), body, db)
     result = IoBrokerImportResult(preview=candidates)
-    registry = get_registry()
-
+    specs: list[_ImportSpec] = []
     for item in candidates:
         if item.exists:
             result.skipped_existing += 1
             continue
-        try:
-            source_type = _iobroker_source_type(item.data_type)
-            dp = await registry.create(
-                DataPointCreate(
-                    name=item.name,
-                    data_type=item.data_type,
-                    unit=item.unit,
-                    tags=item.tags,
-                    persist_value=body.persist_value,
-                    record_history=body.record_history,
-                ),
-            )
-            result.created_datapoints += 1
-            if not principal.is_admin:
-                await db.execute_and_commit(
-                    """INSERT INTO authz_node_roles
-                       (principal_type, principal_id, node_type, node_id, role, effect)
-                       VALUES ('user', ?, 'datapoint', ?, 'operator', 'allow')""",
-                    (principal.subject, str(dp.id)),
-                )
-            config: dict[str, Any] = {"state_id": item.state_id}
-            if source_type:
-                config["source_data_type"] = source_type
-            await create_binding(
-                dp.id,
-                AdapterBindingCreate(
-                    adapter_instance_id=instance_id,
-                    direction=item.direction,
-                    config=config,
-                    enabled=True,
-                ),
-                principal,
-                db,
-            )
-            result.created_bindings += 1
-        except Exception as exc:
-            logger.exception("ioBroker-Import fehlgeschlagen für State %s", item.state_id)
-            result.errors.append(f"{item.state_id}: {exc}")
+        config: dict[str, Any] = {"state_id": item.state_id}
+        source_type = _iobroker_source_type(item.data_type)
+        if source_type:
+            config["source_data_type"] = source_type
+        specs.append(_ImportSpec(item.state_id, item.name, item.data_type, item.unit, item.tags, item.direction, config))
+    created, result.errors = await _create_imported_objects(
+        specs,
+        instance_id=instance_id,
+        principal=principal,
+        db=db,
+        persist_value=body.persist_value,
+        record_history=body.record_history,
+        label="ioBroker",
+    )
+    result.created_datapoints = result.created_bindings = created
+    _bulk_mutation_result(
+        request,
+        count=result.created_datapoints + result.created_bindings + result.skipped_existing,
+        payload=body.model_dump(),
+        errors=result.errors,
+    )
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Home Assistant: Entity-Browser, Profile, Import (#1392)
+# ---------------------------------------------------------------------------
+
+
+class HaEntityPage(BaseModel):
+    total: int
+    items: list[dict[str, Any]]
+    facets: dict[str, list[str]]
+    metadata_available: bool = True
+
+
+class HaImportResult(BaseModel):
+    preview: list[HaImportCandidate] = []
+    created_datapoints: int = 0
+    created_bindings: int = 0
+    skipped_existing: int = 0
+    skipped_conflicts: int = 0
+    skipped_unsupported: int = 0
+    errors: list[str] = []
+
+
+async def _ensure_ha_browse_authority(db: Database, principal: Principal, instance_id: str) -> Any:
+    """Entity data and registry metadata are only for principals who may bind this instance."""
+    await _ensure_instance_write_grant(db, principal, instance_id)
+    row = await db.fetchone("SELECT adapter_type FROM adapter_instances WHERE id=?", (instance_id,))
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Instanz nicht gefunden")
+    if row["adapter_type"] != "HOME_ASSISTANT":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nur für HOME_ASSISTANT-Instanzen verfügbar")
+    _ensure_adapter_delegates_operation(principal, row["adapter_type"], AdapterDelegationCapability.LINK_BINDING)
+    instance = adapter_registry.get_instance_by_id(instance_id)
+    if instance is None or not hasattr(instance, "browse_entities"):
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Home-Assistant-Instanz ist nicht verbunden")
+    return instance
+
+
+async def _ha_live_call(call: Any, failure: str) -> Any:
+    from obs.adapters.homeassistant.adapter import HaNotConnectedError
+
+    try:
+        return await call()
+    except HaNotConnectedError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Home-Assistant-Instanz ist nicht verbunden") from exc
+    except Exception as exc:
+        logger.warning("Home Assistant live call failed: %s", type(exc).__name__)
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, failure) from exc
+
+
+async def _ha_entities(instance: Any, *, fresh: bool = False) -> dict[str, Any]:
+    return await _ha_live_call(lambda: instance.browse_entities(fresh=fresh), "Home-Assistant-Entities konnten nicht geladen werden")
+
+
+@router.get("/homeassistant/profiles")
+async def ha_profiles(_user: Principal | str = Depends(get_current_principal)) -> list[dict[str, Any]]:
+    """Declarative HA domain profiles (static, contains no instance data)."""
+    return profile_catalog()
+
+
+@router.get("/instances/{instance_id}/homeassistant/entities", response_model=HaEntityPage)
+async def ha_browse_entities(
+    instance_id: uuid.UUID,
+    q: str = Query("", max_length=200),
+    domain: str = Query("", max_length=64),
+    area: str = Query("", max_length=200),
+    device: str = Query("", max_length=200),
+    platform: str = Query("", max_length=64),
+    availability: str = Query("", pattern="^(|available|unavailable)$"),
+    entity_id: str = Query("", max_length=255),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    _user: Principal | str = Depends(get_current_principal),
+    db: Database = Depends(lambda: get_db()),
+) -> HaEntityPage:
+    """Durchsuchbare Home-Assistant-Entities der Live-Instanz."""
+    instance = await _ensure_ha_browse_authority(db, _principal_from_dependency(_user), str(instance_id))
+    data = await _ha_entities(instance)
+    page = filter_ha_entities(
+        data["entities"],
+        q=q,
+        domain=domain,
+        area=area,
+        device=device,
+        platform=platform,
+        availability=availability,
+        entity_id=entity_id,
+        offset=offset,
+        limit=limit,
+    )
+    return HaEntityPage(**page, metadata_available=data.get("metadata_available", True))
+
+
+@router.get("/instances/{instance_id}/homeassistant/services")
+async def ha_browse_services(
+    instance_id: uuid.UUID,
+    _user: Principal | str = Depends(get_current_principal),
+    db: Database = Depends(lambda: get_db()),
+) -> list[dict[str, Any]]:
+    """Home-Assistant-Aktionen der Live-Instanz (Domain → Aktion → Datenfelder)."""
+    instance = await _ensure_ha_browse_authority(db, _principal_from_dependency(_user), str(instance_id))
+    return await _ha_live_call(instance.browse_services, "Home-Assistant-Aktionen konnten nicht geladen werden")
+
+
+async def _ensure_ha_import_authority(db: Database, principal: Principal, instance_id: str) -> Any:
+    instance = await _ensure_ha_browse_authority(db, principal, instance_id)
+    _ensure_adapter_delegates_operation(
+        principal,
+        "HOME_ASSISTANT",
+        AdapterDelegationCapability.CREATE_DATAPOINT,
+        AdapterDelegationCapability.LINK_BINDING,
+    )
+    return instance
+
+
+# Plan + create of one instance must not interleave: two parallel imports would both
+# plan the same entities as new and create every object twice.
+_HA_IMPORT_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+async def _ha_import_plan(instance: Any, instance_id: str, body: HaImportRequest, db: Database, *, fresh: bool = False) -> list[HaImportCandidate]:
+    # The import itself plans on fresh data: a rename or removal in HA within the
+    # browse cache's lifetime must not create a binding for the old entity id.
+    data = await _ha_entities(instance, fresh=fresh)
+    rows = await db.fetchall("SELECT id, config, direction FROM adapter_bindings WHERE adapter_instance_id=?", (instance_id,))
+    existing = []
+    for row in rows:
+        cfg = _json_config(row["config"])
+        if cfg.get("entity_id"):
+            existing.append((str(row["id"]), cfg, row["direction"]))
+    return plan_ha_import(data["entities"], body, existing)
+
+
+@router.post(
+    "/instances/{instance_id}/homeassistant/import-preview",
+    response_model=HaImportResult,
+    dependencies=[Depends(contract_audit("POST", "/api/v1/adapters/instances/{instance_id}/homeassistant/import-preview"))],
+)
+async def ha_import_preview(
+    instance_id: uuid.UUID,
+    body: HaImportRequest,
+    request: Request = None,
+    _user: Principal | str = Depends(get_current_principal),
+    db: Database = Depends(lambda: get_db()),
+) -> HaImportResult:
+    """Non-mutating import plan: what an import of *body* would create."""
+    principal = _principal_from_dependency(_user)
+    instance = await _ensure_ha_import_authority(db, principal, str(instance_id))
+    result = HaImportResult(preview=await _ha_import_plan(instance, str(instance_id), body, db))
+    _bulk_summary(request, count=len(result.preview), payload=body.model_dump())
+    return result
+
+
+@router.post(
+    "/instances/{instance_id}/homeassistant/import",
+    response_model=HaImportResult,
+    dependencies=[Depends(contract_audit("POST", "/api/v1/adapters/instances/{instance_id}/homeassistant/import"))],
+)
+async def ha_import_entities(
+    instance_id: uuid.UUID,
+    body: HaImportRequest,
+    request: Request = None,
+    _user: Principal | str = Depends(get_current_principal),
+    db: Database = Depends(lambda: get_db()),
+) -> HaImportResult:
+    """Create DataPoints + bindings for every *new* candidate; never touches existing objects."""
+    principal = _principal_from_dependency(_user)
+    instance = await _ensure_ha_import_authority(db, principal, str(instance_id))
+
+    async with _HA_IMPORT_LOCKS.setdefault(str(instance_id), asyncio.Lock()):
+        candidates = await _ha_import_plan(instance, str(instance_id), body, db, fresh=True)
+        result = HaImportResult(preview=candidates)
+        skipped = {"exists": "skipped_existing", "conflict": "skipped_conflicts", "unsupported": "skipped_unsupported"}
+        specs: list[_ImportSpec] = []
+        for item in candidates:
+            if item.status in skipped:
+                setattr(result, skipped[item.status], getattr(result, skipped[item.status]) + 1)
+                continue
+            specs.append(_ImportSpec(item.entity_id, item.name, item.data_type, item.unit, item.tags, item.direction, item.config))
+        created, result.errors = await _create_imported_objects(
+            specs,
+            instance_id=instance_id,
+            principal=principal,
+            db=db,
+            persist_value=body.persist_value,
+            record_history=body.record_history,
+            label="Home-Assistant",
+        )
+    result.created_datapoints = result.created_bindings = created
     _bulk_mutation_result(
         request,
         count=result.created_datapoints + result.created_bindings + result.skipped_existing,
@@ -2266,6 +2534,9 @@ async def update_adapter_config(
     if cls is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Adapter '{adapter_type}' nicht registriert")
     config_new = body.config
+    if adapter_type == "HOME_ASSISTANT":
+        row = await db.fetchone("SELECT config FROM adapter_configs WHERE adapter_type=?", (adapter_type,))
+        config_new = _restore_redacted_token(adapter_type, json.loads(row["config"]) if row is not None and row["config"] else {}, body.config)
     if adapter_type == "MESSAGE":
         row = await db.fetchone("SELECT * FROM adapter_configs WHERE adapter_type=?", (adapter_type,))
         stored_config = json.loads(row["config"]) if row is not None and row["config"] else {}
@@ -2292,7 +2563,7 @@ async def update_adapter_config(
     )
     return AdapterConfigOut(
         adapter_type=adapter_type,
-        config=_redact_instance_config(adapter_type, config_new),
+        config=_redact_instance_config(adapter_type, config_new, privileged=True),  # get_admin_user route
         enabled=body.enabled,
         updated_at=now,
     )
@@ -2309,6 +2580,7 @@ async def get_adapter_config(
         return AdapterConfigOut(adapter_type=adapter_type, config={}, enabled=True, updated_at=None)
     return AdapterConfigOut(
         adapter_type=adapter_type,
+        # Readable by every authenticated user: never show the HA token here.
         config=_redact_instance_config(adapter_type, json.loads(row["config"])),
         enabled=bool(row["enabled"]),
         updated_at=row["updated_at"],
