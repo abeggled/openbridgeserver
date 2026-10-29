@@ -25,7 +25,9 @@ async function logout() {
 }
 
 function login() {
-  router.push({ name: 'login', query: { redirect: router.currentRoute.value.fullPath } })
+  // `replace`: LoginView replaces the login entry with the page again after the login,
+  // so the history must not hold the page twice (a back link would first go to itself).
+  router.replace({ name: 'login', query: { redirect: router.currentRoute.value.fullPath } })
 }
 </script>
 

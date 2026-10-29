@@ -37,7 +37,14 @@ const showArrow = computed(() => props.config.show_arrow !== false)
 // Back to the previously visited page, whichever it was; target_node_id is the
 // fallback when there is no history (e.g. the page was opened directly).
 const historyBack = computed(() => props.config.history_back === true)
-const hasDestination = computed(() => historyBack.value || !!targetId.value)
+// history.state is not reactive; it changes with every navigation, so the current
+// route is read along with it. In the editor it says nothing about the Visu's history.
+const canGoBack = computed(() => {
+  void route.fullPath
+  return !props.editorMode && !!window.history.state?.back
+})
+// Without history (bookmark, kiosk start, new tab) only the fallback page is a destination.
+const hasDestination = computed(() => !!targetId.value || (historyBack.value && canGoBack.value))
 
 const activeIndicator = computed(() => (props.config.active_indicator as string | undefined) ?? 'none')
 
