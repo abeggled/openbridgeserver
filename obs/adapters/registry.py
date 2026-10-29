@@ -8,9 +8,12 @@ Rückwärtskompatibel: get_instance(adapter_type) liefert die erste laufende Ins
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import uuid
+from collections.abc import AsyncIterator
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,6 +24,19 @@ logger = logging.getLogger(__name__)
 _adapters: dict[str, type] = {}  # adapter_type → AdapterBase Klasse
 _instances: dict[str, Any] = {}  # instance_id (str) → laufende Instanz
 _BINDING_LOAD_DETAIL_PREFIX = "Invalid adapter bindings skipped"
+
+
+class _PendingReloads(set):
+    """Instance ids whose binding reload is postponed by deferred_binding_reloads().
+
+    Tasks started inside the block copy the context and keep this set: once the
+    block has ended (``closed``), their reloads must run immediately again.
+    """
+
+    closed = False
+
+
+_deferred_reloads: ContextVar[_PendingReloads | None] = ContextVar("adapter_deferred_reloads", default=None)
 
 
 @dataclass(frozen=True)
@@ -286,8 +302,35 @@ async def stop_instance(instance_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+@contextlib.asynccontextmanager
+async def deferred_binding_reloads(db: Any) -> AsyncIterator[None]:
+    """Collect binding reloads inside the block and run each instance's once at the end.
+
+    A bulk import creates one binding after another; reloading the adapter after
+    every single one makes the work grow with the square of the import size.
+    """
+    pending = _PendingReloads()
+    token = _deferred_reloads.set(pending)
+    try:
+        yield
+    finally:
+        _deferred_reloads.reset(token)
+        pending.closed = True
+        for instance_id in sorted(pending):
+            # The bindings are already committed: a failing reload must neither
+            # fail the import nor skip the other instances.
+            try:
+                await reload_instance_bindings(instance_id, db)
+            except Exception:
+                logger.exception("Deferred binding reload failed for instance %s", instance_id)
+
+
 async def reload_instance_bindings(instance_id: str, db: Any) -> None:
     """Bindings einer laufenden Instanz aus DB neu laden."""
+    pending = _deferred_reloads.get()
+    if pending is not None and not pending.closed:
+        pending.add(instance_id)
+        return
     instance = _instances.get(instance_id)
     if instance is None:
         return
