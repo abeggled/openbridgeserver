@@ -401,7 +401,7 @@ const VALUE_MAP_PRESETS = [
 ]
 
 const cfg = reactive({
-  group_address: '', dpt_id: 'DPT9.001', state_group_address: '', respond_to_read: false,
+  group_address: '', dpt_id: 'DPT9.001', state_group_address: '', respond_to_read: false, read_interval_s: null,
   address: 0, register_type: 'holding', data_format: 'uint16',
   unit_id: 1, count: 1, scale_factor: 1.0, poll_interval: 1.0,
   byte_order: 'big', word_order: 'big',
@@ -1326,6 +1326,7 @@ function buildConfig() {
     const c = { group_address: cfg.group_address, dpt_id: cfg.dpt_id || 'DPT9.001' }
     if (cfg.state_group_address?.trim()) c.state_group_address = cfg.state_group_address.trim()
     if (cfg.respond_to_read) c.respond_to_read = true
+    if (Number(cfg.read_interval_s) > 0) c.read_interval_s = Number(cfg.read_interval_s)
     return c
   }
   if (type === 'MODBUS_TCP' || type === 'MODBUS_RTU') {

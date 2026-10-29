@@ -35,10 +35,26 @@
       </p>
     </div>
   </div>
+  <div v-if="form.direction === 'SOURCE' || form.direction === 'BOTH'" class="form-group">
+    <label for="read_interval_s" class="label">{{ $t('adapters.bindingForm.readIntervalLabel') }}</label>
+    <input
+      id="read_interval_s"
+      v-model.number="cfg.read_interval_s"
+      type="number"
+      :min="READ_INTERVAL_MIN_S"
+      step="1"
+      class="input"
+      :placeholder="$t('adapters.bindingForm.readIntervalPlaceholder')"
+    />
+    <p class="hint">{{ $t('adapters.bindingForm.readIntervalHint', { min: READ_INTERVAL_MIN_S }) }}</p>
+  </div>
 </template>
 
 <script setup>
 import GaCombobox from '@/components/ui/GaCombobox.vue'
+
+// Mirrors READ_INTERVAL_MIN_S in obs/adapters/knx/adapter.py (issue #1402)
+const READ_INTERVAL_MIN_S = 10
 
 defineProps({
   cfg: { type: Object, required: true },
