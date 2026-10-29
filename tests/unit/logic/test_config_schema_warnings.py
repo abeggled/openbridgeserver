@@ -27,8 +27,23 @@ def test_unknown_node_type_is_flagged():
     assert warnings[0]["node_id"] == "n1"
 
 
-def test_missing_node_placeholder_is_not_flagged():
-    assert config_schema_warnings(_flow("missing_node")) == []
+def test_missing_node_placeholder_is_reported_with_its_original_type():
+    warnings = config_schema_warnings(_flow("missing_node", {"original_type": " legacy_block ", "label": "Mein Block", "foo": 1}))
+
+    # Exactly one warning: the placeholder's own data is not schema-checked (no unknown_node_type
+    # for "missing_node" itself, no unknown_config_field for its leftover keys).
+    assert len(warnings) == 1
+    assert warnings[0]["code"] == "missing_node_type"
+    assert warnings[0]["node_id"] == "n1"
+    assert "'legacy_block'" in warnings[0]["message"]
+
+
+def test_missing_node_placeholder_without_original_type_is_still_reported():
+    for data in ({}, {"original_type": "   "}, {"original_type": 42}):
+        warnings = config_schema_warnings(_flow("missing_node", data))
+
+        assert [w["code"] for w in warnings] == ["missing_node_type"], data
+        assert "an unknown node type" in warnings[0]["message"]
 
 
 def test_absent_key_is_never_flagged():
@@ -169,3 +184,44 @@ def test_every_node_types_own_default_config_is_self_consistent():
 
         codes = _codes(_flow(node_type.type, data))
         assert codes == expected_warning_codes.get(node_type.type, []), node_type.type
+
+
+def test_unknown_config_field_flags_a_typo_and_suggests_the_close_schema_key():
+    warnings = config_schema_warnings(_flow("compare", {"operater": ">"}))
+
+    assert [w["code"] for w in warnings] == ["unknown_config_field"]
+    assert warnings[0]["message"].startswith("operater: not a config field")
+    assert "Did you mean 'operator'?" in warnings[0]["message"]
+
+
+def test_unknown_config_field_without_a_close_match_has_no_suggestion():
+    warnings = config_schema_warnings(_flow("compare", {"zzzzzz": 1}))
+
+    assert [w["code"] for w in warnings] == ["unknown_config_field"]
+    assert "Did you mean" not in warnings[0]["message"]
+
+
+def test_unknown_config_field_on_a_type_without_any_config():
+    # `not` declares no config at all — every key is unknown, and there is nothing to suggest.
+    assert _codes(_flow("not", {"operator": ">"})) == ["unknown_config_field"]
+
+
+def test_generic_extra_keys_are_never_flagged():
+    data = {"label": "Mein Block", "negate_in1": True, "negate_in2": False, "negate_out": True}
+    assert _codes(_flow("and", data)) == []
+
+
+def test_type_specific_extra_keys_are_accepted_only_on_their_own_type():
+    assert _codes(_flow("datapoint_read", {"value_map": {"0": "aus"}})) == []
+    assert _codes(_flow("datapoint_write", {"value_map": {"1": "ein"}})) == []
+    assert _codes(_flow("api_client", {"headers_value_file": "/run/secrets/h", "auth_value_file": "/run/secrets/t"})) == []
+    assert _codes(_flow("heating_circuit", {"temp_winter": 15, "temp_summer": 18})) == []
+    # The same keys elsewhere are typos for that type.
+    assert _codes(_flow("compare", {"value_map": {}})) == ["unknown_config_field"]
+
+
+def test_string_concat_static_text_slots_follow_their_pattern():
+    assert _codes(_flow("string_concat", {"text_1": "a", "text_12": "b"})) == []
+    assert _codes(_flow("string_concat", {"text_x": "a"})) == ["unknown_config_field"]
+    # The pattern is string_concat's own — not a free pass for other types.
+    assert _codes(_flow("compare", {"text_1": "a"})) == ["unknown_config_field"]

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import difflib
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -22,6 +24,30 @@ TICK_BOUNDARY_NODE_TYPES = {"memory", *TIMER_NODE_TYPES}
 _MISSING_NODE_TYPE = "missing_node"
 
 _NUMERIC_SCHEMA_TYPES = {"number", "integer"}
+
+# `data` keys that are legitimately absent from a node type's `config_schema` and therefore must
+# not be reported as `unknown_config_field`. Every entry is written by the Admin GUI or read by the
+# runtime; a key outside these lists and the schema is most likely a typo that silently falls back
+# to the schema default (e.g. `{"operater": ">"}` on `compare`).
+# - `label`: the user-defined block name every block type carries (issue #1157).
+_GENERIC_EXTRA_CONFIG_KEYS: frozenset[str] = frozenset({"label"})
+# - `negate_<port>`: per-port negation toggled on the block card (GenericNode.vue), read by
+#   GraphExecutor/LogicManager for inputs (`negate_in1`) and the output (`negate_out`).
+_GENERIC_EXTRA_CONFIG_KEY_PREFIXES: tuple[str, ...] = ("negate_",)
+_TYPE_EXTRA_CONFIG_KEYS: dict[str, frozenset[str]] = {
+    # Value-map preset picked in the properties panel, applied by GraphExecutor.
+    "datapoint_read": frozenset({"value_map"}),
+    "datapoint_write": frozenset({"value_map"}),
+    # The names `_migrate_legacy_api_client_field_names` (obs/logic/manager.py) moves the schema's
+    # older `headers_secret_file`/`auth_token_file` to; graphs saved since then carry these.
+    "api_client": frozenset({"headers_value_file", "auth_value_file"}),
+    # Legacy thresholds GraphExecutor still falls back to when `threshold_temp`/`hysteresis` are unset.
+    "heating_circuit": frozenset({"temp_winter", "temp_summer"}),
+}
+# - `string_concat.text_<n>`: static text for an unwired input `in_<n>`.
+_TYPE_EXTRA_CONFIG_KEY_PATTERNS: dict[str, re.Pattern[str]] = {
+    "string_concat": re.compile(r"text_\d+"),
+}
 
 # Some enum-declared config fields accept additional runtime spellings beyond the schema's
 # canonical `enum` values — genuine synonyms GraphExecutor treats identically to a canonical
@@ -162,15 +188,25 @@ def config_schema_warnings(flow: FlowData) -> list[dict[str, str]]:
     skipped too. Mirrors the executor's own coercion leniency (``GraphExecutor._to_num``,
     ``_load_rule_list``) so this reports exactly the inputs that would silently produce wrong
     behaviour at run time, not inputs the executor already handles safely.
+
+    A key present in ``data`` but declared neither by the schema nor as a known extra key
+    (``_GENERIC_EXTRA_CONFIG_KEYS`` and friends) is reported as ``unknown_config_field`` — the
+    block would ignore it and silently use the default. An import placeholder (``missing_node``)
+    is reported once as ``missing_node_type`` with the type it stands in for, since it does
+    nothing at run time; its ``data`` is not checked further.
     """
     warnings: list[dict[str, str]] = []
     for node in flow.nodes:
         if node.type == _MISSING_NODE_TYPE:
+            warnings.append(_missing_node_warning(node))
             continue
         node_type = get_node_type(node.type)
         if node_type is None:
             warnings.append(_schema_warning(node.id, "unknown_node_type", f"Unknown node type '{node.type}'."))
             continue
+        for key in node.data:
+            if key not in node_type.config_schema and not _is_known_extra_config_key(node.type, key):
+                warnings.append(_unknown_config_field_warning(node.id, key, node_type.config_schema))
         for key, field_schema in node_type.config_schema.items():
             if key not in node.data:
                 continue
@@ -184,6 +220,36 @@ def config_schema_warnings(flow: FlowData) -> list[dict[str, str]]:
 
 def _schema_warning(node_id: str, code: str, message: str) -> dict[str, str]:
     return {"node_id": node_id, "code": code, "message": message}
+
+
+def _missing_node_warning(node: LogicNode) -> dict[str, str]:
+    original_type = node.data.get("original_type")
+    if isinstance(original_type, str) and original_type.strip():
+        subject = f"node type '{original_type.strip()}'"
+    else:
+        subject = "an unknown node type"
+    return _schema_warning(
+        node.id,
+        "missing_node_type",
+        f"Placeholder for {subject} that is not available on this server; the block does nothing at run time.",
+    )
+
+
+def _is_known_extra_config_key(node_type: str, key: str) -> bool:
+    if key in _GENERIC_EXTRA_CONFIG_KEYS or key.startswith(_GENERIC_EXTRA_CONFIG_KEY_PREFIXES):
+        return True
+    if key in _TYPE_EXTRA_CONFIG_KEYS.get(node_type, frozenset()):
+        return True
+    pattern = _TYPE_EXTRA_CONFIG_KEY_PATTERNS.get(node_type)
+    return pattern is not None and pattern.fullmatch(key) is not None
+
+
+def _unknown_config_field_warning(node_id: str, key: str, config_schema: dict[str, Any]) -> dict[str, str]:
+    message = f"{key}: not a config field of this node type; it is ignored and the default is used."
+    suggestions = difflib.get_close_matches(key, list(config_schema), n=1)
+    if suggestions:
+        message += f" Did you mean '{suggestions[0]}'?"
+    return _schema_warning(node_id, "unknown_config_field", message)
 
 
 def _is_numeric(value: Any) -> bool:

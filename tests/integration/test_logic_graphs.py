@@ -173,6 +173,32 @@ async def test_validate_graph_reports_unknown_node_type_and_nested_config_schema
     }
 
 
+async def test_validate_graph_reports_unknown_config_field_and_missing_node_placeholder(client, auth_headers):
+    flow_data = {
+        "nodes": [
+            {"id": "cmp", "type": "compare", "position": {"x": 0, "y": 0}, "data": {"operater": ">", "label": "Schwelle"}},
+            {"id": "ph", "type": "missing_node", "position": {"x": 200, "y": 0}, "data": {"original_type": "legacy_block"}},
+        ],
+        "edges": [],
+    }
+
+    resp = await client.post("/api/v1/logic/graphs/validate", json=flow_data, headers=auth_headers)
+
+    assert resp.status_code == 200
+    assert resp.json()["warnings"] == [
+        {
+            "node_id": "cmp",
+            "code": "unknown_config_field",
+            "message": "operater: not a config field of this node type; it is ignored and the default is used. Did you mean 'operator'?",
+        },
+        {
+            "node_id": "ph",
+            "code": "missing_node_type",
+            "message": "Placeholder for node type 'legacy_block' that is not available on this server; the block does nothing at run time.",
+        },
+    ]
+
+
 # ---------------------------------------------------------------------------
 # POST /logic/graphs
 # ---------------------------------------------------------------------------

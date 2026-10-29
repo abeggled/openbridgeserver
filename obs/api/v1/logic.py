@@ -694,6 +694,15 @@ async def validate_graph(
       `config_schema_missing_required_field`. Deliberately narrow: no cross-entity checks (e.g.
       whether a `datapoint_id` actually exists), and a key absent from `data` is never flagged
       (it falls back to the schema default).
+    - **Unknown config keys**: a top-level `data` key that is not in the type's `config_schema`
+      (typically a typo such as `operater` for `operator`) is ignored by the block, which then
+      runs with the default — code `unknown_config_field`, with a "did you mean" hint where a
+      schema key is close. Not flagged: `label` (the block name), `negate_<port>` (per-port
+      negation) and a few type-specific keys the editor writes, e.g. `string_concat.text_<n>`
+      and `datapoint_read`/`datapoint_write.value_map`.
+    - **Import placeholders**: a `missing_node` stands in for a node type this server does not
+      know (e.g. from an import) and does nothing at run time — code `missing_node_type`, the
+      message names the original type from `data.original_type`.
 
     `status` is always `"ok"` — an empty `warnings` list is the actual "nothing found" signal, not
     `status`. This endpoint is **not** enforced anywhere else: `POST`/`PUT /graphs` persist a graph
