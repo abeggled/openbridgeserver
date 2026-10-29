@@ -92,7 +92,9 @@ describe('BindingFormKnx', () => {
       const w = mk({ form: { direction } })
       const input = w.find('#read_interval_s')
       expect(input.exists()).toBe(true)
-      expect(input.attributes('min')).toBe('10')
+      // 0 (= off) and fractions must pass the browser's own form validation
+      expect(input.attributes('min')).toBe('0')
+      expect(input.attributes('step')).toBe('any')
       expect(w.find('#read_interval_s + .hint').text()).toContain('10')
     })
 

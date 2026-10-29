@@ -170,6 +170,15 @@ describe('BindingForm — KNX periodic read interval (#1402)', () => {
     expect(updateBinding.mock.calls[0][2].config).not.toHaveProperty('read_interval_s')
     w.unmount()
   })
+
+  it('resets the interval when the next binding loaded has none', async () => {
+    const w = await mountForm({ initial: knxInitial({ read_interval_s: 60 }) })
+    await w.setProps({ initial: { ...knxInitial({}), id: 'b2' } })
+    expect(w.find('#read_interval_s').element.value).toBe('')
+    await submit(w)
+    expect(updateBinding.mock.calls[0][2].config).not.toHaveProperty('read_interval_s')
+    w.unmount()
+  })
 })
 
 // ─── Modbus submit ────────────────────────────────────────────────────────────

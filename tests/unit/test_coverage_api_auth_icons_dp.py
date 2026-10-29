@@ -1900,6 +1900,26 @@ class TestCreateBinding:
 
         assert exc.value.status_code == 422
 
+    def test_validate_knx_binding_rejects_read_interval_on_dest(self):
+        """Issue #1402: only SOURCE/BOTH poll, so DEST would store an interval that never reads."""
+        with pytest.raises(HTTPException) as exc:
+            bindings_api._validate_adapter_binding("KNX", "DEST", {"group_address": "1/1/1", "read_interval_s": 60})
+
+        assert exc.value.status_code == 422
+        assert "read_interval_s" in exc.value.detail
+
+    @pytest.mark.parametrize(
+        ("direction", "config"),
+        [
+            ("SOURCE", {"group_address": "1/1/1", "read_interval_s": 60}),
+            ("BOTH", {"group_address": "1/1/1", "read_interval_s": 60}),
+            ("DEST", {"group_address": "1/1/1"}),
+            ("DEST", {"group_address": "1/1/1", "read_interval_s": 0}),
+        ],
+    )
+    def test_validate_knx_binding_accepts_read_interval_where_it_polls(self, direction, config):
+        bindings_api._validate_adapter_binding("KNX", direction, config)
+
 
 # ---------------------------------------------------------------------------
 # bindings.py — update_binding endpoint

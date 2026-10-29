@@ -4575,7 +4575,7 @@ class TestPeriodicRead:
         assert all(task.cancelled() for task in tasks)
 
     @pytest.mark.asyncio
-    async def test_reconnect_keeps_the_poller_without_duplicates(self, mock_bus, monkeypatch):
+    async def test_reconnect_restarts_the_poller_without_duplicates(self, mock_bus, monkeypatch):
         from unittest.mock import patch
 
         binding = make_binding({"group_address": "1/1/1", "dpt_id": "DPT9.001", "read_interval_s": 60})
@@ -4584,18 +4584,24 @@ class TestPeriodicRead:
         await _settle()
         task = adapter._read_poll_tasks["1/1/1"][1]
         new_xknx = TestKnxAdapterConnectDisconnect()._make_mock_xknx()
+        new_xknx.connection_manager.connected = asyncio.Event()
+        new_xknx.connection_manager.connected.set()
 
         with patch("xknx.XKNX", return_value=new_xknx):
             await adapter._do_connect()
         await _settle()
 
-        # Same task, same rhythm — a reconnect neither duplicates nor re-jitters the poller
-        assert adapter._read_poll_tasks == {"1/1/1": (60, task)}
-        assert not task.done()
+        # One poller on the new instance, which reads right away instead of a full interval later
+        assert list(adapter._read_poll_tasks) == ["1/1/1"]
+        interval_s, new_task = adapter._read_poll_tasks["1/1/1"]
+        assert interval_s == 60
+        assert task.cancelled()
+        assert not new_task.done()
+        assert self._read_targets(new_xknx) == ["1/1/1"]
         await adapter.disconnect()
 
     @pytest.mark.asyncio
-    async def test_failed_reconnect_then_reload_stops_polling(self, mock_bus, monkeypatch):
+    async def test_failed_reconnect_stops_polling(self, mock_bus, monkeypatch):
         from unittest.mock import AsyncMock, patch
 
         binding = make_binding({"group_address": "1/1/1", "dpt_id": "DPT9.001", "read_interval_s": 60})
@@ -4607,12 +4613,112 @@ class TestPeriodicRead:
 
         with patch("xknx.XKNX", return_value=failing_xknx):
             await adapter._do_connect()
-        assert adapter.connected is False
-        await adapter._on_bindings_reloaded()
         await _settle()
 
+        # Stopped without waiting for a binding reload, and none comes back on one
+        assert adapter.connected is False
         assert task.cancelled()
         assert adapter._read_poll_tasks == {}
+        await adapter._on_bindings_reloaded()
+        assert adapter._read_poll_tasks == {}
+
+    @pytest.mark.asyncio
+    async def test_failed_connect_after_start_stops_polling(self, mock_bus, monkeypatch):
+        """The pollers _on_bindings_reloaded started must not outlive a connect that then fails."""
+        from unittest.mock import patch
+
+        binding = make_binding({"group_address": "1/1/1", "dpt_id": "DPT9.001", "read_interval_s": 60})
+        adapter, _ = self._make_adapter(mock_bus, monkeypatch, [binding], connected=False)
+        new_xknx = TestKnxAdapterConnectDisconnect()._make_mock_xknx()
+        reload = adapter._on_bindings_reloaded
+        started = []
+
+        async def reload_then_fail():
+            await reload()
+            started.extend(adapter._read_poll_tasks)
+            raise RuntimeError("sniffer setup failed")
+
+        adapter._on_bindings_reloaded = reload_then_fail
+        with patch("xknx.XKNX", return_value=new_xknx):
+            await adapter._do_connect()
+
+        assert started == ["1/1/1"]
+        assert adapter.connected is False
+        assert adapter._read_poll_tasks == {}
+
+    @pytest.mark.asyncio
+    async def test_tunnel_reconnect_catches_up_only_skipped_reads(self, mock_bus, monkeypatch):
+        """A read skipped while xknx re-established its tunnel is repeated right away; the others keep their rhythm."""
+        from xknx.core.connection_state import XknxConnectionState
+
+        missed = make_binding({"group_address": "1/1/1", "dpt_id": "DPT9.001", "read_interval_s": 3600})
+        on_time = make_binding({"group_address": "1/1/2", "dpt_id": "DPT9.001", "read_interval_s": 60})
+        adapter, mock_xknx = self._make_adapter(mock_bus, monkeypatch, [missed])
+        mock_xknx.connection_manager.connected.clear()
+        await adapter._on_bindings_reloaded()
+        await _settle()
+        assert adapter._read_poll_skipped == {"1/1/1"}
+        mock_xknx.connection_manager.connected.set()
+        adapter._bindings = [missed, on_time]
+        await adapter._on_bindings_reloaded()
+        await _settle()
+        before = {ga: task for ga, (_, task) in adapter._read_poll_tasks.items()}
+        mock_xknx.telegrams.put.reset_mock()
+
+        adapter._on_xknx_connection_state(XknxConnectionState.CONNECTED)
+        await _settle()
+
+        assert {ga: interval_s for ga, (interval_s, _) in adapter._read_poll_tasks.items()} == {"1/1/1": 3600, "1/1/2": 60}
+        assert before["1/1/1"].cancelled()
+        assert adapter._read_poll_tasks["1/1/2"][1] is before["1/1/2"]
+        assert self._read_targets(mock_xknx) == ["1/1/1"]
+        assert adapter._read_poll_skipped == set()
+        await adapter.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_flapping_tunnel_without_skipped_reads_restarts_nothing(self, mock_bus, monkeypatch):
+        from xknx.core.connection_state import XknxConnectionState
+
+        binding = make_binding({"group_address": "1/1/1", "dpt_id": "DPT9.001", "read_interval_s": 60})
+        adapter, mock_xknx = self._make_adapter(mock_bus, monkeypatch, [binding])
+        await adapter._on_bindings_reloaded()
+        await _settle()
+        task = adapter._read_poll_tasks["1/1/1"][1]
+        mock_xknx.telegrams.put.reset_mock()
+
+        for _ in range(3):
+            adapter._on_xknx_connection_state(XknxConnectionState.CONNECTED)
+        await _settle()
+
+        assert adapter._read_poll_tasks == {"1/1/1": (60, task)}
+        mock_xknx.telegrams.put.assert_not_called()
+        await adapter.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_removed_poller_forgets_its_skipped_read(self, mock_bus, monkeypatch):
+        binding = make_binding({"group_address": "1/1/1", "dpt_id": "DPT9.001", "read_interval_s": 60})
+        adapter, mock_xknx = self._make_adapter(mock_bus, monkeypatch, [binding])
+        mock_xknx.connection_manager.connected.clear()
+        await adapter._on_bindings_reloaded()
+        await _settle()
+        assert adapter._read_poll_skipped == {"1/1/1"}
+
+        adapter._bindings = []
+        await adapter._on_bindings_reloaded()
+
+        assert adapter._read_poll_skipped == set()
+
+    @pytest.mark.asyncio
+    async def test_tunnel_reconnect_without_pollers_starts_none(self, mock_bus, monkeypatch):
+        from xknx.core.connection_state import XknxConnectionState
+
+        adapter, mock_xknx = self._make_adapter(mock_bus, monkeypatch)
+
+        adapter._on_xknx_connection_state(XknxConnectionState.CONNECTED)
+        await _settle()
+
+        assert adapter._read_poll_tasks == {}
+        mock_xknx.telegrams.put.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_bus_connected_requires_obs_state_xknx_and_tunnel(self, mock_bus, monkeypatch):
@@ -4634,20 +4740,19 @@ class TestPeriodicRead:
     async def test_loop_survives_read_errors_and_skips_while_tunnel_is_down(self, mock_bus, monkeypatch, caplog):
         from unittest.mock import AsyncMock
 
-        binding = make_binding({"group_address": "1/1/1", "dpt_id": "DPT9.001", "read_interval_s": 60})
         adapter, mock_xknx = self._make_adapter(mock_bus, monkeypatch)
         reads = []
 
-        async def flaky_read(b):
-            reads.append(b)
+        async def flaky_read(ga):
+            reads.append(ga)
             if len(reads) == 1:
                 raise RuntimeError("bus error")
             if len(reads) == 3:
                 # xknx drops the tunnel on its own; OBS' _connected stays True
                 mock_xknx.connection_manager.connected.clear()
 
-        adapter.read = AsyncMock(side_effect=flaky_read)
-        task = asyncio.ensure_future(adapter._read_poll_loop(binding, 0))
+        adapter._send_group_value_read = AsyncMock(side_effect=flaky_read)
+        task = asyncio.ensure_future(adapter._read_poll_loop("1/1/1", 0))
         await _settle(20)
 
         # 1st read raised, loop went on; after the 3rd the tunnel dropped → no further reads

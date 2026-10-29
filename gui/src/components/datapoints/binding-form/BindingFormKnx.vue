@@ -41,8 +41,8 @@
       id="read_interval_s"
       v-model.number="cfg.read_interval_s"
       type="number"
-      :min="READ_INTERVAL_MIN_S"
-      step="1"
+      min="0"
+      step="any"
       class="input"
       :placeholder="$t('adapters.bindingForm.readIntervalPlaceholder')"
     />
@@ -53,7 +53,9 @@
 <script setup>
 import GaCombobox from '@/components/ui/GaCombobox.vue'
 
-// Mirrors READ_INTERVAL_MIN_S in obs/adapters/knx/adapter.py (issue #1402)
+// Mirrors READ_INTERVAL_MIN_S in obs/adapters/knx/adapter.py (issue #1402). Only
+// the hint uses it: 0 must stay enterable (= off) and buildConfig rounds fractions,
+// so the browser's min/step checks would block valid input; the API rejects 1–9.
 const READ_INTERVAL_MIN_S = 10
 
 defineProps({

@@ -673,6 +673,8 @@ watch(() => props.initial, val => {
   if (cfg.state_group_address == null) cfg.state_group_address = ''
   if (cfg.publish_topic       == null) cfg.publish_topic = ''
   if (cfg.respond_to_read     == null) cfg.respond_to_read = false
+  // Object.assign keeps a previous binding's interval when this config has none
+  cfg.read_interval_s = val.config?.read_interval_s ?? null
   if (cfg.payload_template    == null) cfg.payload_template = ''
   if (cfg.source_data_type   == null) cfg.source_data_type = ''
   if (cfg.json_key           == null) cfg.json_key = ''
