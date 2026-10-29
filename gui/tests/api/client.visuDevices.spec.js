@@ -42,3 +42,16 @@ describe('visuDevicesApi client', () => {
     expect(api.get).toHaveBeenCalledWith('/visu/tree')
   })
 })
+
+describe('visuAlarmsApi client', () => {
+  it('reads and replaces the Visu alarm definitions', async () => {
+    const { visuAlarmsApi } = await import('@/api/client')
+    const alarms = [{ id: 'post', name: 'Post' }]
+
+    await visuAlarmsApi.list()
+    await visuAlarmsApi.update(alarms)
+
+    expect(api.get).toHaveBeenCalledWith('/system/visu-alarms')
+    expect(api.put).toHaveBeenCalledWith('/system/visu-alarms', { alarms })
+  })
+})

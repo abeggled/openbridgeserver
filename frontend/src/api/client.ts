@@ -955,3 +955,26 @@ export interface VisuDevice {
 export const visuDevices = {
   list: () => request<VisuDevice[]>('/system/visu-devices', { silent401: true }),
 }
+
+// ── Visu-Alarme (öffentlich, ohne Login) ─────────────────────────────────────
+
+export interface ActiveVisuAlarm {
+  id: string
+  name: string
+  display: 'message' | 'page'
+  title: string
+  text: string
+  icon: string
+  severity: 'info' | 'warning' | 'critical'
+  page_id: string | null
+  ack_button: boolean
+  sound: boolean
+  /** Geräteprofile (Kennungen); leer = jede Visu */
+  devices: string[]
+  since: string
+}
+
+export const visuAlarms = {
+  acknowledge: (id: string) =>
+    request<void>(`/system/visu-alarms/${encodeURIComponent(id)}/acknowledge`, { method: 'POST', silent401: true }),
+}

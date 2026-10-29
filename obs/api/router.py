@@ -29,6 +29,7 @@ from obs.api.v1.security import router as security_router
 from obs.api.v1.support import router as support_router
 from obs.api.v1.system import router as system_router
 from obs.api.v1.visu import router as visu_router
+from obs.api.v1.visu_alarms import router as visu_alarms_router
 from obs.api.v1.visu_backgrounds import router as visu_backgrounds_router
 from obs.api.v1.weather import router as weather_router
 from obs.api.v1.websocket import router as ws_router
@@ -44,6 +45,7 @@ router.include_router(security_router, prefix="/security")
 router.include_router(setup_router, prefix="/setup")
 router.include_router(adapters_router, prefix="/adapters")
 router.include_router(system_router, prefix="/system")
+router.include_router(visu_alarms_router, prefix="/system")
 router.include_router(support_router, prefix="/support")
 router.include_router(ws_router)
 router.include_router(rb_router, prefix="/ringbuffer")

@@ -1108,5 +1108,10 @@
     "weekdaysTwo": "Mo|Di|Mi|Do|Fr|Sa|So",
     "months": "Januar|Februar|März|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember",
     "monthsShort": "Jan.|Feb.|März|Apr.|Mai|Juni|Juli|Aug.|Sept.|Okt.|Nov.|Dez."
+  },
+  "alarm": {
+    "acknowledge": "Quittieren",
+    "acknowledgeFailed": "Quittieren nicht möglich — der Alarm ist vielleicht schon beendet.",
+    "waiting": "{n} weitere(r) Alarm(e) warten"
   }
 }

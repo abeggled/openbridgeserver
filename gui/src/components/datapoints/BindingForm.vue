@@ -111,6 +111,9 @@
       <BindingFormHomeAssistant
         v-if="selectedAdapterType === 'HOME_ASSISTANT'"
           :cfg="cfg"
+          :selected-instance-id="selectedInstanceId"
+          :dp-data-type="dpDataType"
+          @advanced-validity="valid => (haAdvancedValid = valid)"
         />
 
       <!-- ioBroker -->
@@ -335,6 +338,7 @@ import BindingFormModbus from '@/components/datapoints/binding-form/BindingFormM
 import BindingFormMqtt from '@/components/datapoints/binding-form/BindingFormMqtt.vue'
 import BindingFormOnewire from '@/components/datapoints/binding-form/BindingFormOnewire.vue'
 import BindingFormHomeAssistant from '@/components/datapoints/binding-form/BindingFormHomeAssistant.vue'
+import { HA_MAPPING_KEYS } from '@/utils/haMapping'
 import BindingFormIoBroker from '@/components/datapoints/binding-form/BindingFormIoBroker.vue'
 import BindingFormTimer from '@/components/datapoints/binding-form/BindingFormTimer.vue'
 import BindingFormPresenceSimulation from '@/components/datapoints/binding-form/BindingFormPresenceSimulation.vue'
@@ -410,6 +414,7 @@ const cfg = reactive({
   sensor_id: '', property: 'temperature',
   // HOME_ASSISTANT
   entity_id: '', attribute: '', service_domain: '', service_name: '', service_data_key: '',
+  profile: '', read_as: '', action: null, write_actions: null, state_map: null, transitional_states: [], fault_states: [], ha_uid: '',
   // IOBROKER
   state_id: '', command_state_id: '', ack: false,
   // ANWESENHEITSSIMULATION
@@ -504,6 +509,7 @@ const mqttBrowseLoading = ref(false)
 const mqttBrowseError  = ref(null)
 
 // ioBroker state browser state
+const haAdvancedValid = ref(true)
 const iobrokerStates = ref([])
 const iobrokerBrowseLoading = ref(false)
 const iobrokerBrowseError = ref(null)
@@ -683,6 +689,8 @@ watch(() => props.initial, val => {
   if (cfg.service_domain   == null) cfg.service_domain   = ''
   if (cfg.service_name     == null) cfg.service_name     = ''
   if (cfg.service_data_key == null) cfg.service_data_key = ''
+  if (cfg.profile          == null) cfg.profile          = ''
+  if (cfg.read_as          == null) cfg.read_as          = ''
   // IOBROKER defaults when loading
   if (cfg.state_id         == null) cfg.state_id = ''
   if (cfg.command_state_id == null) cfg.command_state_id = ''
@@ -1353,11 +1361,22 @@ function buildConfig() {
     return { sensor_id: cfg.sensor_id, property: cfg.property || 'temperature' }
   }
   if (type === 'HOME_ASSISTANT') {
-    const c = { entity_id: cfg.entity_id }
+    const c = { entity_id: cfg.entity_id.trim() }
     if (cfg.attribute?.trim())        c.attribute        = cfg.attribute.trim()
     if (cfg.service_domain?.trim())   c.service_domain   = cfg.service_domain.trim()
     if (cfg.service_name?.trim())     c.service_name     = cfg.service_name.trim()
     if (cfg.service_data_key?.trim()) c.service_data_key = cfg.service_data_key.trim()
+    if (cfg.profile)                  c.profile          = cfg.profile
+    if (cfg.read_as)                  c.read_as          = cfg.read_as
+    // Declarative mapping (#1392) and the import identity survive an edit unchanged.
+    for (const key of HA_MAPPING_KEYS) {
+      const v = cfg[key]
+      if (v != null && !(Array.isArray(v) && v.length === 0)) c[key] = v
+    }
+    // The import identity belongs to the imported entity: editing the entity drops it.
+    // HA entity ids are case-insensitive: only a different entity counts as edited.
+    const initialEntity = String(props.initial?.config?.entity_id ?? '').trim().toLowerCase()
+    if (cfg.ha_uid && c.entity_id.toLowerCase() === initialEntity) c.ha_uid = cfg.ha_uid
     return c
   }
   if (type === 'IOBROKER') {
@@ -1480,6 +1499,10 @@ function buildConfig() {
 
 async function submit() {
   error.value  = null
+  if (selectedAdapterType.value === 'HOME_ASSISTANT' && !haAdvancedValid.value) {
+    error.value = t('adapters.bindingForm.haAdvancedInvalid')  // never save the previous mapping silently
+    return
+  }
   saving.value = true
   try {
     const config     = buildConfig()
