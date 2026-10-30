@@ -682,7 +682,11 @@ async def validate_graph(
 ) -> dict:
     """Check `flow_data` for problems before saving it — advisory, does not persist anything.
 
-    Two independent checks, both returned as one flat `warnings` list (`{node_id, code, message}`):
+    Four checks, all returned as one flat `warnings` list (`{node_id, code, message}`). Every
+    warning code: `graph_cycle`, `graph_cycle_blocked`, `unknown_node_type`,
+    `config_schema_type_mismatch`, `config_schema_enum_invalid`, `config_schema_malformed_json`,
+    `config_schema_missing_required_field`, `unknown_config_field`, `ignored_config_field`,
+    `missing_node_type`.
     - **Graph-cycle topology**: a cycle not broken by a `memory`, `timer_delay` or `timer_pulse`
       node (see `GET /node-types` on closing a feedback loop). Codes: `graph_cycle`,
       `graph_cycle_blocked`.
@@ -694,6 +698,20 @@ async def validate_graph(
       `config_schema_missing_required_field`. Deliberately narrow: no cross-entity checks (e.g.
       whether a `datapoint_id` actually exists), and a key absent from `data` is never flagged
       (it falls back to the schema default).
+    - **Unknown config keys**: a top-level `data` key that is not in the type's `config_schema`
+      (typically a typo such as `operater` for `operator`) is ignored by the block, which then
+      runs with the default — code `unknown_config_field`, with a "did you mean" hint where a
+      known key is close. Not flagged: `label` (the block name) on every type, and a few
+      type-specific keys the editor writes: `negate_in1`…`negate_in30` on `and`/`or`/`xor`/
+      `binary_stats` and `negate_out` on `and`/`or`/`xor` (per-port negation),
+      `string_concat.text_1`…`text_20`, `datapoint_read`/`datapoint_write.value_map`, and
+      `heating_circuit`'s legacy `temp_winter`/`temp_summer` — reported as
+      `ignored_config_field` where the block does not read them (`threshold_temp` set, or
+      `temp_summer` without `temp_winter`).
+    - **Import placeholders**: a `missing_node` stands in for a node type this server does not
+      know (e.g. from an import) and does nothing at run time — code `missing_node_type`, the
+      message names the original type from `data.original_type` (or, for older placeholders,
+      `data.label`).
 
     `status` is always `"ok"` — an empty `warnings` list is the actual "nothing found" signal, not
     `status`. This endpoint is **not** enforced anywhere else: `POST`/`PUT /graphs` persist a graph
