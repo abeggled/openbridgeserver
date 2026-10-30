@@ -3,6 +3,7 @@
  * Start-page routing: `/visu/` opens the start page of this device's profile,
  * `?device=` on any Visu URL picks the profile.
  */
+import { flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { defineComponent, h } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -114,5 +115,32 @@ describe('Visu router — device start page', () => {
     await router.push('/manage')
 
     expect(router.currentRoute.value.name).toBe('login')
+  })
+
+  it('replaces a protected page with the login when the session expires, so the page is not in the history twice', async () => {
+    jwt.mockReturnValue('token')
+    admin.mockReturnValue(true)
+    const { router } = await freshRouter()
+    await router.push('/')
+    await router.push('/manage')
+    const back = window.history.state.back
+
+    window.dispatchEvent(new CustomEvent('visu:unauthorized'))
+    await flushPromises()
+
+    expect(router.currentRoute.value.name).toBe('login')
+    expect(router.currentRoute.value.query.redirect).toBe('/manage')
+    expect(window.history.state.replaced).toBe(true)
+    expect(window.history.state.back).toBe(back)
+  })
+
+  it('ignores an expired session on a public page', async () => {
+    const { router } = await freshRouter()
+    await router.push('/page-1')
+
+    window.dispatchEvent(new CustomEvent('visu:unauthorized'))
+    await flushPromises()
+
+    expect(router.currentRoute.value.name).toBe('viewer')
   })
 })

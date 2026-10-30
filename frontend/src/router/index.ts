@@ -88,7 +88,9 @@ router.beforeEach((to) => {
 window.addEventListener('visu:unauthorized', () => {
   const current = router.currentRoute.value
   if (current.meta.requiresAuth) {
-    router.push({ name: 'login', query: { redirect: current.fullPath } })
+    // `replace` for the same reason as in AuthButton: after the login the page is
+    // back in the history exactly once.
+    router.replace({ name: 'login', query: { redirect: current.fullPath } })
   }
 })
 

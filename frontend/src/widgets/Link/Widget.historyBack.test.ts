@@ -4,15 +4,17 @@
  * falling back to `target_node_id` when there is no history.
  */
 import { mount } from '@vue/test-utils'
+import { reactive } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import LinkWidget from './Widget.vue'
 import LinkConfig from './Config.vue'
 
 const router = vi.hoisted(() => ({ push: vi.fn(), back: vi.fn() }))
+const route = reactive({ params: { id: 'current' }, fullPath: '/current' })
 
 vi.mock('vue-router', () => ({
   useRouter: () => router,
-  useRoute: () => ({ params: { id: 'current' } }),
+  useRoute: () => route,
 }))
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 vi.mock('@/components/VisuIcon.vue', () => ({ default: { template: '<span />' } }))
@@ -47,6 +49,7 @@ beforeEach(() => {
 
 afterEach(() => {
   window.history.replaceState(null, '')
+  route.fullPath = '/current'
 })
 
 describe('Link widget — history_back', () => {
@@ -90,11 +93,41 @@ describe('Link widget — history_back', () => {
     expect(router.push).not.toHaveBeenCalled()
   })
 
-  it('shows no "no target" hint when the option is set', () => {
+  it('shows the arrow instead of the "no target" hint when there is a page to go back to', () => {
+    setHistoryBack('/previous')
     const wrapper = mountLink({ history_back: true })
 
     expect(wrapper.find('[data-testid="link-no-target"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('→')
+  })
+
+  it('shows the "no target" hint without history and without a fallback page, until there is history', async () => {
+    // Opened directly (bookmark, kiosk start, new tab): nothing to go back to, no fallback.
+    setHistoryBack(null)
+    const wrapper = mountLink({ history_back: true })
+    expect(wrapper.get('[data-testid="link-no-target"]').text()).toBe('widgets.link.noTarget')
+    expect(wrapper.text()).not.toContain('→')
+
+    // The next navigation brings history with it.
+    setHistoryBack('/current')
+    route.fullPath = '/next'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="link-no-target"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('→')
+  })
+
+  it('shows the arrow for the fallback page even without history', () => {
+    setHistoryBack(null)
+    const wrapper = mountLink({ history_back: true, target_node_id: 'target' })
+
+    expect(wrapper.find('[data-testid="link-no-target"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('→')
+  })
+
+  it('tells the editor about a missing fallback page, whatever the browser history', () => {
+    setHistoryBack('/previous')
+    expect(mountLink({ history_back: true }, true).get('[data-testid="link-no-target"]').text()).toBe('widgets.link.noTarget')
+    expect(mountLink({ history_back: true, target_node_id: 'target' }, true).find('[data-testid="link-no-target"]').exists()).toBe(false)
   })
 
   it('still shows the "no target" hint without the option and without a target', () => {
