@@ -571,118 +571,122 @@ async def _import_knx_devices_and_comm_objects(
     # stall the event loop.
     devices, comm_objects, co_ga_links = await run_in_threadpool(parse_knxproj_devices, file_bytes, password)
 
-    await db.execute("SAVEPOINT knx_device_snapshot")
-    try:
-        existing_hierarchy_links = await db.fetchall("SELECT node_id, device_id FROM hierarchy_device_links")
-        # Keep the latest project snapshot deterministic: tables mirror the current
-        # imported .knxproj payload.
-        await db.execute("DELETE FROM knx_co_ga_links")
-        await db.execute("DELETE FROM knx_comm_objects")
-        await db.execute("DELETE FROM knx_space_device_links")
-        await db.execute("DELETE FROM knx_devices")
+    # Own both DB locks before the snapshot; a legacy SAVEPOINT alone can
+    # deadlock against concurrent value persistence when the import reads again.
+    async with db.transaction():
+        await db.execute("SAVEPOINT knx_device_snapshot")
+        try:
+            existing_hierarchy_links = await db.fetchall("SELECT node_id, device_id FROM hierarchy_device_links")
+            # Keep the latest project snapshot deterministic: tables mirror the current
+            # imported .knxproj payload.
+            await db.execute("DELETE FROM knx_co_ga_links")
+            await db.execute("DELETE FROM knx_comm_objects")
+            await db.execute("DELETE FROM knx_space_device_links")
+            await db.execute("DELETE FROM knx_devices")
 
-        if devices:
-            await db.executemany(
-                """INSERT INTO knx_devices
-                       (id, individual_address, name, description, product_name, product_refid, hardware2program_refid, imported_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                [
+            if devices:
+                await db.executemany(
+                    """INSERT INTO knx_devices
+                           (id, individual_address, name, description, product_name, product_refid, hardware2program_refid, imported_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    [
+                        (
+                            d.identifier,
+                            d.individual_address,
+                            d.name,
+                            d.description,
+                            d.manufacturer_name,
+                            d.order_number,
+                            d.application or "",
+                            now,
+                        )
+                        for d in devices
+                        if d.identifier and d.individual_address
+                    ],
+                )
+
+                imported_device_ids = {d.identifier for d in devices if d.identifier and d.individual_address}
+                preserved_hierarchy_links = [
+                    (str(uuid_mod.uuid4()), row["node_id"], row["device_id"], now)
+                    for row in existing_hierarchy_links
+                    if row["device_id"] in imported_device_ids
+                ]
+                if preserved_hierarchy_links:
+                    await db.executemany(
+                        "INSERT OR IGNORE INTO hierarchy_device_links (id, node_id, device_id, created_at) VALUES (?, ?, ?, ?)",
+                        preserved_hierarchy_links,
+                    )
+
+                device_space_links = [
+                    (d.space_id, d.identifier) for d in devices if d.space_id and d.identifier and d.identifier in imported_device_ids
+                ]
+                if device_space_links:
+                    space_ids = list(dict.fromkeys(space_id for space_id, _ in device_space_links if space_id))
+                    placeholders = ",".join("?" * len(space_ids))
+                    existing_space_rows = await db.fetchall(
+                        f"SELECT id FROM knx_locations WHERE id IN ({placeholders})",
+                        space_ids,
+                    )
+                    existing_space_ids = {row["id"] for row in existing_space_rows}
+                    space_link_rows = [(space_id, device_id) for space_id, device_id in device_space_links if space_id in existing_space_ids]
+                    if space_link_rows:
+                        await db.executemany(
+                            "INSERT OR IGNORE INTO knx_space_device_links (space_id, device_id) VALUES (?, ?)",
+                            space_link_rows,
+                        )
+
+            device_id_by_pa = {d.individual_address: d.identifier for d in devices if d.individual_address and d.identifier}
+            imported_comm_ids: set[str] = set()
+            comm_rows: list[tuple[str, str, str, str, str, str, str, str]] = []
+            for co in comm_objects:
+                if not co.identifier:
+                    continue
+                device_id = device_id_by_pa.get(co.device_address)
+                if not device_id:
+                    continue
+                imported_comm_ids.add(co.identifier)
+                comm_rows.append(
                     (
-                        d.identifier,
-                        d.individual_address,
-                        d.name,
-                        d.description,
-                        d.manufacturer_name,
-                        d.order_number,
-                        d.application or "",
+                        co.identifier,
+                        device_id,
+                        str(co.number),
+                        co.name,
+                        co.text,
+                        co.function_text,
+                        ",".join(co.dpts),
                         now,
                     )
-                    for d in devices
-                    if d.identifier and d.individual_address
-                ],
-            )
+                )
 
-            imported_device_ids = {d.identifier for d in devices if d.identifier and d.individual_address}
-            preserved_hierarchy_links = [
-                (str(uuid_mod.uuid4()), row["node_id"], row["device_id"], now)
-                for row in existing_hierarchy_links
-                if row["device_id"] in imported_device_ids
-            ]
-            if preserved_hierarchy_links:
+            if comm_rows:
                 await db.executemany(
-                    "INSERT OR IGNORE INTO hierarchy_device_links (id, node_id, device_id, created_at) VALUES (?, ?, ?, ?)",
-                    preserved_hierarchy_links,
+                    """INSERT INTO knx_comm_objects
+                           (id, device_id, number, name, text, function_text, datapoint_type, imported_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    comm_rows,
                 )
 
-            device_space_links = [(d.space_id, d.identifier) for d in devices if d.space_id and d.identifier and d.identifier in imported_device_ids]
-            if device_space_links:
-                space_ids = list(dict.fromkeys(space_id for space_id, _ in device_space_links if space_id))
-                placeholders = ",".join("?" * len(space_ids))
-                existing_space_rows = await db.fetchall(
-                    f"SELECT id FROM knx_locations WHERE id IN ({placeholders})",
-                    space_ids,
+            link_rows: list[tuple[str, str]] = []
+            for link in co_ga_links:
+                if link.comm_object_id in imported_comm_ids and link.ga_address:
+                    link_rows.append((link.comm_object_id, link.ga_address))
+
+            if link_rows:
+                # Ensure FK target exists even if a downstream tool inserted links first.
+                await db.executemany(
+                    "INSERT OR IGNORE INTO knx_group_addresses (address) VALUES (?)",
+                    [(ga,) for _, ga in link_rows],
                 )
-                existing_space_ids = {row["id"] for row in existing_space_rows}
-                space_link_rows = [(space_id, device_id) for space_id, device_id in device_space_links if space_id in existing_space_ids]
-                if space_link_rows:
-                    await db.executemany(
-                        "INSERT OR IGNORE INTO knx_space_device_links (space_id, device_id) VALUES (?, ?)",
-                        space_link_rows,
-                    )
-
-        device_id_by_pa = {d.individual_address: d.identifier for d in devices if d.individual_address and d.identifier}
-        imported_comm_ids: set[str] = set()
-        comm_rows: list[tuple[str, str, str, str, str, str, str, str]] = []
-        for co in comm_objects:
-            if not co.identifier:
-                continue
-            device_id = device_id_by_pa.get(co.device_address)
-            if not device_id:
-                continue
-            imported_comm_ids.add(co.identifier)
-            comm_rows.append(
-                (
-                    co.identifier,
-                    device_id,
-                    str(co.number),
-                    co.name,
-                    co.text,
-                    co.function_text,
-                    ",".join(co.dpts),
-                    now,
+                await db.executemany(
+                    "INSERT OR IGNORE INTO knx_co_ga_links (comm_object_id, ga_address) VALUES (?, ?)",
+                    link_rows,
                 )
-            )
+            await db.execute("RELEASE SAVEPOINT knx_device_snapshot")
+        except Exception:
+            await db.execute("ROLLBACK TO SAVEPOINT knx_device_snapshot")
+            await db.execute("RELEASE SAVEPOINT knx_device_snapshot")
+            raise
 
-        if comm_rows:
-            await db.executemany(
-                """INSERT INTO knx_comm_objects
-                       (id, device_id, number, name, text, function_text, datapoint_type, imported_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                comm_rows,
-            )
-
-        link_rows: list[tuple[str, str]] = []
-        for link in co_ga_links:
-            if link.comm_object_id in imported_comm_ids and link.ga_address:
-                link_rows.append((link.comm_object_id, link.ga_address))
-
-        if link_rows:
-            # Ensure FK target exists even if a downstream tool inserted links first.
-            await db.executemany(
-                "INSERT OR IGNORE INTO knx_group_addresses (address) VALUES (?)",
-                [(ga,) for _, ga in link_rows],
-            )
-            await db.executemany(
-                "INSERT OR IGNORE INTO knx_co_ga_links (comm_object_id, ga_address) VALUES (?, ?)",
-                link_rows,
-            )
-        await db.execute("RELEASE SAVEPOINT knx_device_snapshot")
-    except Exception:
-        await db.execute("ROLLBACK TO SAVEPOINT knx_device_snapshot")
-        await db.execute("RELEASE SAVEPOINT knx_device_snapshot")
-        raise
-
-    await db.commit()
     return len(devices), len(comm_rows)
 
 
