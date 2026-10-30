@@ -155,6 +155,103 @@ describe('BindingForm — HOME_ASSISTANT create submit', () => {
   })
 })
 
+describe('BindingForm — HOME_ASSISTANT edit keeps the declarative mapping (#1392)', () => {
+  it('round-trips profile, actions, inbound overrides and the import identity', async () => {
+    const config = {
+      entity_id: 'lock.shed',
+      attribute: 'battery',
+      service_domain: 'lock',
+      service_name: 'lock',
+      service_data_key: 'code',
+      profile: 'lock.boolean_locked',
+      state_map: { locked: true },
+      transitional_states: ['locking'],
+      fault_states: ['jammed'],
+      write_actions: { true: { domain: 'lock', name: 'lock' } },
+      ha_uid: 'a'.repeat(32),
+    }
+    const w = await mountForm({
+      dpDataType: 'BOOLEAN',
+      initial: { id: 'b1', adapter_type: 'HOME_ASSISTANT', adapter_instance_id: 'ha-1', direction: 'BOTH', enabled: true, config },
+    })
+    await submit(w)
+    expect(updateBinding.mock.calls[0][2].config).toEqual(config)
+    w.unmount()
+  })
+
+  it('drops the import identity when the entity is changed and trims the entity id', async () => {
+    const w = await mountForm({
+      initial: {
+        id: 'b3', adapter_type: 'HOME_ASSISTANT', adapter_instance_id: 'ha-1', direction: 'SOURCE', enabled: true,
+        config: { entity_id: 'light.a', profile: 'light.on_off', ha_uid: 'b'.repeat(32) },
+      },
+    })
+    await w.find('[data-testid="config-field-entity_id"]').setValue(' light.b ')
+    await submit(w)
+    expect(updateBinding.mock.calls[0][2].config).toEqual({ entity_id: 'light.b', profile: 'light.on_off' })
+    w.unmount()
+  })
+
+  it('keeps the import identity when only case or whitespace of the entity id differ', async () => {
+    const w = await mountForm({
+      initial: {
+        id: 'b5', adapter_type: 'HOME_ASSISTANT', adapter_instance_id: 'ha-1', direction: 'SOURCE', enabled: true,
+        config: { entity_id: 'Light.A ', profile: 'light.on_off', ha_uid: 'b'.repeat(32) },
+      },
+    })
+    await w.find('[data-testid="config-field-entity_id"]').setValue(' light.A')
+    await submit(w)
+    expect(updateBinding.mock.calls[0][2].config).toEqual({ entity_id: 'light.A', profile: 'light.on_off', ha_uid: 'b'.repeat(32) })
+    w.unmount()
+  })
+
+  it('keeps read_as and blocks saving while the advanced JSON is invalid', async () => {
+    const w = await mountForm({
+      initial: {
+        id: 'b4', adapter_type: 'HOME_ASSISTANT', adapter_instance_id: 'ha-1', direction: 'SOURCE', enabled: true,
+        config: { entity_id: 'sensor.t', read_as: 'string' },
+      },
+    })
+    const area = w.find('[data-testid="config-field-ha-advanced"]')
+    await area.setValue('{broken')
+    await area.trigger('blur')
+    await submit(w)
+    expect(updateBinding).not.toHaveBeenCalled()
+    expect(w.text()).toContain('Ungültiges JSON')
+    await area.setValue('')
+    await area.trigger('blur')
+    await submit(w)
+    expect(updateBinding.mock.calls[0][2].config).toEqual({ entity_id: 'sensor.t', read_as: 'string' })
+    w.unmount()
+  })
+
+  it('unblocks saving when the HA form is mounted again with a valid mapping', async () => {
+    const w = await mountForm()
+    await selectInstance(w, 'ha-1')
+    const area = w.find('[data-testid="config-field-ha-advanced"]')
+    await area.setValue('{broken')
+    await area.trigger('blur')
+    await selectInstance(w, 'mqtt-1')
+    await selectInstance(w, 'ha-1')
+    expect(w.find('[data-testid="ha-advanced-invalid"]').exists()).toBe(false)
+    await submit(w)
+    expect(createBinding).toHaveBeenCalledWith('dp-1', expect.objectContaining({ adapter_instance_id: 'ha-1' }))
+    w.unmount()
+  })
+
+  it('drops empty mapping keys and a missing profile', async () => {
+    const w = await mountForm({
+      initial: {
+        id: 'b2', adapter_type: 'HOME_ASSISTANT', adapter_instance_id: 'ha-1', direction: 'SOURCE', enabled: true,
+        config: { entity_id: 'sensor.t', profile: null, read_as: null, transitional_states: [], action: null },
+      },
+    })
+    await submit(w)
+    expect(updateBinding.mock.calls[0][2].config).toEqual({ entity_id: 'sensor.t' })
+    w.unmount()
+  })
+})
+
 // ─── ioBroker submit ──────────────────────────────────────────────────────────
 
 describe('BindingForm — IOBROKER create submit', () => {

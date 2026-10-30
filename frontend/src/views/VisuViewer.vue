@@ -6,12 +6,13 @@ import { useVisuStore } from '@/stores/visu'
 import { useDatapointsStore } from '@/stores/datapoints'
 import { useWebSocket } from '@/composables/useWebSocket'
 import { useThemeStore } from '@/stores/theme'
+import { useDeviceStore } from '@/stores/device'
 import { WidgetRegistry } from '@/widgets/registry'
 import MissingWidget from '@/widgets/MissingWidget.vue'
 import Breadcrumb from '@/components/Breadcrumb.vue'
 import NodeOverview from '@/components/NodeOverview.vue'
 import AuthButton from '@/components/AuthButton.vue'
-import { getJwt, getSessionToken, setWriteContext, clearWriteContext, visuBackgrounds as bgApi } from '@/api/client'
+import { ApiRequestError, getJwt, getSessionToken, setWriteContext, clearWriteContext, visuBackgrounds as bgApi } from '@/api/client'
 import {
   cssBackgroundPosition,
   cssBackgroundRepeat,
@@ -19,6 +20,7 @@ import {
   parseBackgroundPresentation,
 } from '@/utils/backgroundPresentation'
 import type { WidgetInstance } from '@/types'
+import { isEmbedded } from '@/utils/embed'
 
 // Alle Widgets registrieren (self-registering via import)
 import '@/widgets/ValueDisplay/index'
@@ -50,12 +52,15 @@ const { t } = useI18n()
 const props = defineProps<{ id: string }>()
 const router = useRouter()
 const visuStore = useVisuStore()
+const device    = useDeviceStore()
 const dpStore = useDatapointsStore()
 const ws = useWebSocket()
 const theme = useThemeStore()
 
 const loading = ref(true)
 const error = ref('')
+// Als Alarm-Popup eingebettet: nur die Seite, ohne Kopfzeile.
+const embedded = isEmbedded()
 
 const node = computed(() => visuStore.getNode(props.id))
 const isPage = computed(() => node.value?.type === 'PAGE')
@@ -131,6 +136,7 @@ async function load() {
   error.value = ''
   loadRunning = true
   nodeAppearedWhileLoading = false
+  let concealedProfileStart = false
   try {
     if (!visuStore.treeLoaded) await visuStore.loadTree()
     await visuStore.loadBreadcrumb(props.id)
@@ -167,15 +173,42 @@ async function load() {
       await dpStore.fetchInitialValues(allDpIds.value)
     }
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : t('common.loadError')
+    concealedProfileStart = await isConcealedProfileStart(e)
+    if (!concealedProfileStart) error.value = e instanceof Error ? e.message : t('common.loadError')
   } finally {
     loading.value = false
     loadRunning = false
   }
+  // Ist der Knoten während des Ladens (etwa beim Warten auf die Profile) im Baum
+  // aufgetaucht, geht der neue Versuch vor — er kennt den Zugriff, nicht der alte Stand.
   if (nodeAppearedWhileLoading) {
     nodeAppearedWhileLoading = false
     await load()
+    return
   }
+  if (concealedProfileStart) {
+    router.push({ name: 'login', query: { redirect: router.currentRoute.value.fullPath } })
+  }
+}
+
+// Die Startseite eines Geräteprofils, die laut Server existiert, aber im anonym
+// gefilterten Baum fehlt, verlangt eine Anmeldung. Der Breadcrumb dazu antwortet
+// ohne Anmeldung mit 404 — ohne diese Prüfung bliebe statt des Logins die
+// Fehlerseite stehen.
+const CONCEALED_STATUS = new Set([401, 403, 404])
+
+async function isConcealedProfileStart(e: unknown): Promise<boolean> {
+  if (getJwt()) return false
+  // Nur ein Baum, der wirklich angekommen ist und den Knoten nicht enthält, sagt
+  // „verborgen“. Ein Netzfehler oder ein 5xx (OBS startet gerade neu) sagt nichts
+  // über den Zugriff — dann bleibt die Fehlerseite, nicht der Login.
+  if (!visuStore.treeLoaded || visuStore.getNode(props.id)) return false
+  if (!(e instanceof ApiRequestError) || !CONCEALED_STATUS.has(e.status ?? 0)) return false
+  // Bei einem Direktaufruf der Seite können die Profile nach dem Baum eintreffen.
+  await device.load()
+  if (visuStore.getNode(props.id)) return false  // der Baum wurde derweil neu geholt
+  const profile = device.profile
+  return profile?.start_node_id === props.id && !profile.start_node_missing
 }
 
 // Session abgelaufen (z.B. nach Server-Neustart) — erneut laden; load() leitet zu PIN-Auth weiter
@@ -275,7 +308,7 @@ function widgetChrome(w: WidgetInstance): string {
 <template>
   <div class="min-h-screen bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100 flex flex-col">
     <!-- Header -->
-    <header class="border-b border-gray-200 dark:border-gray-800 px-6 py-3 flex items-center justify-between gap-4 flex-shrink-0 bg-gray-50 dark:bg-gray-900">
+    <header v-if="!embedded" class="border-b border-gray-200 dark:border-gray-800 px-6 py-3 flex items-center justify-between gap-4 flex-shrink-0 bg-gray-50 dark:bg-gray-900">
       <Breadcrumb />
       <div class="flex items-center gap-2">
         <button

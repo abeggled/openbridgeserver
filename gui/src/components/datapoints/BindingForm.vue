@@ -39,12 +39,15 @@
             :disabled="selectedAdapterType === 'ZEITSCHALTUHR'"
             data-testid="select-direction"
           >
-            <option value="SOURCE">{{ $t('adapters.bindingForm.directionRead') }}</option>
+            <option v-if="!props.dpSystem" value="SOURCE">{{ $t('adapters.bindingForm.directionRead') }}</option>
             <option v-if="selectedAdapterType !== 'ZEITSCHALTUHR'" value="DEST">{{ $t('adapters.bindingForm.directionWrite') }}</option>
-            <option v-if="selectedAdapterType !== 'ZEITSCHALTUHR'" value="BOTH">{{ $t('adapters.bindingForm.directionReadWrite') }}</option>
+            <option v-if="selectedAdapterType !== 'ZEITSCHALTUHR' && !props.dpSystem" value="BOTH">{{ $t('adapters.bindingForm.directionReadWrite') }}</option>
           </select>
           <p v-if="selectedAdapterType === 'ZEITSCHALTUHR'" class="hint">
             {{ $t('adapters.bindingForm.timerReadOnlyHint') }}
+          </p>
+          <p v-if="props.dpSystem" class="hint" data-testid="system-dest-only-hint">
+            {{ $t('adapters.bindingForm.systemDestOnlyHint') }}
           </p>
         </div>
       </div>
@@ -108,6 +111,9 @@
       <BindingFormHomeAssistant
         v-if="selectedAdapterType === 'HOME_ASSISTANT'"
           :cfg="cfg"
+          :selected-instance-id="selectedInstanceId"
+          :dp-data-type="dpDataType"
+          @advanced-validity="valid => (haAdvancedValid = valid)"
         />
 
       <!-- ioBroker -->
@@ -332,6 +338,7 @@ import BindingFormModbus from '@/components/datapoints/binding-form/BindingFormM
 import BindingFormMqtt from '@/components/datapoints/binding-form/BindingFormMqtt.vue'
 import BindingFormOnewire from '@/components/datapoints/binding-form/BindingFormOnewire.vue'
 import BindingFormHomeAssistant from '@/components/datapoints/binding-form/BindingFormHomeAssistant.vue'
+import { HA_MAPPING_KEYS } from '@/utils/haMapping'
 import BindingFormIoBroker from '@/components/datapoints/binding-form/BindingFormIoBroker.vue'
 import BindingFormTimer from '@/components/datapoints/binding-form/BindingFormTimer.vue'
 import BindingFormPresenceSimulation from '@/components/datapoints/binding-form/BindingFormPresenceSimulation.vue'
@@ -348,6 +355,7 @@ const props = defineProps({
   dpPersistValue: { type: Boolean, default: false },
   dpDataType:     { type: String,  default: 'UNKNOWN' },  // DataPoint.data_type for compat check
   dpUnit:         { type: String,  default: '' },         // DataPoint.unit, shown next to typed value inputs
+  dpSystem:       { type: Boolean, default: false },      // read-only system DataPoint (#1370): DEST or MESSAGE only
 })
 const emit = defineEmits(['save', 'cancel'])
 const { t } = useI18n()
@@ -372,7 +380,7 @@ const DIRECTION_LOCKED_TYPES = ['ANWESENHEITSSIMULATION', 'MESSAGE', 'WEBHOOK']
 
 const form = reactive({
   adapter_instance_id:  '',
-  direction:            'SOURCE',
+  direction:            props.dpSystem ? 'DEST' : 'SOURCE',
   enabled:              true,
   value_formula:        '',
   formula_preset:       '',
@@ -406,6 +414,7 @@ const cfg = reactive({
   sensor_id: '', property: 'temperature',
   // HOME_ASSISTANT
   entity_id: '', attribute: '', service_domain: '', service_name: '', service_data_key: '',
+  profile: '', read_as: '', action: null, write_actions: null, state_map: null, transitional_states: [], fault_states: [], ha_uid: '',
   // IOBROKER
   state_id: '', command_state_id: '', ack: false,
   // ANWESENHEITSSIMULATION
@@ -500,6 +509,7 @@ const mqttBrowseLoading = ref(false)
 const mqttBrowseError  = ref(null)
 
 // ioBroker state browser state
+const haAdvancedValid = ref(true)
 const iobrokerStates = ref([])
 const iobrokerBrowseLoading = ref(false)
 const iobrokerBrowseError = ref(null)
@@ -633,6 +643,9 @@ const groupedDpts = computed(() => {
 const groupedInstances = computed(() => {
   const groups = {}
   for (const inst of allInstances.value) {
+    // A read-only system DataPoint (#1370) only goes to adapters that pass its
+    // value on or watch it; the backend decides which (system_bindable).
+    if (props.dpSystem && inst.system_bindable === false) continue
     if (!groups[inst.adapter_type]) groups[inst.adapter_type] = []
     groups[inst.adapter_type].push(inst)
   }
@@ -676,6 +689,8 @@ watch(() => props.initial, val => {
   if (cfg.service_domain   == null) cfg.service_domain   = ''
   if (cfg.service_name     == null) cfg.service_name     = ''
   if (cfg.service_data_key == null) cfg.service_data_key = ''
+  if (cfg.profile          == null) cfg.profile          = ''
+  if (cfg.read_as          == null) cfg.read_as          = ''
   // IOBROKER defaults when loading
   if (cfg.state_id         == null) cfg.state_id = ''
   if (cfg.command_state_id == null) cfg.command_state_id = ''
@@ -865,6 +880,12 @@ async function browseIoBrokerStates() {
 }
 
 function selectIoBrokerState(state) {
+  // A system DataPoint can only send (#1370): a state ioBroker marks read-only
+  // is no target for it, and switching to SOURCE would be refused on save.
+  if (props.dpSystem && !state.write) {
+    iobrokerBrowseError.value = t('adapters.bindingForm.errors.ioBrokerStateNotWritable')
+    return
+  }
   cfg.state_id = state.id
   if (state.type && !cfg.source_data_type) {
     const t = String(state.type).toLowerCase()
@@ -1046,6 +1067,7 @@ watch(() => cfg.source_data_type, sdt => {
 // Force direction to SOURCE for adapters that observe values instead of writing.
 watch(selectedAdapterType, type => {
   if (type === 'ZEITSCHALTUHR' || type === 'MESSAGE' || type === 'WEBHOOK') form.direction = 'SOURCE'
+  else if (props.dpSystem) form.direction = 'DEST'
   if (type === 'IOBROKER') {
     activeTab.value = 'conn'
     showAdvancedTabs.value = false
@@ -1339,11 +1361,22 @@ function buildConfig() {
     return { sensor_id: cfg.sensor_id, property: cfg.property || 'temperature' }
   }
   if (type === 'HOME_ASSISTANT') {
-    const c = { entity_id: cfg.entity_id }
+    const c = { entity_id: cfg.entity_id.trim() }
     if (cfg.attribute?.trim())        c.attribute        = cfg.attribute.trim()
     if (cfg.service_domain?.trim())   c.service_domain   = cfg.service_domain.trim()
     if (cfg.service_name?.trim())     c.service_name     = cfg.service_name.trim()
     if (cfg.service_data_key?.trim()) c.service_data_key = cfg.service_data_key.trim()
+    if (cfg.profile)                  c.profile          = cfg.profile
+    if (cfg.read_as)                  c.read_as          = cfg.read_as
+    // Declarative mapping (#1392) and the import identity survive an edit unchanged.
+    for (const key of HA_MAPPING_KEYS) {
+      const v = cfg[key]
+      if (v != null && !(Array.isArray(v) && v.length === 0)) c[key] = v
+    }
+    // The import identity belongs to the imported entity: editing the entity drops it.
+    // HA entity ids are case-insensitive: only a different entity counts as edited.
+    const initialEntity = String(props.initial?.config?.entity_id ?? '').trim().toLowerCase()
+    if (cfg.ha_uid && c.entity_id.toLowerCase() === initialEntity) c.ha_uid = cfg.ha_uid
     return c
   }
   if (type === 'IOBROKER') {
@@ -1466,6 +1499,10 @@ function buildConfig() {
 
 async function submit() {
   error.value  = null
+  if (selectedAdapterType.value === 'HOME_ASSISTANT' && !haAdvancedValid.value) {
+    error.value = t('adapters.bindingForm.haAdvancedInvalid')  // never save the previous mapping silently
+    return
+  }
   saving.value = true
   try {
     const config     = buildConfig()

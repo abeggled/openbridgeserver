@@ -344,6 +344,21 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
         audit_effect=AuditEffect.EXTERNAL_MUTATION,
         details=("resource_count", "payload_sha256"),
     ),
+    ("POST", "/api/v1/adapters/instances/{instance_id}/homeassistant/import-preview"): _policy(
+        "adapter_instance",
+        "adapter.homeassistant.import_previewed",
+        result=True,
+        capability="adapter.declared",
+        details=("resource_count", "payload_sha256"),
+    ),
+    ("POST", "/api/v1/adapters/instances/{instance_id}/homeassistant/import"): _policy(
+        "adapter_instance",
+        "adapter.homeassistant.imported",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
+        capability="adapter.create_datapoint+link_binding",
+        details=("resource_count", "payload_sha256", "error_count"),
+    ),
     ("POST", "/api/v1/adapters/instances/{instance_id}/iobroker/import-preview"): _policy(
         "adapter_instance",
         "adapter.iobroker.import_previewed",
@@ -394,10 +409,16 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
         ),
     ),
     ("POST", "/api/v1/system/history/test"): _admin("history_settings", "system.history.connection_tested", result=True),
+    ("PUT", "/api/v1/system/visu-devices"): _admin("visu_devices", "system.visu_devices.updated"),
+    ("PUT", "/api/v1/system/visu-alarms"): _admin("visu_alarms", "system.visu_alarms.updated"),
     ("POST", "/api/v1/system/nav-links"): _admin("nav_link", "system.nav_link.created"),
     ("PATCH", "/api/v1/system/nav-links/{link_id}"): _admin("nav_link", "system.nav_link.updated"),
     ("DELETE", "/api/v1/system/nav-links/{link_id}"): _admin("nav_link", "system.nav_link.deleted"),
     ("PUT", "/api/v1/system/log-level"): _admin("log_level", "system.log_level.updated", result=True),
+    # Update check (#1370): a manual check is an outbound request to GitHub,
+    # the channel decides which releases count as updates.
+    ("POST", "/api/v1/system/update-status/check"): _admin("update_status", "system.update.checked", result=True),
+    ("PUT", "/api/v1/system/update-channel"): _admin("update_channel", "system.update.channel_updated", result=True, details=("after", "before")),
     ("POST", "/api/v1/support/debug-log"): _admin("debug_log", "support.debug_log.enabled", result=True),
     ("DELETE", "/api/v1/support/debug-log"): _admin("debug_log", "support.debug_log.disabled", result=True),
     ("POST", "/api/v1/ringbuffer/filtersets"): _policy(
