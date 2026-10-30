@@ -24,6 +24,7 @@ import pytest
 from fastapi import HTTPException
 from jose import jwt
 
+import obs.adapters.knx.adapter  # noqa: F401 — registers KNX and its direction check (#1402)
 import obs.api.auth as auth_module
 import obs.api.v1.bindings as bindings_api
 import obs.api.v1.datapoints as dp_api
@@ -1902,8 +1903,6 @@ class TestCreateBinding:
 
     def test_validate_knx_binding_rejects_read_interval_on_dest(self):
         """Issue #1402: only SOURCE/BOTH poll, so DEST would store an interval that never reads."""
-        import obs.adapters.knx.adapter  # noqa: F401 — registers KNX and its direction check
-
         with pytest.raises(HTTPException) as exc:
             bindings_api._validate_adapter_binding("KNX", "DEST", {"group_address": "1/1/1", "read_interval_s": 60})
 
@@ -1922,14 +1921,10 @@ class TestCreateBinding:
         ],
     )
     def test_validate_knx_binding_accepts_read_interval_where_it_polls(self, direction, config):
-        import obs.adapters.knx.adapter  # noqa: F401 — registers KNX and its direction check
-
         bindings_api._validate_adapter_binding("KNX", direction, config)
 
     def test_validate_knx_binding_skips_direction_check_when_config_is_not_validated(self):
         """A PATCH touching neither config nor direction must not trip over the stored config."""
-        import obs.adapters.knx.adapter  # noqa: F401 — registers KNX and its direction check
-
         bindings_api._validate_adapter_binding("KNX", "DEST", {"group_address": "1/1/1", "read_interval_s": 60}, validate_schema=False)
 
 
@@ -1939,6 +1934,37 @@ class TestCreateBinding:
 
 
 class TestUpdateBinding:
+    @pytest.mark.asyncio
+    async def test_direction_only_patch_to_dest_rejects_a_stored_read_interval(self, monkeypatch):
+        """Issue #1402: switching a polling KNX binding to DEST must not keep an interval that never reads."""
+        assert bindings_api._has_direction_check("KNX") is True
+        current_row = _make_row(
+            id=str(uuid.uuid4()),
+            datapoint_id=str(uuid.uuid4()),
+            adapter_type="KNX",
+            adapter_instance_id=str(uuid.uuid4()),
+            direction="SOURCE",
+            config='{"group_address": "1/2/3", "read_interval_s": 60}',
+            enabled=1,
+            send_throttle_ms=None,
+            send_on_change=0,
+            send_min_delta=None,
+            send_min_delta_pct=None,
+            value_formula=None,
+            value_map=None,
+        )
+        db = _DbStub(fetchone_result=current_row)
+        monkeypatch.setattr(bindings_api, "_reload_adapter_instance", AsyncMock())
+
+        with pytest.raises(HTTPException) as exc:
+            await bindings_api.update_binding(
+                dp_id=uuid.uuid4(), binding_id=uuid.uuid4(), body=AdapterBindingUpdate(direction="DEST"), _user="admin", db=db
+            )
+
+        assert exc.value.status_code == 422
+        assert "read_interval_s" in exc.value.detail
+        bindings_api._reload_adapter_instance.assert_not_awaited()
+
     @pytest.mark.asyncio
     async def test_update_binding_not_found_raises_404(self, monkeypatch):
         db = _DbStub(fetchone_result=None)
