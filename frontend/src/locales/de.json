@@ -655,7 +655,8 @@
       "showIcon": "Icon anzeigen",
       "preserveIconColor": "SVG-Icon-Farbe erhalten (kein Schwarz/Weiß)",
       "targetPage": "Ziel-Seite",
-      "title": "Link"
+      "title": "Link",
+      "historyBack": "Zurück zur zuvor besuchten Seite (ohne Verlauf: Zielseite)"
     },
     "qrcode": {
       "title": "QR-Code",

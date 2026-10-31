@@ -88,6 +88,8 @@ router.beforeEach((to) => {
 window.addEventListener('visu:unauthorized', () => {
   const current = router.currentRoute.value
   if (current.meta.requiresAuth) {
+    // `push`, like the header button: the page stays behind the login for the way
+    // back, and LoginView goes back to it after the login instead of adding it again.
     router.push({ name: 'login', query: { redirect: current.fullPath } })
   }
 })
