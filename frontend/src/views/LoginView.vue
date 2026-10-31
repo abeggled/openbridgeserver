@@ -27,9 +27,13 @@ async function login() {
     // neu angemeldet werden (Issue #1160)
     await store.login(res.access_token, res.refresh_token)
     ws.connect()
-    // Zurück zur ursprünglichen Seite oder zur Übersicht
+    // Zurück zur ursprünglichen Seite oder zur Übersicht, ohne dass die Anmeldeseite
+    // im Verlauf bleibt. Liegt die Seite direkt hinter der Anmeldeseite (Header-Button,
+    // abgelaufene Sitzung), führt „zurück“ dorthin — sie wäre sonst doppelt im Verlauf.
+    // Andernfalls (Guard-Umleitung, verborgene Seite) ersetzt sie den Eintrag.
     const redirect = route.query.redirect as string | undefined
-    router.push(redirect ?? { name: 'tree' })
+    if (redirect && window.history.state?.back === redirect) router.back()
+    else router.replace(redirect ?? { name: 'tree' })
   } catch (e: unknown) {
     error.value = e instanceof Error ? e.message : t('login.failed')
   } finally {
@@ -83,7 +87,7 @@ async function login() {
 
       <button
         class="mt-4 w-full text-sm text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
-        @click="router.push({ name: 'tree' })"
+        @click="router.replace({ name: 'tree' })"
       >
         {{ $t('login.backWithoutLogin') }}
       </button>

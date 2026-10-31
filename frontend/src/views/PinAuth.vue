@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useVisuStore } from '@/stores/visu'
 
 const props = defineProps<{ id: string }>()
 const { t } = useI18n()
 const router = useRouter()
+const route = useRoute()
 const store = useVisuStore()
 
 const pin = ref('')
@@ -19,8 +20,11 @@ async function submit() {
   loading.value = true
   try {
     await store.authenticatePin(props.id, pin.value)
-    // Erfolg → zurück zur Seite
-    router.push({ name: 'viewer', params: { id: props.id } })
+    // Erfolg → zurück zur angeforderten Seite (`redirect`; `id` ist der Knoten, der
+    // den Schutz definiert, etwa der Ort einer Unterseite). `replace`: der PIN-Dialog
+    // soll nicht im Verlauf bleiben, sonst führt „zurück“ von der Seite wieder hierher.
+    const redirect = route.query.redirect
+    router.replace(typeof redirect === 'string' ? redirect : { name: 'viewer', params: { id: props.id } })
   } catch {
     error.value = t('pin.wrongPin')
     pin.value = ''
@@ -63,7 +67,7 @@ async function submit() {
 
       <button
         class="mt-4 w-full text-sm text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
-        @click="router.push({ name: 'tree' })"
+        @click="router.replace({ name: 'tree' })"
       >
         {{ $t('common.back') }}
       </button>

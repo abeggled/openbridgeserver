@@ -131,8 +131,25 @@ watch(allDpIds, (newIds, oldIds) => {
 // Änderung mehr, die einen zweiten Versuch auslösen könnte.
 let loadRunning = false
 let nodeAppearedWhileLoading = false
+// Ein Lauf, der noch auf Baum, Breadcrumb oder Seite wartet, während die Seite
+// schon gewechselt oder der Viewer geschlossen wurde, darf danach nichts mehr tun —
+// vor allem keinen Verlaufseintrag der inzwischen offenen Seite ersetzen.
+let loadGeneration = 0
+
+// Die Anmeldeseite ersetzt den Verlaufseintrag der Seite und wird nach der Anmeldung
+// ihrerseits durch die Seite ersetzt — sonst bliebe sie im Verlauf stehen, und
+// „zurück“ (Link-Widget) landete auf ihr. Der PIN-Dialog bekommt die angeforderte
+// Seite mit, denn `id` ist der Knoten, der den Schutz definiert (etwa der Ort).
+function redirectToLogin() {
+  router.replace({ name: 'login', query: { redirect: router.currentRoute.value.fullPath } })
+}
+function redirectToPin(definingId: string) {
+  router.replace({ name: 'pin-auth', params: { id: definingId }, query: { redirect: router.currentRoute.value.fullPath } })
+}
 
 async function load() {
+  const generation = ++loadGeneration
+  const stale = () => generation !== loadGeneration
   loading.value = true
   error.value = ''
   loadRunning = true
@@ -141,24 +158,26 @@ async function load() {
   try {
     if (!visuStore.treeLoaded) await visuStore.loadTree()
     await visuStore.loadBreadcrumb(props.id)
+    if (stale()) return
 
     const currentNode = visuStore.getNode(props.id)
     const { access: effectiveAccess, definingId } = resolveAccessNode(props.id)
 
     // Access-Check: protected → PIN-Auth (Vererbung berücksichtigen)
     if (effectiveAccess === 'protected' && !visuStore.hasSessionToken(definingId)) {
-      router.push({ name: 'pin-auth', params: { id: definingId } })
+      redirectToPin(definingId)
       return
     }
 
     // Access-Check: user → JWT-Login erforderlich
     if (effectiveAccess === 'user' && !getJwt()) {
-      router.push({ name: 'login', query: { redirect: router.currentRoute.value.fullPath } })
+      redirectToLogin()
       return
     }
 
     if (currentNode?.type === 'PAGE') {
       await visuStore.loadPage(props.id)
+      if (stale()) return
       // Write-Kontext für Backend-Autorisierung setzen (pageId + Session-Token + definingId)
       setWriteContext({
         pageId:       props.id,
@@ -174,11 +193,16 @@ async function load() {
       await dpStore.fetchInitialValues(allDpIds.value)
     }
   } catch (e: unknown) {
+    if (stale()) return
     concealedProfileStart = await isConcealedProfileStart(e)
+    if (stale()) return
     if (!concealedProfileStart) error.value = e instanceof Error ? e.message : t('common.loadError')
   } finally {
-    loading.value = false
-    loadRunning = false
+    // Ein veralteter Lauf lässt den Zustand dem neueren.
+    if (!stale()) {
+      loading.value = false
+      loadRunning = false
+    }
   }
   // Ist der Knoten während des Ladens (etwa beim Warten auf die Profile) im Baum
   // aufgetaucht, geht der neue Versuch vor — er kennt den Zugriff, nicht der alte Stand.
@@ -187,9 +211,7 @@ async function load() {
     await load()
     return
   }
-  if (concealedProfileStart) {
-    router.push({ name: 'login', query: { redirect: router.currentRoute.value.fullPath } })
-  }
+  if (concealedProfileStart) redirectToLogin()
 }
 
 // Die Startseite eines Geräteprofils, die laut Server existiert, aber im anonym
@@ -229,7 +251,7 @@ function onUnauthorized() {
   // Direkt umleiten statt über load(): das wartet zuerst auf den Breadcrumb,
   // den das Backend für einen verborgenen privaten Knoten ohne Anmeldung mit
   // 404 beantwortet — der Zugriffs-Check dahinter würde nie erreicht.
-  router.push({ name: 'login', query: { redirect: router.currentRoute.value.fullPath } })
+  redirectToLogin()
 }
 
 onMounted(() => {
@@ -238,6 +260,7 @@ onMounted(() => {
   window.addEventListener('visu:unauthorized', onUnauthorized)
 })
 onUnmounted(() => {
+  loadGeneration++  // ein noch wartender Lauf gehört zu einer Seite, die nicht mehr offen ist
   window.removeEventListener('visu:session-expired', onSessionExpired)
   window.removeEventListener('visu:unauthorized', onUnauthorized)
   clearWriteContext()
