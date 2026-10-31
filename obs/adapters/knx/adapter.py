@@ -1124,6 +1124,10 @@ class KnxAdapter(AdapterBase):
         """Activate confirmation expectations after XKNX successfully sends a telegram."""
         if getattr(getattr(telegram, "direction", None), "name", None) != "OUTGOING":
             return
+        # A GroupValueRead (e.g. from the periodic poller) carries no value and is
+        # never a pending write, so there is nothing to confirm.
+        if not isinstance(telegram.payload, (GroupValueWrite, GroupValueResponse)):
+            return
         local_response = self._local_read_responses.get(id(telegram))
         if local_response is not None and local_response[0] is telegram:
             _, binding_id, datapoint_id, signature, _ = local_response

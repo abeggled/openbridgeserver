@@ -4466,6 +4466,25 @@ class TestPeriodicRead:
             targets.append(str(telegram.destination_address))
         return targets
 
+    def test_transmitted_read_is_ignored_without_error_log(self, mock_bus, monkeypatch, caplog):
+        """An outgoing poll read reaches _on_telegram_transmitted; it has no value to confirm (#1406 F1)."""
+        import logging
+
+        adapter, _ = self._make_adapter(mock_bus, monkeypatch)
+        telegram = Telegram(
+            destination_address=GroupAddress("1/2/4"),
+            direction=TelegramDirection.OUTGOING,
+            payload=GroupValueRead(),
+        )
+
+        with caplog.at_level(logging.DEBUG, logger="obs.adapters.knx"):
+            adapter._on_telegram_transmitted(telegram)
+
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+        assert adapter._pending_transmissions == {}
+        assert adapter._outgoing_confirmation_owners == {}
+        assert adapter._recent_writes == {}
+
     def test_start_delay_is_bounded_by_interval_and_spread(self):
         for _ in range(50):
             assert 0.0 <= KnxAdapter._read_poll_start_delay(READ_INTERVAL_MIN_S) <= READ_INTERVAL_MIN_S
