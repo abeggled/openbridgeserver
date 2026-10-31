@@ -110,6 +110,77 @@ describe('BindingForm — KNX create submit', () => {
   })
 })
 
+describe('BindingForm — KNX periodic read interval (#1402)', () => {
+  function knxInitial(config) {
+    return {
+      id: 'b1',
+      adapter_type: 'KNX',
+      adapter_instance_id: 'knx-1',
+      direction: 'SOURCE',
+      enabled: true,
+      config: { group_address: '1/2/3', dpt_id: 'DPT9.001', ...config },
+    }
+  }
+
+  it('omits read_interval_s when no interval is configured', async () => {
+    const w = await mountForm()
+    await selectInstance(w, 'knx-1')
+    await submit(w)
+    expect(createBinding.mock.calls[0][1].config).not.toHaveProperty('read_interval_s')
+    w.unmount()
+  })
+
+  it('sends the interval entered in the form', async () => {
+    const w = await mountForm()
+    await selectInstance(w, 'knx-1')
+    await w.find('#read_interval_s').setValue('30')
+    await submit(w)
+    expect(createBinding.mock.calls[0][1].config.read_interval_s).toBe(30)
+    w.unmount()
+  })
+
+  it('keeps a stored interval when editing', async () => {
+    const w = await mountForm({ initial: knxInitial({ read_interval_s: 120 }) })
+    expect(w.find('#read_interval_s').element.value).toBe('120')
+    await submit(w)
+    expect(updateBinding.mock.calls[0][2].config.read_interval_s).toBe(120)
+    w.unmount()
+  })
+
+  it('does not save an interval hidden by switching the direction to DEST', async () => {
+    const w = await mountForm({ initial: { ...knxInitial({ read_interval_s: 120 }), direction: 'DEST' } })
+    expect(w.find('#read_interval_s').exists()).toBe(false)
+    await submit(w)
+    expect(updateBinding.mock.calls[0][2].config).not.toHaveProperty('read_interval_s')
+    w.unmount()
+  })
+
+  it('rounds a fractional interval to whole seconds', async () => {
+    const w = await mountForm()
+    await selectInstance(w, 'knx-1')
+    await w.find('#read_interval_s').setValue('30.6')
+    await submit(w)
+    expect(createBinding.mock.calls[0][1].config.read_interval_s).toBe(31)
+    w.unmount()
+  })
+
+  it('drops the interval when it was cleared or set to 0', async () => {
+    const w = await mountForm({ initial: knxInitial({ read_interval_s: 0 }) })
+    await submit(w)
+    expect(updateBinding.mock.calls[0][2].config).not.toHaveProperty('read_interval_s')
+    w.unmount()
+  })
+
+  it('resets the interval when the next binding loaded has none', async () => {
+    const w = await mountForm({ initial: knxInitial({ read_interval_s: 60 }) })
+    await w.setProps({ initial: { ...knxInitial({}), id: 'b2' } })
+    expect(w.find('#read_interval_s').element.value).toBe('')
+    await submit(w)
+    expect(updateBinding.mock.calls[0][2].config).not.toHaveProperty('read_interval_s')
+    w.unmount()
+  })
+})
+
 // ─── Modbus submit ────────────────────────────────────────────────────────────
 
 describe('BindingForm — MODBUS_TCP create submit', () => {
