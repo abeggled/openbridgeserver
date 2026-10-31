@@ -146,6 +146,7 @@ vi.mock('@/widgets/Wetter/index', () => ({}))
 vi.mock('@/widgets/Stufenschalter/index', () => ({}))
 vi.mock('@/widgets/Grundriss/index', () => ({}))
 vi.mock('@/widgets/HorizontalBar/index', () => ({}))
+vi.mock('@/widgets/Terminliste/index', () => ({}))
 
 describe('VisuEditor', () => {
   beforeEach(() => {

@@ -1100,6 +1100,32 @@
     "missing": {
       "title": "Unknown",
       "ariaLabel": "Unknown widget type"
+    },
+    "terminliste": {
+      "title": "Event list",
+      "titlePlaceholder": "e.g. Appointments",
+      "sources": "Calendar sources (max. {max})",
+      "sourcesHint": "Objects an iCalendar block (Logic) writes a filter's array output to.",
+      "sourceN": "Source {n}",
+      "sourceLabelPlaceholder": "Name, e.g. Waste collection",
+      "color": "Colour",
+      "addSource": "+ Add source",
+      "removeSource": "Remove source",
+      "days": "Number of days",
+      "separator": "Separator",
+      "separatorSemicolon": "Semicolon (;)",
+      "separatorStar": "Asterisk (*)",
+      "separatorNewline": "Line break",
+      "datePattern": "Date format",
+      "datePatternHint": "Placeholders as in the general settings, e.g. EEE dd.MM.yy → Wed 15.07.26",
+      "showTime": "Show start time",
+      "showLocation": "Show location",
+      "showEmptyDays": "Show days without events",
+      "today": "Today",
+      "tomorrow": "Tomorrow",
+      "noSources": "No calendar source configured",
+      "noEvents": "No events in the next {n} days",
+      "noEventsOnDay": "–"
     }
   },
   "datetimeNames": {

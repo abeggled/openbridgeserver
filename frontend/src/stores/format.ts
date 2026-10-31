@@ -187,6 +187,7 @@ export const useFormatStore = defineStore('format', () => {
     currency,
     load,
     setUiLanguage,
+    localeNames,
     fmtNumber,
     fmtCurrency,
     fmtPercent,
