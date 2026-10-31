@@ -7,10 +7,14 @@ const mocks = vi.hoisted(() => ({
   authenticatePin: vi.fn(),
   push: vi.fn(),
   replace: vi.fn(),
+  query: {} as Record<string, string>,
 }))
 
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
-vi.mock('vue-router', () => ({ useRouter: () => ({ push: mocks.push, replace: mocks.replace }) }))
+vi.mock('vue-router', () => ({
+  useRouter: () => ({ push: mocks.push, replace: mocks.replace }),
+  useRoute: () => ({ query: mocks.query }),
+}))
 vi.mock('@/stores/visu', () => ({ useVisuStore: () => ({ authenticatePin: mocks.authenticatePin }) }))
 
 function mountPinAuth() {
@@ -28,6 +32,7 @@ describe('PinAuth', () => {
     mocks.authenticatePin.mockReset()
     mocks.push.mockClear()
     mocks.replace.mockClear()
+    mocks.query = {}
   })
 
   it('opens the page after the right PIN, replacing itself in the history', async () => {
@@ -40,6 +45,19 @@ describe('PinAuth', () => {
     // `replace`: "back" from the page must not land on the PIN dialog again
     expect(mocks.replace).toHaveBeenCalledWith({ name: 'viewer', params: { id: 'page-1' } })
     expect(mocks.push).not.toHaveBeenCalled()
+  })
+
+  it('opens the requested sub-page after the PIN, not the location that defines the protection', async () => {
+    // `id` is the defining node (the location); the viewer passes the page it was asked for.
+    mocks.authenticatePin.mockResolvedValue(undefined)
+    mocks.query = { redirect: '/page-b' }
+    const wrapper = mountPinAuth()
+    await wrapper.find('input').setValue('1234')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(mocks.authenticatePin).toHaveBeenCalledWith('page-1', '1234')
+    expect(mocks.replace).toHaveBeenCalledWith('/page-b')
   })
 
   it('shows the error and clears the field after a wrong PIN', async () => {
@@ -61,6 +79,8 @@ describe('PinAuth', () => {
 
     const buttons = wrapper.findAll('button')
     await buttons[buttons.length - 1].trigger('click')
-    expect(mocks.push).toHaveBeenCalledWith({ name: 'tree' })
+    // `replace`: the PIN dialog must not stay in the history behind the overview
+    expect(mocks.replace).toHaveBeenCalledWith({ name: 'tree' })
+    expect(mocks.push).not.toHaveBeenCalled()
   })
 })

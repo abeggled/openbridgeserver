@@ -36,7 +36,7 @@ const mocks = vi.hoisted(() => {
     }
   }
   const device: { profile: { start_node_id: string | null; start_node_missing?: boolean } | null; load: ReturnType<typeof vi.fn> } = { profile: null, load: vi.fn().mockResolvedValue(undefined) }
-  return { node, store, loadBreadcrumb, push: vi.fn(), replace: vi.fn(), getJwt: vi.fn(), device, ApiRequestError }
+  return { node, store, loadBreadcrumb, push: vi.fn(), replace: vi.fn(), getJwt: vi.fn(), device, ApiRequestError, setWriteContext: vi.fn() }
 })
 
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
@@ -68,7 +68,7 @@ vi.mock('@/api/client', () => ({
   ApiRequestError: mocks.ApiRequestError,
   getJwt: mocks.getJwt,
   getSessionToken: () => null,
-  setWriteContext: vi.fn(),
+  setWriteContext: mocks.setWriteContext,
   clearWriteContext: vi.fn(),
   visuBackgrounds: { publicUrl: (n: string) => `/bg/${n}` },
 }))
@@ -113,10 +113,77 @@ describe('VisuViewer session end', () => {
     const wrapper = mountViewer()
     await flushPromises()
 
-    expect(mocks.replace).toHaveBeenCalledWith({ name: 'pin-auth', params: { id: 'page-1' } })
+    // The requested page travels along: `id` is the node that defines the protection.
+    expect(mocks.replace).toHaveBeenCalledWith({ name: 'pin-auth', params: { id: 'page-1' }, query: { redirect: '/page-1' } })
     expect(mocks.push).not.toHaveBeenCalled()
     expect(mocks.store.loadPage).not.toHaveBeenCalled()
     wrapper.unmount()
+  })
+
+  it('does not send the next page to the PIN dialog when a slow load finishes after the viewer is gone', async () => {
+    // Protected page, slow breadcrumb; the user leaves via the breadcrumb home before it
+    // arrives. The outdated run must not replace the overview's entry with the PIN screen.
+    mocks.node.access = 'protected'
+    let resolveBreadcrumb: () => void = () => {}
+    mocks.loadBreadcrumb.mockImplementationOnce(() => new Promise<void>((resolve) => { resolveBreadcrumb = resolve }))
+    const wrapper = mountViewer()
+    await flushPromises()
+    wrapper.unmount()
+
+    resolveBreadcrumb()
+    await flushPromises()
+
+    expect(mocks.replace).not.toHaveBeenCalled()
+  })
+
+  it('lets a newer page switch win over a slow load of the previous page', async () => {
+    // Page switch while page 1 is still loading: nothing of page 1 may be wired up afterwards.
+    mocks.setWriteContext.mockClear()
+    let resolvePage: () => void = () => {}
+    mocks.store.loadPage.mockImplementationOnce(() => new Promise<void>((resolve) => { resolvePage = resolve }))
+    const wrapper = mountViewer()
+    await flushPromises()
+    await wrapper.setProps({ id: 'page-2' })
+    await flushPromises()
+
+    resolvePage()
+    await flushPromises()
+
+    expect(mocks.setWriteContext).not.toHaveBeenCalled()
+    expect(wrapper.text()).not.toContain('common.loadError')
+    wrapper.unmount()
+  })
+
+  it('drops the error of a slow load once another page is open', async () => {
+    let rejectBreadcrumb: (error: Error) => void = () => {}
+    mocks.loadBreadcrumb.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectBreadcrumb = reject }))
+    const wrapper = mountViewer()
+    await flushPromises()
+    await wrapper.setProps({ id: 'page-2' })
+    await flushPromises()
+
+    rejectBreadcrumb(new Error('common.loadError'))
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('common.loadError')
+    wrapper.unmount()
+  })
+
+  it('does not redirect to the login for a concealed start page once the viewer is gone', async () => {
+    mocks.getJwt.mockReturnValue(null)
+    mocks.store.nodes = []
+    mocks.loadBreadcrumb.mockRejectedValue(new mocks.ApiRequestError('common.loadError', 404))
+    let resolveProfiles: () => void = () => {}
+    mocks.device.load.mockImplementationOnce(() => new Promise<void>((resolve) => { resolveProfiles = resolve }))
+    mocks.device.profile = { start_node_id: 'page-1' }
+    const wrapper = mountViewer()
+    await flushPromises()
+    wrapper.unmount()
+
+    resolveProfiles()
+    await flushPromises()
+
+    expect(mocks.replace).not.toHaveBeenCalled()
   })
 
   it('leaves a private page for the login route when the session ends', async () => {

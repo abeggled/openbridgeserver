@@ -117,21 +117,20 @@ describe('Visu router — device start page', () => {
     expect(router.currentRoute.value.name).toBe('login')
   })
 
-  it('replaces a protected page with the login when the session expires, so the page is not in the history twice', async () => {
+  it('sends a protected page to the login when the session expires, keeping the page behind it for the way back', async () => {
     jwt.mockReturnValue('token')
     admin.mockReturnValue(true)
     const { router } = await freshRouter()
     await router.push('/')
     await router.push('/manage')
-    const back = window.history.state.back
 
     window.dispatchEvent(new CustomEvent('visu:unauthorized'))
     await flushPromises()
 
     expect(router.currentRoute.value.name).toBe('login')
     expect(router.currentRoute.value.query.redirect).toBe('/manage')
-    expect(window.history.state.replaced).toBe(true)
-    expect(window.history.state.back).toBe(back)
+    // `push`: the page is right behind the login, LoginView goes back to it after the login
+    expect(window.history.state.back).toBe('/manage')
   })
 
   it('ignores an expired session on a public page', async () => {

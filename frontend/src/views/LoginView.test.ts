@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   wsConnect: vi.fn(),
   push: vi.fn(),
   replace: vi.fn(),
+  back: vi.fn(),
   query: {} as Record<string, string>,
 }))
 
@@ -17,7 +18,7 @@ vi.mock('vue-i18n', () => ({
 }))
 
 vi.mock('vue-router', () => ({
-  useRouter: () => ({ push: mocks.push, replace: mocks.replace }),
+  useRouter: () => ({ push: mocks.push, replace: mocks.replace, back: mocks.back }),
   useRoute: () => ({ query: mocks.query }),
 }))
 
@@ -43,8 +44,17 @@ describe('LoginView', () => {
     mocks.storeLogin.mockClear()
     mocks.push.mockClear()
     mocks.replace.mockClear()
+    mocks.back.mockClear()
     mocks.query = {}
+    window.history.replaceState(null, '')
   })
+
+  async function submit(wrapper: ReturnType<typeof mountLogin>) {
+    await wrapper.find('input[type="text"]').setValue('admin')
+    await wrapper.find('input[type="password"]').setValue('secret')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+  }
 
   it('hands both tokens from the login response to the store', async () => {
     mocks.login.mockResolvedValue({
@@ -66,16 +76,38 @@ describe('LoginView', () => {
   })
 
   it('returns to the page it was sent from, replacing itself in the history', async () => {
+    // The viewer or the router guard replaced the page with the login: the entry behind
+    // the login is some other page, so the login entry becomes the page again.
     mocks.login.mockResolvedValue({ access_token: 'jwt-1', refresh_token: 'refresh-1', token_type: 'bearer' })
     mocks.query = { redirect: '/page-1' }
+    window.history.replaceState({ back: '/start' }, '')
 
-    const wrapper = mountLogin()
-    await wrapper.find('input[type="text"]').setValue('admin')
-    await wrapper.find('input[type="password"]').setValue('secret')
-    await wrapper.find('form').trigger('submit')
-    await flushPromises()
+    await submit(mountLogin())
 
     expect(mocks.replace).toHaveBeenCalledWith('/page-1')
+    expect(mocks.back).not.toHaveBeenCalled()
+    expect(mocks.push).not.toHaveBeenCalled()
+  })
+
+  it('goes back when the page it was sent from is right behind it, so the page is not in the history twice', async () => {
+    // The header button and the 401 handler push the login on top of the page.
+    mocks.login.mockResolvedValue({ access_token: 'jwt-1', refresh_token: 'refresh-1', token_type: 'bearer' })
+    mocks.query = { redirect: '/page-1' }
+    window.history.replaceState({ back: '/page-1' }, '')
+
+    await submit(mountLogin())
+
+    expect(mocks.back).toHaveBeenCalledTimes(1)
+    expect(mocks.replace).not.toHaveBeenCalled()
+    expect(mocks.push).not.toHaveBeenCalled()
+  })
+
+  it('leaves the login out of the history when the user goes to the overview without logging in', async () => {
+    const wrapper = mountLogin()
+    const buttons = wrapper.findAll('button')
+    await buttons[buttons.length - 1].trigger('click')
+
+    expect(mocks.replace).toHaveBeenCalledWith({ name: 'tree' })
     expect(mocks.push).not.toHaveBeenCalled()
   })
 
