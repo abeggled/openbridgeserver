@@ -114,7 +114,7 @@ watch(
         </div>
         <DataPointPicker
           :model-value="source.datapoint_id || null"
-          :compatible-types="['*']"
+          :compatible-types="['STRING']"
           @update:model-value="(id) => (source.datapoint_id = id ?? '')"
         />
         <div class="flex gap-2 items-center">

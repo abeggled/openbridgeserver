@@ -84,6 +84,12 @@ describe('Terminliste Config.vue', () => {
     expect(w.find('[data-testid="terminliste-config-add-source"]').exists()).toBe(false)
   })
 
+  it('offers only STRING objects as calendar sources', () => {
+    // The iCalendar array reaches the widget as JSON text, which only a STRING object carries.
+    const w = mountConfig({ sources: [{ datapoint_id: 'calendar' }] })
+    expect(w.findComponent(DataPointPickerStub).props('compatibleTypes')).toEqual(['STRING'])
+  })
+
   it('adds a source, picks its datapoint and emits only sources with a datapoint', async () => {
     const w = mountConfig({ sources: [] })
 

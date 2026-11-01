@@ -8718,18 +8718,20 @@ class LogicManager:
                             ns[key] = value
         return published
 
-    def _serialize_structured_for_target(self, dp_id_str: str, value: Any) -> Any:
+    def _serialize_structured_for_target(self, dp_id_str: Any, value: Any) -> Any:
         """Return a list/dict written to a STRING object as JSON text (#999).
 
         Blocks such as the iCalendar filter output a Python list. The WriteRouter
         only propagates values matching the object's type, so a raw list on a
         STRING object would be refused as a type mismatch on every refresh.
+        A malformed id (persisted ``node.data`` is not schema-checked) is left to
+        the per-write error handling, so later Write Objects still run.
         """
         if not isinstance(value, list | dict):
             return value
         try:
             dp = self._registry.get(uuid.UUID(dp_id_str))
-        except ValueError:
+        except (AttributeError, TypeError, ValueError):
             return value
         if dp is None or getattr(dp, "data_type", None) != "STRING":
             return value

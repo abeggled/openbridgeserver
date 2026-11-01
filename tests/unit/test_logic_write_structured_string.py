@@ -101,11 +101,41 @@ async def test_list_to_unknown_datapoint_is_unchanged():
     assert _published_value(mgr) == _ROWS
 
 
-def test_invalid_datapoint_id_leaves_value_unchanged():
+@pytest.mark.parametrize("bad_id", ["not-a-uuid", 123, None], ids=["ValueError", "AttributeError", "TypeError"])
+def test_invalid_datapoint_id_leaves_value_unchanged(bad_id):
     mgr = _manager({})
 
-    assert mgr._serialize_structured_for_target("not-a-uuid", _ROWS) is _ROWS
+    assert mgr._serialize_structured_for_target(bad_id, _ROWS) is _ROWS
     mgr._registry.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_malformed_write_target_does_not_stop_later_write_nodes():
+    """A persisted non-string datapoint_id stays inside the per-write error boundary."""
+    valid = uuid.uuid4()
+    flow = FlowData.model_validate(
+        {
+            "nodes": [
+                {"id": "p", "type": "python_script", "position": {"x": 0, "y": 0}, "data": {"script": "result = [1, 2]"}},
+                {"id": "bad", "type": "datapoint_write", "position": {"x": 1, "y": 0}, "data": {"datapoint_id": 123}},
+                {"id": "good", "type": "datapoint_write", "position": {"x": 2, "y": 0}, "data": {"datapoint_id": str(valid)}},
+            ],
+            "edges": [
+                {"id": "e1", "source": "p", "target": "bad", "sourceHandle": "result", "targetHandle": "value"},
+                {"id": "e2", "source": "p", "target": "good", "sourceHandle": "result", "targetHandle": "value"},
+            ],
+        }
+    )
+    mgr = _manager({valid: "STRING"})
+    mgr._registry.get_value = MagicMock(return_value=None)
+    mgr._graphs = {"g": ("malformed-target", True, flow)}
+
+    await mgr.execute_graph("g")
+
+    mgr._event_bus.publish.assert_awaited_once()
+    event = mgr._event_bus.publish.await_args.args[0]
+    assert event.datapoint_id == valid
+    assert event.value == "[1, 2]"
 
 
 @pytest.mark.asyncio
