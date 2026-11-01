@@ -1355,7 +1355,7 @@ class TestImportKnxprojFile:
             patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([location], [])),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[]),
-            patch("obs.api.v1.knxproj._bulk_import_datapoints", return_value=(1, 0)),
+            patch("obs.api.v1.knxproj._bulk_import_datapoints", return_value=(1, 0, 0)),
             patch("obs.api.v1.knxproj.create_ets_hierarchy", side_effect=fake_create_hierarchy),
         ):
             result = await import_knxproj_file(
@@ -1370,8 +1370,39 @@ class TestImportKnxprojFile:
             )
 
         assert result.created == 1
+        assert result.skipped_system == 0
+        assert "übersprungen" not in result.message
         assert result.hierarchies[0].links_created == 1
         assert captured_requests[0].auto_link is True
+
+    @pytest.mark.asyncio
+    async def test_knxproj_import_reports_group_addresses_a_system_datapoint_already_serves(self):
+        """`imported` counts the parsed rows, so a skipped GA (#1370) has to be named."""
+        upload = AsyncMock()
+        upload.filename = "project.knxproj"
+        upload.read = AsyncMock(return_value=b"data")
+        record = SimpleNamespace(address="1/1/1", name="Light", description="", dpt="1.001", main_group_name="G1", mid_group_name="M1")
+        db = _make_db()
+
+        with (
+            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([], [])),
+            patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[]),
+            patch("obs.api.v1.knxproj._bulk_import_datapoints", return_value=(0, 0, 1)),
+        ):
+            result = await import_knxproj_file(
+                file=upload,
+                password=None,
+                adapter_name="KNX",
+                direction="SOURCE",
+                hierarchy_modes=[],
+                hierarchy_auto_link=False,
+                _user="admin",
+                db=db,
+            )
+
+        assert (result.imported, result.created, result.updated, result.skipped_system) == (1, 0, 0, 1)
+        assert "1 übersprungen (bereits von einem System-Datenpunkt bedient)" in result.message
 
     @pytest.mark.asyncio
     async def test_import_clears_stale_functions_even_without_new_functions(self):
@@ -1673,14 +1704,32 @@ class TestImportGaCsvFile:
         db = _make_db()
         with (
             patch("obs.api.v1.knxproj.parse_ga_csv", return_value=[record]),
-            patch("obs.api.v1.knxproj._bulk_import_datapoints", return_value=(2, 1)),
+            patch("obs.api.v1.knxproj._bulk_import_datapoints", return_value=(2, 1, 0)),
         ):
             result = await import_ga_csv_file(file=upload, adapter_name="knx-main", direction="SOURCE", _user="admin", db=db)
 
         assert result.imported == 3
         assert result.created == 2
         assert result.updated == 1
+        assert result.skipped_system == 0
         assert result.message == "2 DataPoints neu erstellt, 1 aktualisiert"
+
+    @pytest.mark.asyncio
+    async def test_csv_import_reports_group_addresses_a_system_datapoint_already_serves(self):
+        """A skipped GA (#1370) must not look like a parser failure: it is counted and named."""
+        upload = AsyncMock()
+        upload.filename = "data.csv"
+        upload.read = AsyncMock(return_value=b"data")
+        record = SimpleNamespace(address="1/1/1", name="Light", description="", dpt=None, main_group_name="G1", mid_group_name="M1")
+        db = _make_db()
+        with (
+            patch("obs.api.v1.knxproj.parse_ga_csv", return_value=[record]),
+            patch("obs.api.v1.knxproj._bulk_import_datapoints", return_value=(2, 1, 4)),
+        ):
+            result = await import_ga_csv_file(file=upload, adapter_name="knx-main", direction="SOURCE", _user="admin", db=db)
+
+        assert result.skipped_system == 4
+        assert result.message == "2 DataPoints neu erstellt, 1 aktualisiert, 4 übersprungen (bereits von einem System-Datenpunkt bedient)"
 
 
 # ===========================================================================
@@ -1713,7 +1762,7 @@ class TestBulkImportDatapoints:
             patch("obs.core.registry.get_registry", _raise_registry),
             patch("obs.adapters.registry.reload_instance_bindings", _reload_instance_bindings),
         ):
-            created, updated = await _bulk_import_datapoints(
+            created, updated, skipped_system = await _bulk_import_datapoints(
                 records=[
                     SimpleNamespace(address="1/1/1", name="Existing", dpt="DPT1.001"),
                     SimpleNamespace(address="1/1/2", name="New", dpt=None),
@@ -1726,6 +1775,7 @@ class TestBulkImportDatapoints:
 
         assert created == 1
         assert updated == 1
+        assert skipped_system == 0
         assert db.executemany.await_count == 4
         assert db.commit.await_count == 1
 

@@ -215,7 +215,11 @@
       "public": "Public",
       "publicDesc": "Without login, interactive",
       "pinDesc": "PIN required"
-    }
+    },
+    "device": "Device:",
+    "deviceNone": "— no profile —",
+    "deviceUnknown": "Unknown ({slug})",
+    "productName": "open bridge server"
   },
   "picker": {
     "notFound": "Object not found",
@@ -643,13 +647,16 @@
       "activeIndicatorLine": "Line (bottom)",
       "activeIndicatorNone": "None",
       "defaultLabel": "Link",
+      "iconSize": "Icon size (px)",
+      "iconSizeHint": "0 = default size. Wide SVG icons keep their aspect ratio.",
       "labelPlaceholder": "e.g. Living room",
       "noTarget": "No target",
       "showArrow": "Show navigation arrow (→)",
       "showIcon": "Show icon",
       "preserveIconColor": "Preserve SVG icon color (no black/white)",
       "targetPage": "Target page",
-      "title": "Link"
+      "title": "Link",
+      "historyBack": "Back to the previously visited page (no history: target page)"
     },
     "qrcode": {
       "title": "QR code",
@@ -1101,5 +1108,10 @@
     "weekdaysTwo": "Mo|Tu|We|Th|Fr|Sa|Su",
     "months": "January|February|March|April|May|June|July|August|September|October|November|December",
     "monthsShort": "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec"
+  },
+  "alarm": {
+    "acknowledge": "Acknowledge",
+    "acknowledgeFailed": "Could not acknowledge — the alarm may already have ended.",
+    "waiting": "{n} more alarm(s) waiting"
   }
 }

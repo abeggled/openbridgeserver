@@ -495,6 +495,7 @@ class WebhookAdapter(AdapterBase):
     adapter_type = "WEBHOOK"
     config_schema = WebhookAdapterConfig
     binding_config_schema = WebhookBindingConfig
+    writes_values = False
     # A *user* with operator grants on the DataPoint and the instance may manage
     # webhook bindings; API keys never receive adapter delegation (issue #1303).
     delegation_capabilities = frozenset({AdapterDelegationCapability.LINK_BINDING})

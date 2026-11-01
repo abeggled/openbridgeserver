@@ -173,6 +173,71 @@ async def test_validate_graph_reports_unknown_node_type_and_nested_config_schema
     }
 
 
+async def test_validate_graph_reports_unknown_config_field_and_missing_node_placeholder(client, auth_headers):
+    flow_data = {
+        "nodes": [
+            {"id": "cmp", "type": "compare", "position": {"x": 0, "y": 0}, "data": {"operater": ">", "label": "Schwelle"}},
+            {"id": "ph", "type": "missing_node", "position": {"x": 200, "y": 0}, "data": {"original_type": "legacy_block"}},
+        ],
+        "edges": [],
+    }
+
+    resp = await client.post("/api/v1/logic/graphs/validate", json=flow_data, headers=auth_headers)
+
+    assert resp.status_code == 200
+    assert resp.json()["warnings"] == [
+        {
+            "node_id": "cmp",
+            "code": "unknown_config_field",
+            "message": "operater: not a config field of this node type; it is ignored and the default is used. Did you mean 'operator'?",
+        },
+        {
+            "node_id": "ph",
+            "code": "missing_node_type",
+            "message": "Placeholder for node type 'legacy_block' that is not available on this server; the block does nothing at run time.",
+        },
+    ]
+
+
+async def test_validate_graph_reports_negation_typo_and_label_only_placeholder(client, auth_headers):
+    # Review findings F3/F4 on PR #1405.
+    flow_data = {
+        "nodes": [
+            {"id": "and", "type": "and", "position": {"x": 0, "y": 0}, "data": {"negate_inn1": True, "negate_in1": True, "negate_out": True}},
+            {"id": "ph", "type": "missing_node", "position": {"x": 200, "y": 0}, "data": {"label": "legacy_block"}},
+        ],
+        "edges": [],
+    }
+
+    resp = await client.post("/api/v1/logic/graphs/validate", json=flow_data, headers=auth_headers)
+
+    assert resp.status_code == 200
+    warnings = resp.json()["warnings"]
+    assert [(w["node_id"], w["code"]) for w in warnings] == [("and", "unknown_config_field"), ("ph", "missing_node_type")]
+    assert warnings[0]["message"].startswith("negate_inn1:")
+    assert "'legacy_block'" in warnings[1]["message"]
+
+
+async def test_validate_graph_openapi_description_names_every_warning_code(client, auth_headers):
+    # Review finding F1 on PR #1405: AI agents read this description, so it must list every code
+    # graph_analysis.py can emit — collected from the module source, not from a second hand list.
+    import inspect
+    import re
+
+    from obs.logic import graph_analysis
+
+    emitted = set(re.findall(r'"code": "([a-z_]+)"', inspect.getsource(graph_analysis)))
+    emitted |= set(re.findall(r'_schema_warning\(\s*[\w.]+,\s*"([a-z_]+)"', inspect.getsource(graph_analysis)))
+    assert {"graph_cycle", "unknown_config_field", "ignored_config_field", "missing_node_type"} <= emitted
+
+    spec = (await client.get("/openapi.json", headers=auth_headers)).json()
+    description = spec["paths"]["/api/v1/logic/graphs/validate"]["post"]["description"]
+
+    assert sorted(code for code in emitted if f"`{code}`" not in description) == []
+    assert description.count("\n- **") == 4
+    assert "Four checks" in description
+
+
 # ---------------------------------------------------------------------------
 # POST /logic/graphs
 # ---------------------------------------------------------------------------
