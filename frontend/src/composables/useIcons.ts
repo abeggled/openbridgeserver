@@ -1,10 +1,16 @@
 import { ref } from 'vue'
-import { icons as iconsApi } from '@/api/client'
+import { getAllSessionTokens, getJwt, icons as iconsApi } from '@/api/client'
 
 // Module-level shared state – one fetch for all components
 const iconNames = ref<string[]>([])
 const svgCache: Record<string, string> = {}  // name → normalised SVG string
 let listPromise: Promise<void> | null = null
+// Which icons the server returns depends on login and entered PINs; reload when they change.
+let loadedForAccess: string | null = null
+
+function accessKey(): string {
+  return `${getJwt() ? 'login' : 'anonymous'}|${getAllSessionTokens().sort().join(',')}`
+}
 const BLOCKED_URL_SCHEMES = ['javascript:', 'data:', 'http:', 'https:', 'vbscript:', 'file:']
 const URL_FUNCTION_ATTRIBUTES = new Set([
   'fill',
@@ -86,7 +92,9 @@ function sanitizeSvg(raw: string): string {
 
 export function useIcons() {
   function loadList(): Promise<void> {
-    if (listPromise) return listPromise
+    const access = accessKey()
+    if (listPromise && access === loadedForAccess) return listPromise
+    loadedForAccess = access
     listPromise = iconsApi
       .list()
       .then(({ icons }) => {
@@ -97,8 +105,8 @@ export function useIcons() {
         iconNames.value = icons.map((i) => i.name)
       })
       .catch(() => {
-        // Icons endpoint requires auth — treat as empty list in unauthenticated context
-        listPromise = null  // allow retry after login
+        // Not reachable (e.g. offline) — treat as empty list and retry on the next call
+        listPromise = null
         iconNames.value = []
       })
     return listPromise

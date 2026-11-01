@@ -123,6 +123,7 @@ class AnwesenheitssimulationAdapter(AdapterBase):
     adapter_type = "ANWESENHEITSSIMULATION"
     config_schema = AnwesenheitssimulationConfig
     binding_config_schema = AnwesenheitssimulationBindingConfig
+    writes_values = False
     delegation_capabilities = frozenset({AdapterDelegationCapability.LINK_BINDING})
 
     def __init__(

@@ -6,6 +6,8 @@
     <!-- Main -->
     <div class="flex-1 flex flex-col overflow-hidden">
       <TopBar @toggle-sidebar="sidebarCollapsed = !sidebarCollapsed" />
+      <!-- Global, like the adapter warnings: visible on every page (#1370) -->
+      <UpdateNotice />
       <main class="flex-1 overflow-y-auto p-6">
         <slot />
       </main>
@@ -17,6 +19,7 @@
 import { ref } from 'vue'
 import Sidebar from './Sidebar.vue'
 import TopBar  from './TopBar.vue'
+import UpdateNotice from '@/components/updates/UpdateNotice.vue'
 
 const sidebarCollapsed = ref(false)
 </script>

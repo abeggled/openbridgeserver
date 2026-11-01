@@ -215,7 +215,11 @@
       "public": "Öffentlich",
       "publicDesc": "Ohne Anmeldung, interaktiv",
       "pinDesc": "PIN-Eingabe erforderlich"
-    }
+    },
+    "device": "Gerät:",
+    "deviceNone": "— kein Profil —",
+    "deviceUnknown": "Unbekannt ({slug})",
+    "productName": "open bridge server"
   },
   "picker": {
     "notFound": "Objekt nicht gefunden",
@@ -643,13 +647,16 @@
       "activeIndicatorLine": "Linie (unten)",
       "activeIndicatorNone": "Keine",
       "defaultLabel": "Link",
+      "iconSize": "Icon-Größe (px)",
+      "iconSizeHint": "0 = Standardgröße. Breite SVG-Icons behalten ihr Seitenverhältnis.",
       "labelPlaceholder": "z.B. Wohnzimmer",
       "noTarget": "Kein Ziel",
       "showArrow": "Navigationspfeil (→) anzeigen",
       "showIcon": "Icon anzeigen",
       "preserveIconColor": "SVG-Icon-Farbe erhalten (kein Schwarz/Weiß)",
       "targetPage": "Ziel-Seite",
-      "title": "Link"
+      "title": "Link",
+      "historyBack": "Zurück zur zuvor besuchten Seite (ohne Verlauf: Zielseite)"
     },
     "qrcode": {
       "title": "QR-Code",
@@ -851,7 +858,13 @@
       "timezoneHint": "(optional, leer = lokal)",
       "modeDigital": "Digital",
       "modeAnalog": "Analog",
-      "modeWortuhr": "Wortuhr"
+      "modeWortuhr": "Wortuhr",
+      "minuteDots": "Minutenpunkte in den Ecken",
+      "minuteDotsHint": "Zeigt die Minuten zwischen den 5-Minuten-Schritten als 1–4 Punkte in den Ecken (z. B. „dreiviertel sechs“ + 2 Punkte = 17:47). Die Wörter runden dann ab statt auf.",
+      "timezonePlaceholder": "z.B. Asia/Tokyo",
+      "timezoneFormat": "IANA-Format, z.B.",
+      "optional": "(optional)",
+      "labelPlaceholder": "z.B. Wohnzimmer"
     },
     "valuedisplay": {
       "title": "Wertanzeige",
@@ -1095,5 +1108,10 @@
     "weekdaysTwo": "Mo|Di|Mi|Do|Fr|Sa|So",
     "months": "Januar|Februar|März|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember",
     "monthsShort": "Jan.|Feb.|März|Apr.|Mai|Juni|Juli|Aug.|Sept.|Okt.|Nov.|Dez."
+  },
+  "alarm": {
+    "acknowledge": "Quittieren",
+    "acknowledgeFailed": "Quittieren nicht möglich — der Alarm ist vielleicht schon beendet.",
+    "waiting": "{n} weitere(r) Alarm(e) warten"
   }
 }

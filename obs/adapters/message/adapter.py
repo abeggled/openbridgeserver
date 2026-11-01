@@ -302,6 +302,7 @@ class MessageAdapter(AdapterBase):
     adapter_type = "MESSAGE"
     config_schema = MessageAdapterConfig
     binding_config_schema = MessageBindingConfig
+    writes_values = False  # it watches values; see system_datapoint_bindable()
 
     def __init__(self, event_bus: Any, config: dict | None = None, **kwargs) -> None:
         super().__init__(event_bus, config, **kwargs)

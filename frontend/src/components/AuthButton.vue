@@ -25,6 +25,9 @@ async function logout() {
 }
 
 function login() {
+  // `push`: the page stays in the history, so cancelling with the browser's back
+  // button returns to it. After the login LoginView goes back to it as well,
+  // so it is never in the history twice.
   router.push({ name: 'login', query: { redirect: router.currentRoute.value.fullPath } })
 }
 </script>
