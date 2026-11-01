@@ -34,7 +34,9 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
           </svg>
         </button>
-        <HelpButton help-id="logic-node-config" />
+        <!-- The block's own help, the same as its palette entry (#1411);
+             the general block-config page only for blocks without one -->
+        <HelpButton :help-id="nodeDef?.help_id || 'logic-node-config'" />
       </div>
     </div>
 

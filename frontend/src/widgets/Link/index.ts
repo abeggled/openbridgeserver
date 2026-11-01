@@ -16,6 +16,7 @@ WidgetRegistry.register({
     icon: '🔗',
     show_arrow: true,
     target_node_id: '',
+    history_back: false,
     show_icon: true,
     preserve_icon_color: false,
     label_size: 'sm',

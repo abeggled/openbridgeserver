@@ -11,6 +11,9 @@ Binding-Konfiguration (pro AdapterBinding.config):
   group_address:       str   — Gruppenadresse z.B. "1/2/3"
   dpt_id:              str   — z.B. "DPT9.001"
   state_group_address: str?  — Rückmelde-GA für DEST-Bindings (optional)
+  respond_to_read:     bool  — SOURCE/BOTH: beantwortet fremde GroupValueReads
+  read_interval_s:     int?  — SOURCE/BOTH: sendet periodisch einen GroupValueRead
+                               (None/0 = aus, sonst READ_INTERVAL_MIN_S..READ_INTERVAL_MAX_S)
 
 Adapter-Konfiguration (adapter_configs.config in DB):
   connection_type:   "tunneling" | "tunneling_tcp" | "tunneling_secure" |
@@ -35,12 +38,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import random
 import time
 from collections import deque
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from obs.adapters.base import (
     AdapterBase,
@@ -56,6 +60,11 @@ from obs.core.event_bus import DataValueEvent
 TUNNEL_OVERLOAD_DETAIL = "KNX-Tunnel-Slot wahrscheinlich von anderem Client belegt — Gateway-Pool überlastet."
 ECHO_SUPPRESSION_WINDOW_S = 2.0
 STATE_CONFIRMATION_WINDOW_S = 30.0
+# Issue #1402: periodic GroupValueRead — bounds for the interval and the
+# window across which the first reads of all pollers are spread out.
+READ_INTERVAL_MIN_S = 10
+READ_INTERVAL_MAX_S = 86400
+READ_POLL_START_SPREAD_S = 30.0
 
 # Import APCI classes at module level so missing symbols fail loudly at startup
 try:
@@ -130,6 +139,14 @@ class KnxBindingConfig(BaseModel):
     dpt_id: str = "DPT1.001"
     state_group_address: str | None = None  # DEST-Bindings Rückmelde-GA
     respond_to_read: bool = False  # SOURCE: antworte auf GroupValueRead mit aktuellem Wert
+    read_interval_s: int | None = Field(default=None, ge=0, le=READ_INTERVAL_MAX_S)  # SOURCE/BOTH: periodischer GroupValueRead, None/0 = aus
+
+    @field_validator("read_interval_s")
+    @classmethod
+    def _check_read_interval(cls, value: int | None) -> int | None:
+        if value and value < READ_INTERVAL_MIN_S:
+            raise ValueError(f"read_interval_s must be 0 (off) or at least {READ_INTERVAL_MIN_S} seconds")
+        return value
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +160,12 @@ class KnxAdapter(AdapterBase):
     delegation_capabilities: frozenset[AdapterDelegationCapability] = frozenset()
     config_schema = KnxAdapterConfig
     binding_config_schema = KnxBindingConfig
+
+    @staticmethod
+    def validate_binding_direction(binding_config: KnxBindingConfig, direction: str) -> None:
+        """Reject a polling interval on a DEST binding, which never polls (raises ValueError, #1402)."""
+        if direction == "DEST" and binding_config.read_interval_s:
+            raise ValueError("read_interval_s ist nur für KNX-Bindings mit Richtung SOURCE oder BOTH erlaubt")
 
     def __init__(self, event_bus: Any, config: dict | None = None, **kwargs) -> None:
         super().__init__(event_bus, config, **kwargs)
@@ -182,6 +205,10 @@ class KnxAdapter(AdapterBase):
         self._value_getter: Any = None
         self._reconnect_task: asyncio.Task | None = None
         self._echo_cleanup_task: asyncio.Task | None = None
+        # Issue #1402: read GA → (interval_s, poll task); one poller per GA
+        self._read_poll_tasks: dict[str, tuple[int, asyncio.Task]] = {}
+        # GAs whose read was skipped because the tunnel was down; caught up on reconnect
+        self._read_poll_skipped: set[str] = set()
         self._stopped: bool = False
         # Tunnel-overload detection (issue #466)
         self._disconnect_times: deque[datetime] = deque()
@@ -196,6 +223,11 @@ class KnxAdapter(AdapterBase):
     def _monotonic() -> float:
         """Monkeypatch-able monotonic clock seam for echo suppression tests."""
         return time.monotonic()
+
+    @staticmethod
+    def _read_poll_start_delay(interval_s: int) -> float:
+        """Monkeypatch-able jitter seam: staggers the first read of each poller."""
+        return random.uniform(0.0, min(float(interval_s), READ_POLL_START_SPREAD_S))
 
     def set_value_getter(self, getter: Any) -> None:
         """Set a callable that returns ValueState | None for a datapoint UUID."""
@@ -224,8 +256,10 @@ class KnxAdapter(AdapterBase):
             await self._publish_status(False, "xknx not installed", severity="error", code="libNotInstalled", params={"lib": "xknx"})
             return
 
-        # Clean up any previous xknx instance before creating a new one
+        # Clean up any previous xknx instance before creating a new one; the
+        # pollers return through _on_bindings_reloaded once the connect succeeds
         self._sniffer = None
+        self._sync_read_pollers({})
         if self._xknx:
             try:
                 await self._xknx.stop()
@@ -384,6 +418,7 @@ class KnxAdapter(AdapterBase):
             detail = _knx_connect_error_detail(exc, cfg.connection_type)
             await self._publish_status(False, detail, severity="error")
             logger.exception("KNX connect failed")
+            self._sync_read_pollers({})
 
     async def _reconnect_loop(self) -> None:
         """Background task: reconnect every 30 s when not connected."""
@@ -401,6 +436,73 @@ class KnxAdapter(AdapterBase):
             await asyncio.sleep(ECHO_SUPPRESSION_WINDOW_S)
             self._prune_recent_writes()
             self._prune_local_read_responses()
+
+    # ------------------------------------------------------------------
+    # Periodic GroupValueRead — issue #1402
+    # ------------------------------------------------------------------
+
+    def _sync_read_pollers(self, wanted: dict[str, int]) -> list[asyncio.Task]:
+        """Reconcile the poll tasks with ``wanted`` (read GA → interval_s).
+
+        Runs without awaiting, so overlapping binding reloads cannot interleave
+        and resurrect a poller a newer reload removed. Pollers whose interval is
+        unchanged keep running, so editing one binding does not re-trigger reads
+        for all others. Nothing polls while the adapter is stopped or not
+        connected. Returns the cancelled tasks for callers that must await them.
+        """
+        if self._stopped or not self._connected:
+            wanted = {}
+        stale: list[asyncio.Task] = []
+        for ga, (interval_s, task) in list(self._read_poll_tasks.items()):
+            if wanted.get(ga) == interval_s:
+                continue
+            del self._read_poll_tasks[ga]
+            self._read_poll_skipped.discard(ga)
+            task.cancel()
+            stale.append(task)
+        for ga, interval_s in wanted.items():
+            if ga not in self._read_poll_tasks:
+                self._read_poll_tasks[ga] = (interval_s, asyncio.ensure_future(self._read_poll_loop(ga, interval_s)))
+        return stale
+
+    def _restart_read_pollers(self) -> None:
+        """Restart the pollers that skipped a read, so they read again within the start spread.
+
+        Called when xknx has re-established its tunnel: a read skipped during
+        the outage would otherwise only be repeated a full interval later.
+        Pollers that did not miss a read keep their rhythm, so a flapping
+        tunnel does not trigger a burst of reads on every reconnect.
+        """
+        skipped, self._read_poll_skipped = self._read_poll_skipped, set()
+        wanted = {ga: interval_s for ga, (interval_s, _task) in self._read_poll_tasks.items()}
+        self._sync_read_pollers({ga: interval_s for ga, interval_s in wanted.items() if ga not in skipped})
+        self._sync_read_pollers(wanted)
+
+    def _bus_connected(self) -> bool:
+        """True while OBS considers the instance connected and xknx's own tunnel is up."""
+        return self._connected and self._xknx is not None and self._xknx.connection_manager.connected.is_set()
+
+    async def _read_poll_loop(self, ga: str, interval_s: int) -> None:
+        """Background task: send a GroupValueRead to ``ga`` every ``interval_s``."""
+        await asyncio.sleep(self._read_poll_start_delay(interval_s))
+        while True:
+            # Skipped while xknx reconnects on its own, so no reads pile up for a burst afterwards
+            if self._bus_connected():
+                try:
+                    await self._send_group_value_read(ga)
+                except Exception:
+                    logger.exception("KNX periodic read failed for GA %s", ga)
+            else:
+                self._read_poll_skipped.add(ga)
+            await asyncio.sleep(interval_s)
+
+    async def _send_group_value_read(self, ga: str) -> None:
+        """Queue a GroupValueRead telegram for ``ga`` on the current xknx instance."""
+        from xknx.telegram import Telegram
+        from xknx.telegram.address import GroupAddress
+
+        telegram = Telegram(destination_address=GroupAddress(ga), payload=GroupValueRead())
+        await self._xknx.telegrams.put(telegram)
 
     # ------------------------------------------------------------------
     # Tunnel-pool overload detection — issue #466
@@ -468,6 +570,7 @@ class KnxAdapter(AdapterBase):
             asyncio.ensure_future(self._record_disconnect())
         elif state == XknxConnectionState.CONNECTED:
             asyncio.ensure_future(self._record_reconnect())
+            self._restart_read_pollers()
         # CONNECTING is a transient state — ignored.
 
     async def disconnect(self) -> None:
@@ -486,6 +589,7 @@ class KnxAdapter(AdapterBase):
             except asyncio.CancelledError:
                 pass
         self._echo_cleanup_task = None
+        await asyncio.gather(*self._sync_read_pollers({}), return_exceptions=True)
         if self._xknx:
             try:
                 await self._xknx.stop()
@@ -586,6 +690,7 @@ class KnxAdapter(AdapterBase):
             )
         self._ga_source_map.clear()
         self._ga_respond_map.clear()
+        read_pollers: dict[str, int] = {}
         for binding in self._bindings:
             if binding.direction not in ("SOURCE", "BOTH"):
                 continue
@@ -604,12 +709,21 @@ class KnxAdapter(AdapterBase):
             if bc.respond_to_read:
                 self._ga_respond_map.setdefault(bc.group_address, []).append(entry)
 
+            if bc.read_interval_s:
+                # Same target as read(): state GA before command GA. Bindings sharing
+                # a GA share one poller at the shortest interval — the response fans
+                # out to all of them through _ga_source_map.
+                read_ga = bc.state_group_address or bc.group_address
+                read_pollers[read_ga] = min(bc.read_interval_s, read_pollers.get(read_ga, bc.read_interval_s))
+
         logger.info(
             "KNX: %d source GAs from %d bindings: %s",
             len(self._ga_source_map),
             len(self._bindings),
             list(self._ga_source_map.keys()),
         )
+
+        self._sync_read_pollers(read_pollers)
 
         if not self._xknx:
             return
@@ -1010,6 +1124,10 @@ class KnxAdapter(AdapterBase):
         """Activate confirmation expectations after XKNX successfully sends a telegram."""
         if getattr(getattr(telegram, "direction", None), "name", None) != "OUTGOING":
             return
+        # A GroupValueRead (e.g. from the periodic poller) carries no value and is
+        # never a pending write, so there is nothing to confirm.
+        if not isinstance(telegram.payload, (GroupValueWrite, GroupValueResponse)):
+            return
         local_response = self._local_read_responses.get(id(telegram))
         if local_response is not None and local_response[0] is telegram:
             _, binding_id, datapoint_id, signature, _ = local_response
@@ -1268,17 +1386,8 @@ class KnxAdapter(AdapterBase):
         if not self._xknx:
             return None
         try:
-            from xknx.telegram import Telegram
-            from xknx.telegram.address import GroupAddress
-            from xknx.telegram.apci import GroupValueRead
-
             bc = KnxBindingConfig(**binding.config)
-            ga = bc.state_group_address or bc.group_address
-            telegram = Telegram(
-                destination_address=GroupAddress(ga),
-                payload=GroupValueRead(),
-            )
-            await self._xknx.telegrams.put(telegram)
+            await self._send_group_value_read(bc.state_group_address or bc.group_address)
         except Exception:
             logger.exception("KNX read failed for binding %s", binding.id)
         return None
