@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Literal
 
 from pydantic import BaseModel, model_validator
@@ -42,17 +43,28 @@ class LogicNode(BaseModel):
         A Delay saved with only ``duration_s`` (the Pulse's key) used to run with
         the 1 s default (#1377). Every parse — save, import, load, read — moves
         it, so sheets stored that way take their configured duration on load.
+
+        Only a usable duration (a finite number >= 0) is moved, and only while the
+        block's own key is absent or null: an empty own key is a deliberate choice
+        of the default, and an unusable sibling value stays an ignored stray key
+        rather than turning a sheet that ran into one the save validation rejects.
         """
         keys = _TIMER_DURATION_KEYS.get(self.type)
         if keys is None:
             return self
         own, sibling = keys
-        if sibling in self.data and self.data.get(own) in (None, ""):
-            data = dict(self.data)
-            value = data.pop(sibling)
-            if value not in (None, ""):
-                data[own] = value
-            self.data = data
+        if self.data.get(own) is not None or sibling not in self.data:
+            return self
+        value = self.data[sibling]
+        try:
+            seconds = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return self
+        if not math.isfinite(seconds) or seconds < 0:
+            return self
+        data = {key: item for key, item in self.data.items() if key != sibling}
+        data[own] = value
+        self.data = data
         return self
 
 

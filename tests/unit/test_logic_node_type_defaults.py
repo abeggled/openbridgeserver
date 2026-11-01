@@ -24,8 +24,6 @@ from obs.logic.models import FlowData, LogicGraphCreate, LogicGraphImport, Logic
         ("api_client", {"timeout_s": " "}, "must be a number"),
         ("timer_delay", {"delay_s": "bad"}, "must be a number"),
         ("timer_delay", {"delay_s": 10**400}, "must be a finite number"),
-        # #1377: a duration under the sibling's key is moved first, then checked.
-        ("timer_delay", {"duration_s": -1}, "delay_s must be greater than or equal to 0"),
     ],
 )
 def test_write_validation_rejects_invalid_durations(node_type, data, message):
@@ -50,6 +48,9 @@ def test_write_validation_rejects_invalid_durations(node_type, data, message):
         ("timer_cron", {"delay_s": -1}),
         ("api_client", {"timeout_s": 1}),
         ("api_client", {"timeout_s": ""}),
+        # #1377: an unusable duration under the sibling's key is not adopted, so not rejected.
+        ("timer_delay", {"duration_s": -1}),
+        ("timer_pulse", {"delay_s": "bad"}),
     ],
 )
 def test_write_validation_allows_non_negative_or_unrelated_timer_values(node_type, data):
@@ -120,14 +121,22 @@ def test_persisted_negative_timer_durations_remain_readable():
         # #1377: the sibling's key alone is adopted under the key the block reads.
         ("timer_delay", {"duration_s": 8}, {"delay_s": 8}),
         ("timer_delay", {"duration_s": 8, "delay_s": None}, {"delay_s": 8}),
-        ("timer_delay", {"duration_s": "8", "delay_s": ""}, {"delay_s": "8"}),
-        ("timer_pulse", {"delay_s": 2, "label": "Flur"}, {"duration_s": 2, "label": "Flur"}),
-        # An empty sibling carries no duration: it is dropped, nothing is adopted.
-        ("timer_delay", {"duration_s": None}, {}),
-        ("timer_delay", {"duration_s": "", "delay_s": ""}, {"delay_s": ""}),
+        ("timer_delay", {"duration_s": "8"}, {"delay_s": "8"}),
+        ("timer_delay", {"duration_s": 0}, {"delay_s": 0}),
+        ("timer_pulse", {"delay_s": 2, "label": "Flur"}, {"label": "Flur", "duration_s": 2}),
+        # An empty own key is a deliberate choice of the default: the sibling stays a stray key.
+        ("timer_pulse", {"duration_s": "", "delay_s": 30}, {"duration_s": "", "delay_s": 30}),
         # The block's own duration wins; a stray sibling beside it stays untouched.
         ("timer_delay", {"delay_s": 2, "duration_s": 8}, {"delay_s": 2, "duration_s": 8}),
         ("timer_pulse", {"duration_s": 0, "delay_s": 8}, {"duration_s": 0, "delay_s": 8}),
+        # A sibling value that is no usable duration is left as it was (the block keeps its default).
+        ("timer_delay", {"duration_s": None}, {"duration_s": None}),
+        ("timer_delay", {"duration_s": ""}, {"duration_s": ""}),
+        ("timer_delay", {"duration_s": "bad"}, {"duration_s": "bad"}),
+        ("timer_delay", {"duration_s": [8]}, {"duration_s": [8]}),
+        ("timer_delay", {"duration_s": 10**400}, {"duration_s": 10**400}),
+        ("timer_delay", {"duration_s": "inf"}, {"duration_s": "inf"}),
+        ("timer_delay", {"duration_s": -1}, {"duration_s": -1}),
         ("timer_delay", {}, {}),
         # Other block types keep their keys.
         ("api_client", {"duration_s": 8}, {"duration_s": 8}),
