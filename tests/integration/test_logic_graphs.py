@@ -261,26 +261,43 @@ async def test_create_graph_success(client, auth_headers):
     assert "flow_data" in body
 
 
-@pytest.mark.parametrize(
-    ("data", "expected"),
-    [
-        ({"duration_s": 8}, "timer_delay reads its duration from delay_s, not duration_s"),
-        ({"delay_s": 8}, None),
-    ],
-)
-async def test_create_graph_rejects_delay_with_only_the_pulse_duration_key(client, auth_headers, data, expected):
-    """#1377: a Delay with only `duration_s` would fire after the 1 s default."""
-    flow = {"nodes": [{"id": "delay", "type": "timer_delay", "position": {"x": 0, "y": 0}, "data": data}], "edges": []}
+async def test_create_graph_adopts_a_delay_duration_saved_under_the_pulse_key(client, auth_headers):
+    """#1377: a Delay with only `duration_s` used to run with the 1 s default."""
+    flow = {"nodes": [{"id": "delay", "type": "timer_delay", "position": {"x": 0, "y": 0}, "data": {"duration_s": 8}}], "edges": []}
     resp = await client.post(
         "/api/v1/logic/graphs",
         json={"name": f"LG-Delay-{uuid.uuid4().hex[:6]}", "enabled": False, "flow_data": flow},
         headers=auth_headers,
     )
-    if expected is None:
-        assert resp.status_code == 201, resp.text
-    else:
-        assert resp.status_code == 422, resp.text
-        assert resp.json()["detail"] == expected
+    assert resp.status_code == 201, resp.text
+
+    stored = await client.get(f"/api/v1/logic/graphs/{resp.json()['id']}", headers=auth_headers)
+    assert stored.json()["flow_data"]["nodes"][0]["data"] == {"delay_s": 8}
+
+
+async def test_config_import_keeps_a_sheet_whose_delay_uses_the_pulse_key(client, auth_headers):
+    """#1377: restoring a backup with such a Delay keeps the sheet and its duration."""
+    graph_id = str(uuid.uuid4())
+    flow = {"nodes": [{"id": "delay", "type": "timer_delay", "position": {"x": 0, "y": 0}, "data": {"duration_s": 8}}], "edges": []}
+    try:
+        resp = await client.post(
+            "/api/v1/config/import",
+            json={
+                "obs_version": "5",
+                "exported_at": "2026-01-01T00:00:00",
+                "datapoints": [],
+                "bindings": [],
+                "logic_graphs": [{"id": graph_id, "name": "LG-Delay-Restore", "description": "", "enabled": False, "flow_data": flow}],
+            },
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["logic_graphs_created"] == 1, resp.text
+
+        stored = await client.get(f"/api/v1/logic/graphs/{graph_id}", headers=auth_headers)
+        assert stored.json()["flow_data"]["nodes"][0]["data"] == {"delay_s": 8}
+    finally:
+        await client.delete(f"/api/v1/logic/graphs/{graph_id}", headers=auth_headers)
 
 
 async def test_create_graph_response_shape(client, auth_headers):

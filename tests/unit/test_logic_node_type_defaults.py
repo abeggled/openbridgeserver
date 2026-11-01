@@ -24,11 +24,8 @@ from obs.logic.models import FlowData, LogicGraphCreate, LogicGraphImport, Logic
         ("api_client", {"timeout_s": " "}, "must be a number"),
         ("timer_delay", {"delay_s": "bad"}, "must be a number"),
         ("timer_delay", {"delay_s": 10**400}, "must be a finite number"),
-        # #1377: the sibling timer's key alone would run with the 1 s default.
-        ("timer_delay", {"duration_s": 8}, "timer_delay reads its duration from delay_s, not duration_s"),
-        ("timer_delay", {"duration_s": 8, "delay_s": None}, "reads its duration from delay_s"),
-        ("timer_delay", {"duration_s": 8, "delay_s": ""}, "reads its duration from delay_s"),
-        ("timer_pulse", {"delay_s": 2}, "timer_pulse reads its duration from duration_s, not delay_s"),
+        # #1377: a duration under the sibling's key is moved first, then checked.
+        ("timer_delay", {"duration_s": -1}, "delay_s must be greater than or equal to 0"),
     ],
 )
 def test_write_validation_rejects_invalid_durations(node_type, data, message):
@@ -53,10 +50,6 @@ def test_write_validation_rejects_invalid_durations(node_type, data, message):
         ("timer_cron", {"delay_s": -1}),
         ("api_client", {"timeout_s": 1}),
         ("api_client", {"timeout_s": ""}),
-        # A stray sibling key beside the block's own duration is ignored, not rejected.
-        ("timer_delay", {"delay_s": 2, "duration_s": 8}),
-        ("timer_pulse", {"duration_s": 2, "delay_s": 8}),
-        ("api_client", {"duration_s": 8}),
     ],
 )
 def test_write_validation_allows_non_negative_or_unrelated_timer_values(node_type, data):
@@ -119,3 +112,28 @@ def test_persisted_negative_timer_durations_remain_readable():
     )
 
     assert graph.flow_data.nodes[0].data["duration_s"] == -1
+
+
+@pytest.mark.parametrize(
+    ("node_type", "data", "expected"),
+    [
+        # #1377: the sibling's key alone is adopted under the key the block reads.
+        ("timer_delay", {"duration_s": 8}, {"delay_s": 8}),
+        ("timer_delay", {"duration_s": 8, "delay_s": None}, {"delay_s": 8}),
+        ("timer_delay", {"duration_s": "8", "delay_s": ""}, {"delay_s": "8"}),
+        ("timer_pulse", {"delay_s": 2, "label": "Flur"}, {"duration_s": 2, "label": "Flur"}),
+        # An empty sibling carries no duration: it is dropped, nothing is adopted.
+        ("timer_delay", {"duration_s": None}, {}),
+        ("timer_delay", {"duration_s": "", "delay_s": ""}, {"delay_s": ""}),
+        # The block's own duration wins; a stray sibling beside it stays untouched.
+        ("timer_delay", {"delay_s": 2, "duration_s": 8}, {"delay_s": 2, "duration_s": 8}),
+        ("timer_pulse", {"duration_s": 0, "delay_s": 8}, {"duration_s": 0, "delay_s": 8}),
+        ("timer_delay", {}, {}),
+        # Other block types keep their keys.
+        ("api_client", {"duration_s": 8}, {"duration_s": 8}),
+    ],
+)
+def test_timer_nodes_adopt_a_duration_saved_under_the_sibling_key(node_type, data, expected):
+    flow = FlowData.model_validate({"nodes": [{"id": "node", "type": node_type, "position": {"x": 0, "y": 0}, "data": data}]})
+
+    assert flow.nodes[0].data == expected

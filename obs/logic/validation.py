@@ -15,13 +15,6 @@ _DURATION_FIELDS = {
     "api_client": ("timeout_s", 1),
 }
 
-# The two timer blocks name their duration differently. A block carrying only
-# its sibling's key would silently run with the 1 s default (#1377).
-_SIBLING_DURATION_FIELDS = {
-    "timer_delay": "duration_s",
-    "timer_pulse": "delay_s",
-}
-
 
 def validate_timer_durations(flow_data: FlowData) -> None:
     """Reject invalid durations before they are persisted."""
@@ -30,11 +23,7 @@ def validate_timer_durations(flow_data: FlowData) -> None:
         if duration_field is None:
             continue
         field, minimum = duration_field
-        value = node.data.get(field)
-        sibling = _SIBLING_DURATION_FIELDS.get(node.type)
-        if sibling is not None and sibling in node.data and value in (None, ""):
-            raise ValueError(f"{node.type} reads its duration from {field}, not {sibling}")
-        if value is None:
+        if (value := node.data.get(field)) is None:
             continue
 
         try:

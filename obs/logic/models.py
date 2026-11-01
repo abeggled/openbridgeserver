@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 ControlClassName = Literal["room_local", "central_plant"]
 
@@ -22,11 +22,38 @@ class LogicNodeData(BaseModel):
     model_config = {"extra": "allow"}
 
 
+# The timer blocks name their duration differently: (key read, sibling's key).
+_TIMER_DURATION_KEYS = {
+    "timer_delay": ("delay_s", "duration_s"),
+    "timer_pulse": ("duration_s", "delay_s"),
+}
+
+
 class LogicNode(BaseModel):
     id: str
     type: str  # e.g. "and", "or", "datapoint_read"
     position: NodePosition
     data: dict[str, Any] = {}
+
+    @model_validator(mode="after")
+    def _adopt_sibling_timer_duration(self) -> LogicNode:
+        """Move a timer duration saved under the sibling block's key to the one this block reads.
+
+        A Delay saved with only ``duration_s`` (the Pulse's key) used to run with
+        the 1 s default (#1377). Every parse — save, import, load, read — moves
+        it, so sheets stored that way take their configured duration on load.
+        """
+        keys = _TIMER_DURATION_KEYS.get(self.type)
+        if keys is None:
+            return self
+        own, sibling = keys
+        if sibling in self.data and self.data.get(own) in (None, ""):
+            data = dict(self.data)
+            value = data.pop(sibling)
+            if value not in (None, ""):
+                data[own] = value
+            self.data = data
+        return self
 
 
 class LogicEdge(BaseModel):
