@@ -31,7 +31,8 @@ lesen.
    Adresse im iCal-Format*).
 3. Einen **Filter** hinzufügen (ohne Muster passt er auf alle Termine) und dessen Ausgang
    **Array** mit einem Baustein **Objekt schreiben** auf das Objekt aus Schritt 1 verbinden. Am
-   Schreibbaustein **Nur schreiben wenn Wert sich geändert hat** einschalten.
+   Schreibbaustein **Nur schreiben wenn Wert sich geändert hat** einschalten. Der
+   Schreibbaustein legt das Array als JSON-Text im `STRING`-Objekt ab.
 4. Im Visu-Editor das Widget **Terminliste** einfügen und das Objekt als Kalenderquelle wählen.
 
 Für einen weiteren Kalender oder eine weitere Kategorie (z. B. ein Filter nur auf „Papier“)

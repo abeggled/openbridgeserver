@@ -28,7 +28,8 @@ private calendar address secret, because every viewer can read a Visu page's con
    address in iCal format*, or *Public address in iCal format* for public calendars).
 3. Add a **filter** (without patterns it matches every event) and connect its **Array** output
    to the object from step 1 with a **Write Object** block. On the write block, enable **Only
-   write if value has changed**.
+   write if value has changed**. The write block stores the array in the `STRING` object as
+   JSON text.
 4. In the Visu editor, insert the **Event list** widget and pick the object as calendar source.
 
 For another calendar or another category (e.g. a filter on "paper" only), write one more object
