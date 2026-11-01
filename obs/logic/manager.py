@@ -923,6 +923,53 @@ def _migrate_legacy_api_client_field_names(flow: FlowData) -> None:
                 node.data[new_key] = legacy_value
 
 
+# The timer blocks name their duration differently: (key the block reads, the sibling's key).
+_TIMER_DURATION_KEYS = {
+    "timer_delay": ("delay_s", "duration_s"),
+    "timer_pulse": ("duration_s", "delay_s"),
+}
+
+
+def _migrate_timer_duration_keys(flow: FlowData) -> None:
+    """Move a timer duration saved under the sibling block's key to the one the block reads.
+
+    A Delay saved through the API with only ``duration_s`` (the Pulse's key)
+    ran with the 1 s default (#1377). In-memory and idempotent like the
+    api_client migration above, applied at the same load and read points, so
+    sheets stored that way take their configured duration; the next save
+    from the editor stores it under the block's own key.
+
+    Only a usable duration (a finite number >= 0, not a bool) is moved, and
+    only while the block's own key is absent or null: an empty own key is a
+    deliberate choice of the default, and an unusable sibling value stays an
+    ignored stray key, as it was before.
+    """
+    for node in flow.nodes:
+        keys = _TIMER_DURATION_KEYS.get(node.type)
+        if keys is None:
+            continue
+        own, sibling = keys
+        if node.data.get(own) is not None or sibling not in node.data:
+            continue
+        value = node.data[sibling]
+        if isinstance(value, bool):
+            continue  # float(False) == 0.0 would turn a stray flag into a duration
+        try:
+            seconds = float(value)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not math.isfinite(seconds) or seconds < 0:
+            continue
+        del node.data[sibling]
+        node.data[own] = value
+
+
+def _migrate_legacy_node_data(flow: FlowData) -> None:
+    """All in-memory upgrades of stored ``node.data`` keys, applied wherever a stored flow is loaded or read."""
+    _migrate_legacy_api_client_field_names(flow)
+    _migrate_timer_duration_keys(flow)
+
+
 _normalise_api_client_variables = normalise_variable_slots
 
 
@@ -8777,7 +8824,7 @@ class LogicManager:
             try:
                 raw = json.loads(row["flow_data"]) if row["flow_data"] else {}
                 flow = FlowData.model_validate(raw)
-                _migrate_legacy_api_client_field_names(flow)
+                _migrate_legacy_node_data(flow)
                 self._graphs[row["id"]] = (row["name"], bool(row["enabled"]), flow)
 
                 # Restore persisted node state (statistics, hysteresis, …) from DB,
@@ -8998,7 +9045,7 @@ class LogicManager:
             # migrated cached flow with the legacy one, silently losing the
             # configured headers/bearer-token file until the next full
             # _load_graphs() reload.
-            _migrate_legacy_api_client_field_names(flow)
+            _migrate_legacy_node_data(flow)
             self._graphs[graph_id] = (name, enabled, flow)
             self._sequence_graph_signatures[graph_id] = flow.model_dump_json()
             # A layout-only save leaves execution semantics untouched by

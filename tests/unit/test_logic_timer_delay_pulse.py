@@ -158,8 +158,11 @@ def test_a_delay_saved_with_the_pulse_duration_key_waits_that_long() -> None:
         target = uuid.uuid4()
         raw = json.loads(_delay_flow(target).model_dump_json())
         raw["nodes"][1]["data"] = {"duration_s": 0.05}
-        flow = FlowData.model_validate(raw)
-        manager._graphs["graph"] = ("Graph", True, flow)
+        manager._db.fetchall = AsyncMock(
+            return_value=[{"id": "graph", "name": "Graph", "enabled": 1, "flow_data": json.dumps(raw), "node_state": None}]
+        )
+        await manager._load_graphs()  # the stored sheet as the runtime loads it
+        flow = manager._graphs["graph"][2]
 
         started = monotonic()
         await manager._execute_graph("graph", "Graph", flow, _event(1), logic_depth=0)

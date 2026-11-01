@@ -173,6 +173,22 @@ async def test_validate_graph_reports_unknown_node_type_and_nested_config_schema
     }
 
 
+async def test_validate_graph_accepts_a_usable_timer_duration_under_the_sibling_key(client, auth_headers):
+    """#1377: the runtime adopts it, so it is no ignored field; an unusable one still is."""
+    flow_data = {
+        "nodes": [
+            {"id": "delay", "type": "timer_delay", "position": {"x": 0, "y": 0}, "data": {"duration_s": 8}},
+            {"id": "pulse", "type": "timer_pulse", "position": {"x": 200, "y": 0}, "data": {"delay_s": "bad"}},
+        ],
+        "edges": [],
+    }
+
+    resp = await client.post("/api/v1/logic/graphs/validate", json=flow_data, headers=auth_headers)
+
+    assert resp.status_code == 200
+    assert [(w["node_id"], w["code"]) for w in resp.json()["warnings"]] == [("pulse", "unknown_config_field")]
+
+
 async def test_validate_graph_reports_unknown_config_field_and_missing_node_placeholder(client, auth_headers):
     flow_data = {
         "nodes": [

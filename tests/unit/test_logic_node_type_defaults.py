@@ -145,6 +145,9 @@ def test_persisted_negative_timer_durations_remain_readable():
     ],
 )
 def test_timer_nodes_adopt_a_duration_saved_under_the_sibling_key(node_type, data, expected):
+    from obs.logic.manager import _migrate_legacy_node_data
+
     flow = FlowData.model_validate({"nodes": [{"id": "node", "type": node_type, "position": {"x": 0, "y": 0}, "data": data}]})
+    _migrate_legacy_node_data(flow)
 
     assert flow.nodes[0].data == expected
