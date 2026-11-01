@@ -120,6 +120,10 @@ Bool). Ein Filter kann reguläre Ausdrücke auf **Titel**, **Ort** und/oder **Be
 anwenden, verknüpft über **UND**/**ODER**, und wahlweise Gross-/Kleinschreibung beachten. Ein
 leeres Musterfeld wird ignoriert (kein Ausschlusskriterium).
 
+Um die Termine in der Visu als Liste anzuzeigen, den **Array**-Ausgang eines Filters in ein
+`STRING`-Objekt schreiben und dieses im Widget [Terminliste](../visu/widgets#widget-terminliste)
+als Quelle wählen.
+
 ## API Client {#logic-block-api-client}
 
 Sendet HTTP-Anfragen (GET/POST/PUT/PATCH/DELETE) an eine konfigurierbare **URL**; der
