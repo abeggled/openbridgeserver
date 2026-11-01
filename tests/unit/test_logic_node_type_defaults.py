@@ -24,6 +24,11 @@ from obs.logic.models import FlowData, LogicGraphCreate, LogicGraphImport, Logic
         ("api_client", {"timeout_s": " "}, "must be a number"),
         ("timer_delay", {"delay_s": "bad"}, "must be a number"),
         ("timer_delay", {"delay_s": 10**400}, "must be a finite number"),
+        # #1377: the sibling timer's key alone would run with the 1 s default.
+        ("timer_delay", {"duration_s": 8}, "timer_delay reads its duration from delay_s, not duration_s"),
+        ("timer_delay", {"duration_s": 8, "delay_s": None}, "reads its duration from delay_s"),
+        ("timer_delay", {"duration_s": 8, "delay_s": ""}, "reads its duration from delay_s"),
+        ("timer_pulse", {"delay_s": 2}, "timer_pulse reads its duration from duration_s, not delay_s"),
     ],
 )
 def test_write_validation_rejects_invalid_durations(node_type, data, message):
@@ -48,6 +53,10 @@ def test_write_validation_rejects_invalid_durations(node_type, data, message):
         ("timer_cron", {"delay_s": -1}),
         ("api_client", {"timeout_s": 1}),
         ("api_client", {"timeout_s": ""}),
+        # A stray sibling key beside the block's own duration is ignored, not rejected.
+        ("timer_delay", {"delay_s": 2, "duration_s": 8}),
+        ("timer_pulse", {"duration_s": 2, "delay_s": 8}),
+        ("api_client", {"duration_s": 8}),
     ],
 )
 def test_write_validation_allows_non_negative_or_unrelated_timer_values(node_type, data):

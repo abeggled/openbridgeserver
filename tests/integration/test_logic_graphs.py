@@ -261,6 +261,28 @@ async def test_create_graph_success(client, auth_headers):
     assert "flow_data" in body
 
 
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        ({"duration_s": 8}, "timer_delay reads its duration from delay_s, not duration_s"),
+        ({"delay_s": 8}, None),
+    ],
+)
+async def test_create_graph_rejects_delay_with_only_the_pulse_duration_key(client, auth_headers, data, expected):
+    """#1377: a Delay with only `duration_s` would fire after the 1 s default."""
+    flow = {"nodes": [{"id": "delay", "type": "timer_delay", "position": {"x": 0, "y": 0}, "data": data}], "edges": []}
+    resp = await client.post(
+        "/api/v1/logic/graphs",
+        json={"name": f"LG-Delay-{uuid.uuid4().hex[:6]}", "enabled": False, "flow_data": flow},
+        headers=auth_headers,
+    )
+    if expected is None:
+        assert resp.status_code == 201, resp.text
+    else:
+        assert resp.status_code == 422, resp.text
+        assert resp.json()["detail"] == expected
+
+
 async def test_create_graph_response_shape(client, auth_headers):
     graph = await _create_graph(client, auth_headers)
     for field in ("id", "name", "description", "enabled", "flow_data", "created_at", "updated_at"):

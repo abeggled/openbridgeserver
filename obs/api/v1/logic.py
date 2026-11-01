@@ -717,7 +717,9 @@ async def validate_graph(
     `status`. This endpoint is **not** enforced anywhere else: `POST`/`PUT /graphs` persist a graph
     with cycles or invalid config the same way regardless of whether this was called first, except
     for timer duration bounds (`timer_delay`/`timer_pulse`/`api_client.timeout_s`), which those two
-    endpoints reject outright (422) at save time — independently of this endpoint.
+    endpoints reject outright (422) at save time — independently of this endpoint. The same applies
+    to a timer whose duration sits only under its sibling's key (`timer_delay` reads `delay_s`,
+    `timer_pulse` reads `duration_s`): without the block's own key it would run with the 1 s default.
     """
     return {"status": "ok", "warnings": topology_warnings(body) + config_schema_warnings(body)}
 
