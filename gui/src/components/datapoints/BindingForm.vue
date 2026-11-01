@@ -405,7 +405,7 @@ const VALUE_MAP_PRESETS = [
 ]
 
 const cfg = reactive({
-  group_address: '', dpt_id: 'DPT9.001', state_group_address: '', respond_to_read: false,
+  group_address: '', dpt_id: 'DPT9.001', state_group_address: '', respond_to_read: false, read_interval_s: null,
   address: 0, register_type: 'holding', data_format: 'uint16',
   unit_id: 1, count: 1, scale_factor: 1.0, poll_interval: 1.0,
   byte_order: 'big', word_order: 'big',
@@ -679,6 +679,8 @@ watch(() => props.initial, val => {
   if (cfg.state_group_address == null) cfg.state_group_address = ''
   if (cfg.publish_topic       == null) cfg.publish_topic = ''
   if (cfg.respond_to_read     == null) cfg.respond_to_read = false
+  // Object.assign keeps a previous binding's interval when this config has none
+  cfg.read_interval_s = val.config?.read_interval_s ?? null
   if (cfg.payload_template    == null) cfg.payload_template = ''
   if (cfg.source_data_type   == null) cfg.source_data_type = ''
   if (cfg.json_key           == null) cfg.json_key = ''
@@ -1334,6 +1336,9 @@ function buildConfig() {
     const c = { group_address: cfg.group_address, dpt_id: cfg.dpt_id || 'DPT9.001' }
     if (cfg.state_group_address?.trim()) c.state_group_address = cfg.state_group_address.trim()
     if (cfg.respond_to_read) c.respond_to_read = true
+    // Only SOURCE/BOTH poll; a value hidden by switching to DEST is not saved (#1402)
+    const readInterval = Math.round(Number(cfg.read_interval_s))
+    if (form.direction !== 'DEST' && readInterval > 0) c.read_interval_s = readInterval
     return c
   }
   if (type === 'MODBUS_TCP' || type === 'MODBUS_RTU') {
