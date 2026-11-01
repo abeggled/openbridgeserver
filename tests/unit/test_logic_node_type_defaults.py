@@ -134,6 +134,8 @@ def test_persisted_negative_timer_durations_remain_readable():
         ("timer_delay", {"duration_s": ""}, {"duration_s": ""}),
         ("timer_delay", {"duration_s": "bad"}, {"duration_s": "bad"}),
         ("timer_delay", {"duration_s": [8]}, {"duration_s": [8]}),
+        ("timer_delay", {"duration_s": False}, {"duration_s": False}),
+        ("timer_pulse", {"delay_s": True}, {"delay_s": True}),
         ("timer_delay", {"duration_s": 10**400}, {"duration_s": 10**400}),
         ("timer_delay", {"duration_s": "inf"}, {"duration_s": "inf"}),
         ("timer_delay", {"duration_s": -1}, {"duration_s": -1}),

@@ -56,6 +56,8 @@ class LogicNode(BaseModel):
         if self.data.get(own) is not None or sibling not in self.data:
             return self
         value = self.data[sibling]
+        if isinstance(value, bool):
+            return self  # float(False) == 0.0 would turn a stray flag into a duration
         try:
             seconds = float(value)
         except (TypeError, ValueError, OverflowError):

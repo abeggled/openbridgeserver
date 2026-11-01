@@ -165,7 +165,8 @@ def test_a_delay_saved_with_the_pulse_duration_key_waits_that_long() -> None:
         await manager._execute_graph("graph", "Graph", flow, _event(1), logic_depth=0)
         await manager._timer_tasks[("graph", "delay")]
 
-        assert monotonic() - started < 0.5
+        # Waited the adopted 0.05 s: not at once, and not the 1 s default.
+        assert 0.04 <= monotonic() - started < 0.5
         assert _values(manager) == [7]
 
     asyncio.run(exercise())
