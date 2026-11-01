@@ -287,8 +287,9 @@ async def test_create_graph_adopts_a_delay_duration_saved_under_the_pulse_key(cl
     )
     assert resp.status_code == 201, resp.text
 
-    stored = await client.get(f"/api/v1/logic/graphs/{resp.json()['id']}", headers=auth_headers)
-    assert stored.json()["flow_data"]["nodes"][0]["data"] == {"delay_s": 8}
+    # Read back through the API, which migrates on read; the row keeps duration_s until the next GUI save.
+    read_back = await client.get(f"/api/v1/logic/graphs/{resp.json()['id']}", headers=auth_headers)
+    assert read_back.json()["flow_data"]["nodes"][0]["data"] == {"delay_s": 8}
 
 
 async def test_config_import_keeps_a_sheet_whose_delay_uses_the_pulse_key(client, auth_headers):
@@ -310,8 +311,8 @@ async def test_config_import_keeps_a_sheet_whose_delay_uses_the_pulse_key(client
         assert resp.status_code == 200, resp.text
         assert resp.json()["logic_graphs_created"] == 1, resp.text
 
-        stored = await client.get(f"/api/v1/logic/graphs/{graph_id}", headers=auth_headers)
-        assert stored.json()["flow_data"]["nodes"][0]["data"] == {"delay_s": 8}
+        read_back = await client.get(f"/api/v1/logic/graphs/{graph_id}", headers=auth_headers)
+        assert read_back.json()["flow_data"]["nodes"][0]["data"] == {"delay_s": 8}
     finally:
         await client.delete(f"/api/v1/logic/graphs/{graph_id}", headers=auth_headers)
 

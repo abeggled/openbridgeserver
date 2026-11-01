@@ -2269,7 +2269,7 @@ class LogicManager:
     @classmethod
     def _timer_duration(cls, node: Any) -> float:
         """The configured delay_s / duration_s of a timer block."""
-        return cls._timer_seconds(node.data.get("delay_s" if node.type == "timer_delay" else "duration_s"), 1.0)
+        return cls._timer_seconds(node.data.get(_TIMER_DURATION_KEYS[node.type][0]), 1.0)
 
     def _timer_state(self, graph_id: str, node_id: str, kind: str) -> _TimerState:
         nodes = self._timers.setdefault(graph_id, {})

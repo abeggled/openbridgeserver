@@ -35,7 +35,7 @@ from obs.api.v1.content_disposition import attachment_header
 from obs.db.database import Database, get_db
 from obs.logic.capabilities import LOGIC_CREATE_CAPABILITY
 from obs.logic.graph_analysis import config_schema_warnings, topology_warnings
-from obs.logic.manager import _migrate_legacy_node_data, _migrate_timer_duration_keys, _normalise_api_client_variables
+from obs.logic.manager import _migrate_legacy_node_data, _normalise_api_client_variables
 from obs.logic.models import (
     FlowData,
     LogicEdge,
@@ -719,8 +719,9 @@ async def validate_graph(
     for timer duration bounds (`timer_delay`/`timer_pulse`/`api_client.timeout_s`), which those two
     endpoints reject outright (422) at save time — independently of this endpoint.
     """
-    # A timer duration under the sibling's key is used at run time (#1377), so it is no unknown field.
-    _migrate_timer_duration_keys(body)
+    # Checked in the shape the runtime loads: a key a migration moves (e.g. a timer duration
+    # under the sibling's key, #1377) is used at run time, so it is no unknown field.
+    _migrate_legacy_node_data(body)
     return {"status": "ok", "warnings": topology_warnings(body) + config_schema_warnings(body)}
 
 
