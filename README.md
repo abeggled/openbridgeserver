@@ -1055,6 +1055,7 @@ Response from the upload endpoint:
 | `dpt_id` | DPT identifier — table below |
 | `state_group_address` | Optional feedback address for DEST bindings |
 | `respond_to_read` | `true`: **open bridge server** responds to KNX read requests (GroupValueRead) with the current value. Default: `false` |
+| `read_interval_s` | SOURCE/BOTH only: sends a `GroupValueRead` to `state_group_address` (otherwise `group_address`) every *n* seconds, so devices that do not send their state on their own stay current. Empty or `0` = off (default), otherwise `10` to `86400` (one day). Adds KNX bus load |
 
 **Supported DPTs:**
 
