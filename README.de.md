@@ -1052,6 +1052,7 @@ Antwort des Upload-Endpunkts:
 | `dpt_id` | DPT-Kennung — Tabelle unten |
 | `state_group_address` | Optionale Rückmelde-Adresse für DEST-Verknüpfungen |
 | `respond_to_read` | `true`: **open bridge server** beantwortet KNX-Leseanfragen (GroupValueRead) mit dem aktuellen Wert. Standard: `false` |
+| `read_interval_s` | Nur SOURCE/BOTH: sendet alle *n* Sekunden einen `GroupValueRead` an `state_group_address` (sonst `group_address`), damit Geräte, die ihren Zustand nicht selbst senden, aktuell bleiben. Leer oder `0` = aus (Standard), sonst `10` bis `86400` (ein Tag). Erzeugt zusätzliche KNX-Buslast |
 
 **Unterstützte DPTs:**
 

@@ -206,4 +206,23 @@ describe('NodeConfigPanel debug tabs (issue #1128)', () => {
     expect(w.emitted('clear-all')).toHaveLength(1)
     w.unmount()
   })
+
+  it('offers "fire now" only for a Trigger block and forwards its id (#1276)', async () => {
+    const plain = await mountPanel({ debugMode: true })
+    expect(plain.find('[data-testid="debug-fire-trigger"]').exists()).toBe(false)
+    plain.unmount()
+
+    const w = await mountPanel({
+      debugMode: true,
+      node: { id: 'cron1', type: 'timer_cron', data: { cron: '0 7 * * *' } },
+      nodeTypes: [{ type: 'timer_cron', label: 'Trigger', description: '', inputs: [], config_schema: { cron: { type: 'string' } } }],
+    })
+    await w.find('[data-testid="debug-fire-trigger"]').trigger('click')
+    expect(w.emitted('fire-trigger')[0]).toEqual(['cron1'])
+
+    await w.setProps({ fireDisabled: true, fireDisabledHint: 'Blatt deaktiviert' })
+    expect(w.find('[data-testid="debug-fire-trigger"]').attributes('disabled')).toBeDefined()
+    expect(w.find('[data-testid="debug-fire-trigger-hint"]').text()).toBe('Blatt deaktiviert')
+    w.unmount()
+  })
 })

@@ -25,6 +25,13 @@ Der Zeitplan wird in der eingestellten Anwendungs-Zeitzone ausgewertet (**Einste
 Allgemein**), nicht in UTC — ein Trigger „Täglich um 07:00" löst also um 07:00 Ortszeit aus und
 folgt automatisch der Zeitumstellung (Sommer-/Winterzeit).
 
+Im Debug-Modus muss man nicht auf den nächsten Zeitpunkt warten: Der Reiter **Debug-Werte** eines
+Trigger-Blocks bietet die Schaltfläche **Jetzt auslösen**. Sie führt das Logikblatt einmal so aus,
+als hätte der Zeitplan gerade ausgelöst — mit allen Folgeaktionen wie Schreibvorgängen oder
+Benachrichtigungen. Im Debug-Modus gesetzte Überschreibungen anderer Blöcke gelten dabei mit; der
+Trigger selbst lässt sich nicht überschreiben. **Ausführen** in der Werkzeugleiste löst einen Trigger
+dagegen nicht aus.
+
 ## Datum/Zeit {#logic-block-datetime}
 
 Gibt das aktuelle Datum und die aktuelle Uhrzeit in der eingestellten Anwendungs-Zeitzone aus

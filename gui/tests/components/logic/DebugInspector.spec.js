@@ -116,4 +116,20 @@ describe('DebugInspector', () => {
     expect(wrapper.emitted('clear-all')).toHaveLength(1)
     expect(wrapper.emitted('clear-override')[0]).toEqual(['value'])
   })
+
+  it('shows a "fire now" button only when the block can fire (#1276)', async () => {
+    expect(mount(DebugInspector).find('[data-testid="debug-fire-trigger"]').exists()).toBe(false)
+
+    const wrapper = mount(DebugInspector, { props: { canFire: true } })
+    const button = wrapper.get('[data-testid="debug-fire-trigger"]')
+    expect(button.text()).toBe('Jetzt auslösen')
+    expect(button.attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('[data-testid="debug-fire-trigger-hint"]').exists()).toBe(false)
+    await button.trigger('click')
+    expect(wrapper.emitted('fire-trigger')).toHaveLength(1)
+
+    await wrapper.setProps({ fireDisabled: true, fireDisabledHint: 'Blatt deaktiviert' })
+    expect(button.attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="debug-fire-trigger-hint"]').text()).toBe('Blatt deaktiviert')
+  })
 })

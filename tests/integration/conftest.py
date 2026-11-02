@@ -109,6 +109,7 @@ async def app(mosquitto_port):
         MqttSettings,
         SecuritySettings,
         Settings,
+        UpdateCheckSettings,
         override_settings,
         reset_settings,
     )
@@ -142,6 +143,8 @@ async def app(mosquitto_port):
                 service_username="obs",
                 service_password="test",
             ),
+            # No requests to GitHub from the test session (#1370).
+            update_check=UpdateCheckSettings(enabled=False),
         ),
     )
 
@@ -164,6 +167,7 @@ async def app(mosquitto_port):
     # (e.g. on a server whose code is slightly behind) does not abort the
     # teardown and cause a noisy ERROR report for every other test.
     _reset_targets = [
+        ("obs.update.service", "reset_update_service"),
         ("obs.api.v1.websocket", "reset_ws_manager"),
         ("obs.core.write_router", "reset_write_router"),
         ("obs.core.mqtt_client", "reset_mqtt_client"),

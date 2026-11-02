@@ -25,7 +25,7 @@
           <Spinner v-if="saving" size="sm" color="white" />
           {{ $t('common.save') }}
         </button>
-        <button v-if="activeGraphId" @click="requestGraphRun"
+        <button v-if="activeGraphId" @click="requestGraphRun()"
           :class="['btn-secondary btn-sm flex-shrink-0', activeGraph?.enabled ? 'text-green-400' : 'text-slate-500 opacity-50 cursor-not-allowed']"
           :disabled="!activeGraph?.enabled || runPreflightLoading"
           :title="activeGraph?.enabled ? $t('logic.runTitle') : $t('logic.runDisabledTitle')"
@@ -225,6 +225,9 @@
         @set-override="setDebugOverride"
         @clear-override="clearDebugOverride"
         @clear-all="clearAllDebugOverrides"
+        :fire-disabled="firingTrigger || !activeGraph?.enabled"
+        :fire-disabled-hint="activeGraph?.enabled ? '' : $t('logic.runDisabledTitle')"
+        @fire-trigger="fireTrigger"
       />
     </div>
 
@@ -1022,6 +1025,12 @@ const runPreflightError = ref('')
 const runPreflightItems = ref([])
 const preflightApproved = ref(false)
 const preflightGraphId = ref('')
+// Trigger blocks the run awaiting the preflight dialog fires (issue #1276) —
+// a snapshot like preflightGraphId, so another run request cannot change it.
+const preflightFireTriggers = ref([])
+// A "fire now" in flight: the button stays locked so a double click cannot
+// run the sheet — and its side effects — twice.
+const firingTrigger = ref(false)
 let preflightRequestId = 0
 
 // Extractor blocks keep the last received payload (`_preview`) across runs
@@ -1119,17 +1128,21 @@ function normalizeRunPreflight(data) {
   }))
 }
 
-async function runApprovedGraph(graphId) {
+async function runApprovedGraph(graphId, fireTriggers = []) {
   preflightApproved.value = true
   try {
-    await runGraph(graphId)
+    await runGraph(graphId, fireTriggers)
   } finally {
     preflightApproved.value = false
     preflightGraphId.value = ''
+    preflightFireTriggers.value = []
   }
 }
 
-async function requestGraphRun() {
+// fireTriggers: Trigger blocks this run fires like a cron tick (issue #1276).
+// The debug pane's "fire now" takes the same save + preflight path as the
+// run button; the plain run button never fires one.
+async function requestGraphRun(fireTriggers = []) {
   if (!activeGraphId.value || !activeGraph.value?.enabled) return
   const graphId = activeGraphId.value
   // Bail out if the sheet was switched while the save was in flight.
@@ -1139,10 +1152,12 @@ async function requestGraphRun() {
   runPreflightError.value = ''
   runPreflightItems.value = []
   preflightGraphId.value = ''
+  preflightFireTriggers.value = []
   try {
     const { data } = await logicRunAuthzApi.preflight(graphId)
     if (requestId !== preflightRequestId || activeGraphId.value !== graphId || data.graph_id !== graphId) return
     preflightGraphId.value = graphId
+    preflightFireTriggers.value = fireTriggers
     const items = normalizeRunPreflight(data)
     runPreflightItems.value = items
     // Only interrupt with the confirmation dialog when a check is actually
@@ -1150,7 +1165,7 @@ async function requestGraphRun() {
     // grant restrictions) proceeds immediately without the popup.
     if (items.every(item => item.allowed !== false)) {
       runPreflightLoading.value = false
-      await runApprovedGraph(graphId)
+      await runApprovedGraph(graphId, fireTriggers)
       return
     }
     showRunPreflight.value = true
@@ -1167,7 +1182,17 @@ async function confirmGraphRun() {
   const graphId = preflightGraphId.value
   if (!graphId || activeGraphId.value !== graphId || runPreflightItems.value.some(item => !item.allowed)) return
   showRunPreflight.value = false
-  await runApprovedGraph(graphId)
+  await runApprovedGraph(graphId, preflightFireTriggers.value)
+}
+
+async function fireTrigger(nodeId) {
+  if (firingTrigger.value) return
+  firingTrigger.value = true
+  try {
+    await requestGraphRun([nodeId])
+  } finally {
+    firingTrigger.value = false
+  }
 }
 
 function parseOverride(text) {
@@ -1189,6 +1214,9 @@ const hasDebugOverrides = computed(() => Object.values(debugOverrides.value).som
 
 const debugInputs = computed(() => {
   if (!selectedNode.value) return []
+  // A Trigger fires through "fire now" only (issue #1276): its fired level is
+  // captured as an input, but an override of it would make every plain run fire.
+  if (selectedNode.value.type === 'timer_cron') return []
   const definition = store.nodeTypes.find(type => type.type === selectedNode.value.type)
   let ports = definition?.inputs || []
   const count = Number(selectedNode.value.data?.input_count) || 2
@@ -1242,7 +1270,7 @@ const debugInputs = computed(() => {
   })
 })
 
-async function runGraph(graphId = activeGraphId.value) {
+async function runGraph(graphId = activeGraphId.value, fireTriggers = []) {
   if ((!auth.isAdmin && !preflightApproved.value) || !graphId) return
   const requestGraphId = graphId
   const requestDebugGeneration = debugStateGeneration
@@ -1252,8 +1280,12 @@ async function runGraph(graphId = activeGraphId.value) {
       nodeId,
       Object.fromEntries(Object.entries(values).map(([port, value]) => [port, parseOverride(value)])),
     ]).filter(([, values]) => Object.keys(values).length))
-    const { data } = requestedDebugState || Object.keys(parsedOverrides).length
-      ? await logicApi.runGraph(requestGraphId, { debug: requestedDebugState, input_overrides: parsedOverrides })
+    const { data } = requestedDebugState || Object.keys(parsedOverrides).length || fireTriggers.length
+      ? await logicApi.runGraph(requestGraphId, {
+        debug: requestedDebugState,
+        input_overrides: parsedOverrides,
+        ...(fireTriggers.length ? { fire_triggers: fireTriggers } : {}),
+      })
       : await logicApi.runGraph(requestGraphId)
     if (activeGraphId.value !== requestGraphId) return
     const outputs = data.outputs || {}
@@ -1292,6 +1324,7 @@ watch(activeGraphId, () => {
   runPreflightLoading.value = false
   runPreflightItems.value = []
   preflightGraphId.value = ''
+  preflightFireTriggers.value = []
 })
 
 // ── New graph ──────────────────────────────────────────────────────────────

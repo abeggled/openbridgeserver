@@ -1,17 +1,17 @@
 // @vitest-environment jsdom
 import { flushPromises, mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import VisuViewer from './VisuViewer.vue'
 
 const mocks = vi.hoisted(() => {
   const node = {
     id: 'page-1',
-    parent_id: null,
+    parent_id: null as string | null,
     name: 'Privat',
     type: 'PAGE',
     order: 0,
     icon: null,
-    access: 'user',
+    access: 'user' as string | null,
     page_config: null,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
@@ -28,15 +28,21 @@ const mocks = vi.hoisted(() => {
     loadTree: vi.fn().mockResolvedValue(undefined),
     loadBreadcrumb,
     loadPage: vi.fn().mockResolvedValue(undefined),
-    hasSessionToken: () => false,
+    hasSessionToken: (_id: string): boolean => false,
   })
-  return { node, store, loadBreadcrumb, push: vi.fn(), getJwt: vi.fn() }
+  class ApiRequestError extends Error {
+    constructor(message: string, readonly status?: number) {
+      super(message)
+    }
+  }
+  const device: { profile: { start_node_id: string | null; start_node_missing?: boolean } | null; load: ReturnType<typeof vi.fn> } = { profile: null, load: vi.fn().mockResolvedValue(undefined) }
+  return { node, store, loadBreadcrumb, push: vi.fn(), replace: vi.fn(), getJwt: vi.fn(), device, ApiRequestError, setWriteContext: vi.fn() }
 })
 
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 
 vi.mock('vue-router', () => ({
-  useRouter: () => ({ push: mocks.push, currentRoute: { value: { fullPath: '/page-1' } } }),
+  useRouter: () => ({ push: mocks.push, replace: mocks.replace, currentRoute: { value: { fullPath: '/page-1' } } }),
 }))
 
 vi.mock('@/stores/visu', () => ({
@@ -52,15 +58,17 @@ vi.mock('@/stores/datapoints', () => ({
 }))
 
 vi.mock('@/stores/theme', () => ({ useThemeStore: () => ({ isDark: false, toggle: vi.fn() }) }))
+vi.mock('@/stores/device', () => ({ useDeviceStore: () => mocks.device }))
 
 vi.mock('@/composables/useWebSocket', () => ({
   useWebSocket: () => ({ connect: vi.fn(), disconnect: vi.fn(), connected: { value: true } }),
 }))
 
 vi.mock('@/api/client', () => ({
+  ApiRequestError: mocks.ApiRequestError,
   getJwt: mocks.getJwt,
   getSessionToken: () => null,
-  setWriteContext: vi.fn(),
+  setWriteContext: mocks.setWriteContext,
   clearWriteContext: vi.fn(),
   visuBackgrounds: { publicUrl: (n: string) => `/bg/${n}` },
 }))
@@ -75,26 +83,140 @@ function mountViewer() {
 describe('VisuViewer session end', () => {
   beforeEach(() => {
     mocks.push.mockClear()
+    mocks.replace.mockClear()
     mocks.store.loadPage.mockClear()
     mocks.store.loadTree.mockClear()
     mocks.loadBreadcrumb.mockReset()
+    mocks.device.profile = null
+    mocks.device.load.mockReset().mockResolvedValue(undefined)
+    mocks.store.treeLoaded = true
     mocks.loadBreadcrumb.mockResolvedValue(undefined)
     mocks.getJwt.mockReturnValue('jwt-1')
     mocks.node.access = 'user'
     mocks.store.nodes = [mocks.node]
+    mocks.node.parent_id = null
+    mocks.store.hasSessionToken = (_id: string): boolean => false
+  })
+
+  it('replaces itself with the login when a private page is opened without a session', async () => {
+    mocks.getJwt.mockReturnValue(null)
+    const wrapper = mountViewer()
+    await flushPromises()
+
+    // `replace`, not `push`: the login must not stay in the history behind the page
+    expect(mocks.replace).toHaveBeenCalledWith({ name: 'login', query: { redirect: '/page-1' } })
+    expect(mocks.push).not.toHaveBeenCalled()
+    expect(mocks.store.loadPage).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('replaces itself with the PIN dialog when a protected page has no session token', async () => {
+    mocks.node.access = 'protected'
+    const wrapper = mountViewer()
+    await flushPromises()
+
+    // The requested page travels along: `id` is the node that defines the protection.
+    expect(mocks.replace).toHaveBeenCalledWith({ name: 'pin-auth', params: { id: 'page-1' }, query: { redirect: '/page-1' } })
+    expect(mocks.push).not.toHaveBeenCalled()
+    expect(mocks.store.loadPage).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('loads a page that inherits the PIN protection with the session of the defining location (#1413)', async () => {
+    // PIN entered for the location; the page below it has no access setting of its own.
+    const location = { ...mocks.node, id: 'location-1', name: 'Ort', type: 'LOCATION', access: 'protected' }
+    mocks.node.access = null
+    mocks.node.parent_id = 'location-1'
+    mocks.store.nodes = [location, mocks.node]
+    mocks.store.hasSessionToken = (id: string) => id === 'location-1'
+    const wrapper = mountViewer()
+    await flushPromises()
+
+    expect(mocks.replace).not.toHaveBeenCalled()
+    expect(mocks.store.loadPage).toHaveBeenCalledWith('page-1', 'location-1')
+    expect(mocks.setWriteContext).toHaveBeenCalledWith(expect.objectContaining({ pageId: 'page-1', definingId: 'location-1' }))
+    wrapper.unmount()
+  })
+
+  it('does not send the next page to the PIN dialog when a slow load finishes after the viewer is gone', async () => {
+    // Protected page, slow breadcrumb; the user leaves via the breadcrumb home before it
+    // arrives. The outdated run must not replace the overview's entry with the PIN screen.
+    mocks.node.access = 'protected'
+    let resolveBreadcrumb: () => void = () => {}
+    mocks.loadBreadcrumb.mockImplementationOnce(() => new Promise<void>((resolve) => { resolveBreadcrumb = resolve }))
+    const wrapper = mountViewer()
+    await flushPromises()
+    wrapper.unmount()
+
+    resolveBreadcrumb()
+    await flushPromises()
+
+    expect(mocks.replace).not.toHaveBeenCalled()
+  })
+
+  it('lets a newer page switch win over a slow load of the previous page', async () => {
+    // Page switch while page 1 is still loading: nothing of page 1 may be wired up afterwards.
+    mocks.setWriteContext.mockClear()
+    let resolvePage: () => void = () => {}
+    mocks.store.loadPage.mockImplementationOnce(() => new Promise<void>((resolve) => { resolvePage = resolve }))
+    const wrapper = mountViewer()
+    await flushPromises()
+    await wrapper.setProps({ id: 'page-2' })
+    await flushPromises()
+
+    resolvePage()
+    await flushPromises()
+
+    expect(mocks.setWriteContext).not.toHaveBeenCalled()
+    expect(wrapper.text()).not.toContain('common.loadError')
+    wrapper.unmount()
+  })
+
+  it('drops the error of a slow load once another page is open', async () => {
+    let rejectBreadcrumb: (error: Error) => void = () => {}
+    mocks.loadBreadcrumb.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectBreadcrumb = reject }))
+    const wrapper = mountViewer()
+    await flushPromises()
+    await wrapper.setProps({ id: 'page-2' })
+    await flushPromises()
+
+    rejectBreadcrumb(new Error('common.loadError'))
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('common.loadError')
+    wrapper.unmount()
+  })
+
+  it('does not redirect to the login for a concealed start page once the viewer is gone', async () => {
+    mocks.getJwt.mockReturnValue(null)
+    mocks.store.nodes = []
+    mocks.loadBreadcrumb.mockRejectedValue(new mocks.ApiRequestError('common.loadError', 404))
+    let resolveProfiles: () => void = () => {}
+    mocks.device.load.mockImplementationOnce(() => new Promise<void>((resolve) => { resolveProfiles = resolve }))
+    mocks.device.profile = { start_node_id: 'page-1' }
+    const wrapper = mountViewer()
+    await flushPromises()
+    wrapper.unmount()
+
+    resolveProfiles()
+    await flushPromises()
+
+    expect(mocks.replace).not.toHaveBeenCalled()
   })
 
   it('leaves a private page for the login route when the session ends', async () => {
     const wrapper = mountViewer()
     await flushPromises()
     mocks.push.mockClear()
+    mocks.replace.mockClear()
 
     // Der proaktive Refresh wurde endgültig abgelehnt und hat die Tokens geräumt
     mocks.getJwt.mockReturnValue(null)
     window.dispatchEvent(new CustomEvent('visu:unauthorized'))
     await flushPromises()
 
-    expect(mocks.push).toHaveBeenCalledWith(expect.objectContaining({ name: 'login' }))
+    expect(mocks.replace).toHaveBeenCalledWith(expect.objectContaining({ name: 'login' }))
+    expect(mocks.push).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
@@ -102,6 +224,7 @@ describe('VisuViewer session end', () => {
     const wrapper = mountViewer()
     await flushPromises()
     mocks.push.mockClear()
+    mocks.replace.mockClear()
 
     // Ohne Anmeldung verbirgt das Backend den privaten Knoten mit 404 — ein
     // erneutes load() liefe in den Fehlerpfad, bevor es umleiten könnte.
@@ -110,7 +233,8 @@ describe('VisuViewer session end', () => {
     window.dispatchEvent(new CustomEvent('visu:unauthorized'))
     await flushPromises()
 
-    expect(mocks.push).toHaveBeenCalledWith(expect.objectContaining({ name: 'login' }))
+    expect(mocks.replace).toHaveBeenCalledWith(expect.objectContaining({ name: 'login' }))
+    expect(mocks.push).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
@@ -118,11 +242,13 @@ describe('VisuViewer session end', () => {
     const wrapper = mountViewer()
     await flushPromises()
     mocks.push.mockClear()
+    mocks.replace.mockClear()
 
     window.dispatchEvent(new CustomEvent('visu:unauthorized'))
     await flushPromises()
 
     expect(mocks.push).not.toHaveBeenCalled()
+    expect(mocks.replace).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
@@ -134,12 +260,118 @@ describe('VisuViewer session end', () => {
     const wrapper = mountViewer()
     await flushPromises()
     mocks.push.mockClear()
+    mocks.replace.mockClear()
 
     mocks.getJwt.mockReturnValue(null)
     window.dispatchEvent(new CustomEvent('visu:unauthorized'))
     await flushPromises()
 
-    expect(mocks.push).toHaveBeenCalledWith(expect.objectContaining({ name: 'login' }))
+    expect(mocks.replace).toHaveBeenCalledWith(expect.objectContaining({ name: 'login' }))
+    expect(mocks.push).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('sends a concealed profile start page to the login instead of the error page', async () => {
+    // Die Startseite des Geräteprofils ist privat: der anonyme Baum verbirgt sie,
+    // der Breadcrumb antwortet mit 404 — der Server bestätigt aber, dass sie existiert.
+    mocks.store.nodes = []
+    mocks.getJwt.mockReturnValue(null)
+    mocks.loadBreadcrumb.mockRejectedValue(new mocks.ApiRequestError('common.loadError', 404))
+    mocks.device.profile = { start_node_id: 'page-1', start_node_missing: false }
+    const wrapper = mountViewer()
+    await flushPromises()
+
+    expect(mocks.replace).toHaveBeenCalledWith({ name: 'login', query: { redirect: '/page-1' } })
+    expect(mocks.push).not.toHaveBeenCalled()
+    expect(wrapper.text()).not.toContain('common.loadError')
+    wrapper.unmount()
+  })
+
+  it('waits for the profiles when the page was opened directly and they arrive after the tree', async () => {
+    mocks.store.nodes = []
+    mocks.getJwt.mockReturnValue(null)
+    mocks.loadBreadcrumb.mockRejectedValue(new mocks.ApiRequestError('common.loadError', 404))
+    // device.load() is still pending from App.vue; it resolves with the profile only now.
+    mocks.device.load.mockImplementation(async () => { mocks.device.profile = { start_node_id: 'page-1', start_node_missing: false } })
+    const wrapper = mountViewer()
+    await flushPromises()
+
+    expect(mocks.device.load).toHaveBeenCalled()
+    expect(mocks.replace).toHaveBeenCalledWith({ name: 'login', query: { redirect: '/page-1' } })
+    expect(mocks.push).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('retries instead of redirecting when a tree refresh brings the node while waiting for the profiles', async () => {
+    mocks.store.nodes = []
+    mocks.node.access = 'public'
+    mocks.getJwt.mockReturnValue(null)
+    mocks.loadBreadcrumb.mockRejectedValueOnce(new mocks.ApiRequestError('common.loadError', 404))
+    mocks.device.profile = { start_node_id: 'page-1', start_node_missing: false }
+    mocks.device.load.mockImplementation(async () => { mocks.store.nodes = [mocks.node] })  // renewal arrived meanwhile
+    const wrapper = mountViewer()
+    await flushPromises()
+
+    expect(mocks.push).not.toHaveBeenCalled()
+    expect(mocks.store.loadPage).toHaveBeenCalledWith('page-1', 'page-1')
+    expect(wrapper.text()).not.toContain('common.loadError')
+    wrapper.unmount()
+  })
+
+  it('shows the generic load error when something other than an Error is thrown', async () => {
+    mocks.loadBreadcrumb.mockRejectedValue('boom')
+    const wrapper = mountViewer()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('common.loadError')
+    expect(mocks.push).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['a 503 while OBS restarts', () => { mocks.loadBreadcrumb.mockRejectedValue(new mocks.ApiRequestError('unavailable', 503)) }],
+    ['a network error', () => { mocks.loadBreadcrumb.mockRejectedValue(new TypeError('Failed to fetch')) }],
+    ['an API error without a status', () => { mocks.loadBreadcrumb.mockRejectedValue(new mocks.ApiRequestError('boom')) }],
+    ['a tree that never arrived', () => { mocks.store.treeLoaded = false; mocks.store.loadTree.mockRejectedValueOnce(new mocks.ApiRequestError('unavailable', 503)) }],
+  ])('keeps the error page for the profile start page after %s', async (_label, arrange) => {
+    mocks.store.nodes = []
+    mocks.getJwt.mockReturnValue(null)
+    mocks.device.profile = { start_node_id: 'page-1', start_node_missing: false }
+    arrange()
+    const wrapper = mountViewer()
+    await flushPromises()
+
+    expect(mocks.push).not.toHaveBeenCalled()
+    expect(wrapper.find('.text-red-500, .text-red-400').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['a different page', { start_node_id: 'page-2', start_node_missing: false }],
+    ['a deleted start page', { start_node_id: 'page-1', start_node_missing: true }],
+    ['no profile', null],
+  ])('keeps the error page for an unknown node with %s', async (_label, profile) => {
+    mocks.store.nodes = []
+    mocks.getJwt.mockReturnValue(null)
+    mocks.loadBreadcrumb.mockRejectedValue(new mocks.ApiRequestError('common.loadError', 404))
+    mocks.device.profile = profile
+    const wrapper = mountViewer()
+    await flushPromises()
+
+    expect(mocks.push).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('common.loadError')
+    wrapper.unmount()
+  })
+
+  it('keeps the error page while logged in even for the profile start page', async () => {
+    mocks.store.nodes = []
+    mocks.getJwt.mockReturnValue('jwt-1')
+    mocks.loadBreadcrumb.mockRejectedValue(new mocks.ApiRequestError('common.loadError', 404))
+    mocks.device.profile = { start_node_id: 'page-1', start_node_missing: false }
+    const wrapper = mountViewer()
+    await flushPromises()
+
+    expect(mocks.push).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
@@ -148,6 +380,7 @@ describe('VisuViewer session end', () => {
     const wrapper = mountViewer()
     await flushPromises()
     mocks.push.mockClear()
+    mocks.replace.mockClear()
 
     mocks.getJwt.mockReturnValue(null)
     window.dispatchEvent(new CustomEvent('visu:unauthorized'))
@@ -171,7 +404,7 @@ describe('VisuViewer session end', () => {
     mocks.store.nodes = [mocks.node]
     await flushPromises()
 
-    expect(mocks.store.loadPage).toHaveBeenCalledWith('page-1')
+    expect(mocks.store.loadPage).toHaveBeenCalledWith('page-1', 'page-1')
     wrapper.unmount()
   })
 
@@ -193,7 +426,7 @@ describe('VisuViewer session end', () => {
     rejectBreadcrumb(new Error('common.loadError'))
     await flushPromises()
 
-    expect(mocks.store.loadPage).toHaveBeenCalledWith('page-1')
+    expect(mocks.store.loadPage).toHaveBeenCalledWith('page-1', 'page-1')
     expect(wrapper.text()).not.toContain('common.loadError')
     wrapper.unmount()
   })
@@ -202,6 +435,7 @@ describe('VisuViewer session end', () => {
     const wrapper = mountViewer()
     await flushPromises()
     mocks.push.mockClear()
+    mocks.replace.mockClear()
 
     // Die Berechtigung wurde entzogen: die Erneuerung holt den Baum neu und
     // der angezeigte Knoten fehlt darin.
@@ -216,6 +450,7 @@ describe('VisuViewer session end', () => {
     const wrapper = mountViewer()
     await flushPromises()
     mocks.push.mockClear()
+    mocks.replace.mockClear()
 
     // Navigation auf einen Knoten, den der Baum (noch) nicht kennt: das ist
     // kein Entzug, sondern lädt bereits über den id-Watcher.
@@ -231,11 +466,33 @@ describe('VisuViewer session end', () => {
     await flushPromises()
     wrapper.unmount()
     mocks.push.mockClear()
+    mocks.replace.mockClear()
 
     mocks.getJwt.mockReturnValue(null)
     window.dispatchEvent(new CustomEvent('visu:unauthorized'))
     await flushPromises()
 
     expect(mocks.push).not.toHaveBeenCalled()
+  })
+})
+
+describe('VisuViewer embedded as alarm popup', () => {
+  afterEach(() => {
+    window.name = ''
+    window.history.replaceState(null, '', '/')
+  })
+
+  it('shows the header normally and hides it with ?embed=1', async () => {
+    mocks.getJwt.mockReturnValue('jwt-1')
+    const normal = mountViewer()
+    await flushPromises()
+    expect(normal.find('header').exists()).toBe(true)
+    normal.unmount()
+
+    window.history.replaceState(null, '', '/visu/page-1?embed=1')
+    const embedded = mountViewer()
+    await flushPromises()
+    expect(embedded.find('header').exists()).toBe(false)
+    embedded.unmount()
   })
 })

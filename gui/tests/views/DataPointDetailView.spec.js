@@ -79,6 +79,28 @@ describe('DataPointDetailView', () => {
     delete useWebSocketStore().liveValues['dp-internal']
   })
 
+  it('shows a system DataPoint as read-only without write form or edit button (#1370)', async () => {
+    const { data } = await apiMocks.dpApi.get()
+    apiMocks.dpApi.get.mockResolvedValue({ data: { ...data, data_type: 'BOOLEAN', system: true } })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="dp-system-badge"]').text()).toBe('System')
+    expect(wrapper.find('[data-testid="dp-system-readonly"]').exists()).toBe(true)
+    expect(wrapper.findAll('button').some(button => button.text() === 'true')).toBe(false)
+    expect(wrapper.find('[data-testid="btn-edit-dp"]').exists()).toBe(false)
+  })
+
+  it('offers the edit button and no system badge for ordinary DataPoints', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="dp-system-badge"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="dp-system-readonly"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="btn-edit-dp"]').exists()).toBe(true)
+  })
+
   it('allows writing an internal datapoint without writable adapter bindings', async () => {
     const wrapper = mountView()
     await flushPromises()
@@ -252,6 +274,58 @@ describe('DataPointDetailView', () => {
     expect(wrapper.text()).toContain('Küche Aktor')
     expect(wrapper.text()).toContain('Rückmelde-GA')
     expect(wrapper.text()).not.toContain('"group_address"')
+  })
+
+  it('renders KNX device PA, name and comm objects as separate elements (#1199)', async () => {
+    apiMocks.dpApi.listBindings.mockResolvedValue({
+      data: [
+        {
+          id: 'binding-knx-devices',
+          enabled: true,
+          direction: 'SOURCE',
+          adapter_type: 'KNX',
+          config: { group_address: '0/7/38' },
+        },
+      ],
+    })
+    apiMocks.dpApi.knxContext.mockResolvedValue({
+      data: {
+        datapoint_id: 'dp-internal',
+        group_addresses: [
+          {
+            address: '0/7/38',
+            name: 'Altmetall Heute',
+            description: '',
+            dpt: 'DPT1.002',
+            roles: ['group_address'],
+            devices: [
+              {
+                pa: '1.1.102',
+                name: 'SCN-GLED1x.01 Glass LED Indicator',
+                comm_objects: [{ id: 'co-33', number: '33', name: 'LED 12', datapoint_type: 'DPT1.002' }],
+              },
+              { pa: '1.1.200', name: '', comm_objects: [] },
+            ],
+          },
+        ],
+      },
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const devices = wrapper.findAll('[data-testid="datapoint-knx-device"]')
+    expect(devices).toHaveLength(2)
+
+    const [named, bare] = devices
+    expect(named.classes()).toContain('flex')
+    expect(named.find('[data-testid="datapoint-knx-device-pa"]').text()).toBe('1.1.102')
+    expect(named.find('[data-testid="datapoint-knx-device-name"]').text()).toBe('SCN-GLED1x.01 Glass LED Indicator')
+    expect(named.find('[data-testid="datapoint-knx-device-comm-objects"]').text()).toBe('· 33 LED 12')
+
+    expect(bare.find('[data-testid="datapoint-knx-device-pa"]').text()).toBe('1.1.200')
+    expect(bare.find('[data-testid="datapoint-knx-device-name"]').exists()).toBe(false)
+    expect(bare.find('[data-testid="datapoint-knx-device-comm-objects"]').exists()).toBe(false)
   })
 
   it('renders KNX context when adapter_type is lowercase "knx"', async () => {

@@ -7,6 +7,11 @@ const props = defineProps<{
   icon: string
   /** When true, imported SVGs are rendered with their original fill colors instead of brightness-0/invert */
   preserveColor?: boolean
+  /**
+   * When true, SVG icons keep their aspect ratio: height 1em, width auto (capped at the
+   * container width) instead of being fitted into a 1em square. Emoji are unaffected.
+   */
+  fitWidth?: boolean
 }>()
 
 const { getSvg, isSvgIcon, svgIconName } = useIcons()
@@ -52,8 +57,8 @@ onBeforeUnmount(() => {
     v-else-if="svgBlobUrl"
     :src="svgBlobUrl"
     alt=""
-    class="inline-block w-[1em] h-[1em] object-contain"
-    :class="preserveColor ? '' : 'brightness-0 dark:invert'"
+    class="inline-block h-[1em] object-contain"
+    :class="[fitWidth ? 'w-auto max-w-full' : 'w-[1em]', preserveColor ? '' : 'brightness-0 dark:invert']"
     loading="lazy"
     decoding="async"
   />

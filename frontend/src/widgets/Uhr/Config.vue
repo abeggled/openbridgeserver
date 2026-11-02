@@ -11,6 +11,7 @@ interface UhrConfig {
   color:       string
   label:       string
   timezone:    string
+  minuteDots:  boolean
 }
 
 
@@ -56,6 +57,7 @@ const cfg = reactive<UhrConfig>({
   color:       (props.modelValue.color       as string   | undefined) ?? '#3b82f6',
   label:       (props.modelValue.label       as string   | undefined) ?? '',
   timezone:    (props.modelValue.timezone    as string   | undefined) ?? '',
+  minuteDots:  (props.modelValue.minuteDots  as boolean  | undefined) ?? false,
 })
 
 watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
@@ -91,7 +93,7 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
           v-model="cfg.color"
           type="color"
           class="w-8 h-8 rounded cursor-pointer border border-gray-700 bg-transparent p-0.5 shrink-0"
-          title="Akzentfarbe"
+          :title="$t('widgets.uhr.accentColor')"
         />
         <span class="text-xs text-gray-500 font-mono">{{ cfg.color }}</span>
       </div>
@@ -121,6 +123,20 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
       </label>
     </div>
 
+    <!-- Minutenpunkte (nur Wortuhr) -->
+    <div v-if="cfg.mode === 'wortuhr'">
+      <label class="flex items-center gap-2 cursor-pointer select-none">
+        <input
+          v-model="cfg.minuteDots"
+          type="checkbox"
+          data-testid="uhr-config-minute-dots"
+          class="w-4 h-4 rounded accent-blue-500"
+        />
+        <span class="text-xs text-gray-300">{{ $t('widgets.uhr.minuteDots') }}</span>
+      </label>
+      <p class="text-xs text-gray-600 mt-1">{{ $t('widgets.uhr.minuteDotsHint') }}</p>
+    </div>
+
     <!-- Zeitzone (nur analog) -->
     <div v-if="cfg.mode === 'analog'">
       <label class="block text-xs text-gray-400 mb-1">
@@ -131,14 +147,14 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
         v-model="cfg.timezone"
         type="text"
         list="tz-vorschlaege"
-        placeholder="z.B. Asia/Tokyo"
+        :placeholder="$t('widgets.uhr.timezonePlaceholder')"
         class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500 font-mono"
       />
       <datalist id="tz-vorschlaege">
         <option v-for="tz in ZEITZONEN_VORSCHLÄGE" :key="tz" :value="tz" />
       </datalist>
       <p class="text-xs text-gray-600 mt-1">
-        IANA-Format, z.B. <span class="text-gray-500 font-mono">Europe/Zurich</span>
+        {{ $t('widgets.uhr.timezoneFormat') }} <span class="text-gray-500 font-mono">Europe/Zurich</span>
       </p>
     </div>
 
@@ -146,12 +162,12 @@ watch(cfg, () => emit('update:modelValue', { ...cfg }), { deep: true })
     <div>
       <label class="block text-xs text-gray-400 mb-1">
         {{ $t('widgets.common.label') }}
-        <span class="text-gray-600 font-normal ml-1">(optional)</span>
+        <span class="text-gray-600 font-normal ml-1">{{ $t('widgets.uhr.optional') }}</span>
       </label>
       <input
         v-model="cfg.label"
         type="text"
-        placeholder="z.B. Wohnzimmer"
+        :placeholder="$t('widgets.uhr.labelPlaceholder')"
         class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
       />
     </div>

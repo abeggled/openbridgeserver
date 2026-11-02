@@ -34,7 +34,9 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
           </svg>
         </button>
-        <HelpButton help-id="logic-node-config" />
+        <!-- The block's own help, the same as its palette entry (#1411);
+             the general block-config page only for blocks without one -->
+        <HelpButton :help-id="nodeDef?.help_id || 'logic-node-config'" />
       </div>
     </div>
 
@@ -1583,6 +1585,10 @@
       :output-labels="debugOutputLabels"
       :metadata="debugMetadata"
       :has-overrides="hasDebugOverrides"
+      :can-fire="node.type === 'timer_cron'"
+      :fire-disabled="fireDisabled"
+      :fire-disabled-hint="fireDisabledHint"
+      @fire-trigger="emit('fire-trigger', node.id)"
       @set-override="(inputId, text) => emit('set-override', inputId, text)"
       @clear-override="inputId => emit('clear-override', inputId)"
       @clear-all="emit('clear-all')"
@@ -1626,9 +1632,11 @@ const props = defineProps({
   debugInputs:       { type: Array,   default: () => [] },
   debugOutputs:      { type: Object,  default: () => ({}) },
   debugMetadata:     { type: Object,  default: null },
+  fireDisabled:      { type: Boolean, default: false },
+  fireDisabledHint:  { type: String,  default: '' },
   hasDebugOverrides: { type: Boolean, default: false },
 })
-const emit = defineEmits(['update', 'close', 'set-override', 'clear-override', 'clear-all'])
+const emit = defineEmits(['update', 'close', 'set-override', 'clear-override', 'clear-all', 'fire-trigger'])
 
 const EXTRACTOR_OUTPUT_BG = 'rgba(30, 41, 59, 0.6)'
 const EXTRACTOR_OUTPUT_FG = getAutoContrastText(EXTRACTOR_OUTPUT_BG)
@@ -2881,15 +2889,18 @@ function onValueMapCustomChange() {
 }
 
 // ── DataPoint picker ───────────────────────────────────────────────────────
+// Read-only system DataPoints (#1370) can be read, never written: no write target.
+function writableDps(items) {
+  return items.filter(dp => !dp.system)
+}
+
 async function searchDps() {
   try {
-    if (dpSearch.value.length < 1) {
-      const { data } = await dpApi.list(0, 50)
-      dpResults.value = data.items || data
-    } else {
-      const { data } = await searchApi.search({ q: dpSearch.value, size: 50 })
-      dpResults.value = data.items || data
-    }
+    const { data } = dpSearch.value.length < 1
+      ? await dpApi.list(0, 50)
+      : await searchApi.search({ q: dpSearch.value, size: 50 })
+    const items = data.items || data
+    dpResults.value = isWrite.value ? writableDps(items) : items
   } catch { dpResults.value = [] }
 }
 
@@ -2909,7 +2920,7 @@ function removeSequenceStep(index) { const steps = [...sequenceSteps.value]; ste
 function duplicateSequenceStep(index) { const steps = [...sequenceSteps.value]; steps.splice(index + 1, 0, { ...steps[index] }); localData.value.steps = steps; syncSequencePickerState(); emitUpdate() }
 function moveSequenceStep(index, delta) { const target = index + delta; if (target < 0 || target >= sequenceSteps.value.length) return; const steps = [...sequenceSteps.value]; [steps[index], steps[target]] = [steps[target], steps[index]]; localData.value.steps = steps; syncSequencePickerState(); emitUpdate() }
 function applySequencePreset() { localData.value.steps = [{ datapoint_id: '', datapoint_name: '', value: true, delay_ms: 500 }, { datapoint_id: '', datapoint_name: '', value: false, delay_ms: 500 }]; syncSequencePickerState(); emitUpdate() }
-async function searchSequenceDps(index, query) { try { const { data } = (query || '').length < 1 ? await dpApi.list(0, 50) : await searchApi.search({ q: query, size: 50 }); const next = sequenceDpResults.value.slice(); next[index] = data.items || data; sequenceDpResults.value = next } catch { sequenceDpResults.value = [] } }
+async function searchSequenceDps(index, query) { try { const { data } = (query || '').length < 1 ? await dpApi.list(0, 50) : await searchApi.search({ q: query, size: 50 }); const next = sequenceDpResults.value.slice(); next[index] = writableDps(data.items || data); sequenceDpResults.value = next } catch { sequenceDpResults.value = [] } }
 function selectSequenceDp(index, dp) { const steps = [...sequenceSteps.value]; steps[index] = { ...steps[index], datapoint_id: dp.id, datapoint_name: dp.name }; localData.value.steps = steps; sequenceSearchDrafts.value[index] = ''; sequenceSearches.value[index] = dp.name; const next = sequenceDpResults.value.slice(); next[index] = []; sequenceDpResults.value = next; emitUpdate() }
 
 function normaliseUrlTargetInput(value) {

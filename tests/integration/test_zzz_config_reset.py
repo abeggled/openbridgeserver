@@ -19,6 +19,8 @@ import uuid
 
 import pytest
 
+from obs.core.system_datapoints import SYSTEM_DATAPOINTS
+
 pytestmark = pytest.mark.integration
 
 _ADAPTER_TYPE = "ANWESENHEITSSIMULATION"
@@ -196,6 +198,8 @@ async def test_clear_datapoints_success(client, auth_headers):
 
     get_resp = await client.get(f"/api/v1/datapoints/{dp['id']}", headers=auth_headers)
     assert get_resp.status_code == 404
+    for definition in SYSTEM_DATAPOINTS:
+        assert (await client.get(f"/api/v1/datapoints/{definition.id}", headers=auth_headers)).status_code == 200
 
 
 async def test_clear_datapoints_result_shape(client, auth_headers):
@@ -239,12 +243,27 @@ async def test_factory_reset_success(client, auth_headers):
     }
 
 
+async def test_factory_reset_keeps_the_update_channel(client, auth_headers):
+    from obs.db.database import get_db
+
+    before = (await client.get("/api/v1/system/update-status", headers=auth_headers)).json()["channel"]
+    await client.put("/api/v1/system/update-channel", json={"channel": "pre-release"}, headers=auth_headers)
+    try:
+        resp = await client.delete("/api/v1/config/reset", headers=auth_headers)
+        assert resp.status_code == 200
+        row = await get_db().fetchone("SELECT value FROM app_settings WHERE key = 'update.channel'")
+        assert row["value"] == "pre-release"
+    finally:
+        await client.put("/api/v1/system/update-channel", json={"channel": before}, headers=auth_headers)
+
+
 async def test_factory_reset_leaves_db_empty(client, auth_headers):
     await client.delete("/api/v1/config/reset", headers=auth_headers)
 
     dp_resp = await client.get("/api/v1/datapoints/", headers=auth_headers)
     assert dp_resp.status_code == 200
-    assert dp_resp.json()["total"] == 0
+    # Only the backend-managed system DataPoints (#1370) survive a factory reset.
+    assert {item["id"] for item in dp_resp.json()["items"]} == {str(d.id) for d in SYSTEM_DATAPOINTS}
 
     inst_resp = await client.get("/api/v1/adapters/instances", headers=auth_headers)
     assert inst_resp.json() == []

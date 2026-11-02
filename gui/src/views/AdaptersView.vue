@@ -244,6 +244,10 @@
               :title="$t('adapters.importTitle')">
               {{ $t('adapters.importBtn') }}
             </button>
+            <button v-if="a.adapter_type === 'HOME_ASSISTANT'" @click="openHaImport(a)" class="btn-secondary btn-sm" :disabled="!a.connected"
+              :title="$t('adapters.homeassistant.importTitle')" data-testid="btn-ha-import">
+              {{ $t('adapters.importBtn') }}
+            </button>
             <button v-if="a.adapter_type === 'ANWESENHEITSSIMULATION'" @click="openAnwesenheitSelector(a)" class="btn-secondary btn-sm"
               :title="$t('adapters.manageObjectsTitle')">
               {{ $t('adapters.manageObjects') }}
@@ -324,6 +328,10 @@
           </button>
         </div>
       </div>
+    </Modal>
+
+    <Modal v-model="haImportOpen" :title="haImportInstance ? $t('adapters.homeassistant.modalTitleFull', { name: haImportInstance.name }) : $t('adapters.homeassistant.modalTitle')" max-width="2xl" resizable>
+      <HomeAssistantImport v-if="haImportInstance" :key="haImportInstance.id" :instance="haImportInstance" />
     </Modal>
 
     <Modal v-model="importOpen" :title="importInstance ? $t('adapters.iobroker.modalTitleFull', { name: importInstance.name }) : $t('adapters.iobroker.modalTitle')" max-width="2xl" resizable>
@@ -421,6 +429,7 @@ import AnwesenheitDatapointSelector from '@/components/adapters/AnwesenheitDatap
 import AnwesenheitConfigForm from '@/components/adapters/AnwesenheitConfigForm.vue'
 import KnxConfigForm        from '@/components/adapters/KnxConfigForm.vue'
 import MessageConfigForm    from '@/components/adapters/MessageConfigForm.vue'
+import HomeAssistantImport  from '@/components/adapters/HomeAssistantImport.vue'
 import Modal         from '@/components/ui/Modal.vue'
 import { adapterDotClass as dotClass, adapterBadgeVariant as statusBadgeVariant, adapterStatusLabel as statusLabel, adapterStatusDetailText } from '@/utils/adapterStatus'
 
@@ -505,6 +514,15 @@ async function loadAnwesenheitHealth(a) {
   } catch {
     // silently ignore — health is informational only
   }
+}
+
+// Home Assistant entity import (#1392)
+const haImportOpen = ref(false)
+const haImportInstance = ref(null)
+
+function openHaImport(a) {
+  haImportInstance.value = a
+  haImportOpen.value = true
 }
 
 // ioBroker Import

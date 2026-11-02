@@ -146,6 +146,7 @@ vi.mock('@/widgets/Wetter/index', () => ({}))
 vi.mock('@/widgets/Stufenschalter/index', () => ({}))
 vi.mock('@/widgets/Grundriss/index', () => ({}))
 vi.mock('@/widgets/HorizontalBar/index', () => ({}))
+vi.mock('@/widgets/Terminliste/index', () => ({}))
 
 describe('VisuEditor', () => {
   beforeEach(() => {
@@ -175,5 +176,7 @@ describe('VisuEditor', () => {
     const preview = wrapper.get('[data-testid="preview-widget"]')
     expect(preview.attributes('data-page-id')).toBe('page-1')
     expect(preview.attributes('data-session-token')).toBe('session-root')
+    // The page config is loaded with the same inherited session (#1413).
+    expect(mocks.store.loadPage).toHaveBeenCalledWith('page-1', 'root-1')
   })
 })
