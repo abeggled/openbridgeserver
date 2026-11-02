@@ -52,7 +52,10 @@ describe('visu store auth state', () => {
   })
 
   it('falls back to a non-admin session when the identity lookup fails', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 401 })))
+    // The tree never answers 401: it treats a rejected bearer as anonymous.
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => (
+      String(url).endsWith('/auth/me') ? new Response(null, { status: 401 }) : jsonResponse([])
+    )))
     const store = useVisuStore()
 
     await store.login('jwt-1', 'refresh-1')
@@ -224,6 +227,87 @@ describe('visu store auth state', () => {
     expect(store.nodes.map(n => n.id)).toEqual(['public', 'private'])
   })
 
+  it('reloads the tree on login, so a private start page is found (#1404)', async () => {
+    let authorized = false
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).endsWith('/auth/me')) {
+        authorized = true
+        return jsonResponse({ id: 'u1', username: 'user', is_admin: false })
+      }
+      // Ohne Login liefert das Backend nur die öffentliche Sicht
+      return jsonResponse(authorized
+        ? [{ id: 'public', parent_id: null, name: 'P', type: 'PAGE', order: 0, access: 'public' },
+           { id: 'private', parent_id: null, name: 'Q', type: 'PAGE', order: 1, access: 'user' }]
+        : [{ id: 'public', parent_id: null, name: 'P', type: 'PAGE', order: 0, access: 'public' }])
+    }))
+    const store = useVisuStore()
+    await store.loadTree()
+    expect(store.getNode('private')).toBeUndefined()
+
+    await store.login('jwt-1', 'refresh-1')
+    await flushPromises()
+
+    expect(store.getNode('private')?.type).toBe('PAGE')
+  })
+
+  it('finishes a successful login even when the follow-up tree request stalls', async () => {
+    // Reproducer from the PR #1419 review: the login must not wait for the tree.
+    let treeCalls = 0
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).endsWith('/auth/me')) return jsonResponse({ id: 'u1', username: 'user', is_admin: false })
+      treeCalls += 1
+      return treeCalls === 1
+        ? jsonResponse([{ id: 'public', parent_id: null, name: 'P', type: 'PAGE', order: 0, access: 'public' }])
+        : new Promise<Response>(() => {})
+    }))
+    const store = useVisuStore()
+    await store.loadTree()
+
+    let loginFinished = false
+    void store.login('jwt-1', 'refresh-1').then(() => { loginFinished = true })
+    await flushPromises()
+
+    expect(store.isLoggedIn).toBe(true)
+    expect(treeCalls).toBe(2)
+    expect(loginFinished).toBe(true)
+  })
+
+  it('does not reload the tree for a login that a logout has overtaken', async () => {
+    let releaseMe: (value: Response) => void = () => {}
+    const fetchMock = vi.fn(async (url: string) => (
+      String(url).endsWith('/auth/me') ? new Promise<Response>(resolve => { releaseMe = resolve }) : jsonResponse([])
+    ))
+    vi.stubGlobal('fetch', fetchMock)
+    const store = useVisuStore()
+
+    const login = store.login('jwt-1', 'refresh-1')
+    await flushPromises()
+    store.logout()
+    releaseMe(jsonResponse({ id: 'u1', username: 'user', is_admin: false }))
+    await login
+    await flushPromises()
+
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/visu/tree'))).toHaveLength(0)
+  })
+
+  it('keeps the login and the previous tree when the tree reload fails', async () => {
+    let treeDown = false
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).endsWith('/auth/me')) return jsonResponse({ id: 'u1', username: 'user', is_admin: false })
+      if (treeDown) throw new TypeError('Failed to fetch')
+      return jsonResponse([{ id: 'public', parent_id: null, name: 'P', type: 'PAGE', order: 0, access: 'public' }])
+    }))
+    const store = useVisuStore()
+    await store.loadTree()
+    treeDown = true
+
+    await expect(store.login('jwt-1', 'refresh-1')).resolves.toBeUndefined()
+    await flushPromises()
+
+    expect(store.isLoggedIn).toBe(true)
+    expect(store.nodes.map(n => n.id)).toEqual(['public'])
+  })
+
   it('does not even start a tree reload for a superseded renewal', async () => {
     let releaseAliceMe: (value: Response) => void = () => {}
     const alicePendingMe = new Promise<Response>(resolve => { releaseAliceMe = resolve })
@@ -244,12 +328,16 @@ describe('visu store auth state', () => {
 
     mePending = false
     await store.login('jwt-bob', 'refresh-bob')
+    await flushPromises()
+    const treeCalls = () => fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/visu/tree')).length
+    const afterLogin = treeCalls()  // Bobs Login lädt den Baum selbst (#1404)
 
     releaseAliceMe(jsonResponse({ id: 'u1', username: 'alice', is_admin: true }))
     await flushPromises()
 
     // Die überholte Erneuerung darf den Server gar nicht erst behelligen
-    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/visu/tree'))).toHaveLength(0)
+    expect(afterLogin).toBe(1)
+    expect(treeCalls()).toBe(afterLogin)
   })
 
   it('does not restore the admin flag from a lookup still running at logout', async () => {
