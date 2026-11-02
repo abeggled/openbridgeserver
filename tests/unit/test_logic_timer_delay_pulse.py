@@ -150,6 +150,31 @@ def test_delay_fires_the_downstream_write_after_the_delay() -> None:
     asyncio.run(exercise())
 
 
+def test_a_delay_saved_with_the_pulse_duration_key_waits_that_long() -> None:
+    """#1377: `duration_s` on a Delay used to fire after the 1 s default."""
+
+    async def exercise() -> None:
+        manager = _manager()
+        target = uuid.uuid4()
+        raw = json.loads(_delay_flow(target).model_dump_json())
+        raw["nodes"][1]["data"] = {"duration_s": 0.05}
+        manager._db.fetchall = AsyncMock(
+            return_value=[{"id": "graph", "name": "Graph", "enabled": 1, "flow_data": json.dumps(raw), "node_state": None}]
+        )
+        await manager._load_graphs()  # the stored sheet as the runtime loads it
+        flow = manager._graphs["graph"][2]
+
+        started = monotonic()
+        await manager._execute_graph("graph", "Graph", flow, _event(1), logic_depth=0)
+        await manager._timer_tasks[("graph", "delay")]
+
+        # Waited the adopted 0.05 s: not at once, and not the 1 s default (headroom for a slow runner).
+        assert 0.04 <= monotonic() - started < 0.9
+        assert _values(manager) == [7]
+
+    asyncio.run(exercise())
+
+
 def test_a_retrigger_starts_a_pending_delay_over() -> None:
     async def exercise() -> None:
         manager = _manager()
