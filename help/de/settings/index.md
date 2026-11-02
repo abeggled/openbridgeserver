@@ -6,7 +6,7 @@ title: Einstellungen
 
 Die Einstellungen bündeln alle Konfigurations- und Verwaltungsbereiche des Admin-GUI in
 einer Seite mit Reitern. Welche Reiter sichtbar sind, hängt von den Rechten des angemeldeten
-Benutzers ab — **Benutzer**, **Sicherheit**, **Support** und **Datenmanagement** sehen nur
+Benutzers ab — **Benutzer**, **Sicherheit**, **Support**, **Visu-Geräte**, **Visu-Alarme** und **Datenmanagement** sehen nur
 Administratoren.
 
 | Reiter | Inhalt |
@@ -17,7 +17,10 @@ Administratoren.
 | [API Keys](./apikeys) | Schlüssel für den programmatischen Zugriff auf die API |
 | [Sicherheit](./security) | Sicherheitsprüfung und sicherheitsrelevante Ereignisse |
 | [Support](./support) | Diagnosepaket, Debug-Modus und Fernwartungs-Zugang |
+| [Updates](./updates) | Update-Kanal, Update-Prüfung, Release Notes und Systemdatenpunkte |
 | [Links](./links) | Eigene Verknüpfungen in der Seitenleiste |
+| [Visu-Geräte](./visu-devices) | Startseite und automatischer Rücksprung je Visu-Gerät |
+| [Visu-Alarme](./visu-alarms) | Meldungen oder Seiten bei Ereignissen in der Visu in den Vordergrund holen |
 | [Hierarchie](./hierarchy) | Baumstrukturen (z. B. Gebäude, Etage, Raum) zur Gruppierung von Objekten und Logiken |
 | [Datenmanagement](./importexport) | Import und Export von Konfiguration, Datenbank und KNX-Projekt |
 | [Icons](./icons) | Icon-Bibliothek durchsuchen, importieren und aufräumen |

@@ -39,6 +39,7 @@ from obs.api.v1.services.knx_traceability import KnxDatapointContextOut, build_d
 from obs.api.v1.sessions import validate_session
 from obs.core.event_bus import DataValueEvent, get_event_bus
 from obs.core.registry import _row_to_datapoint, get_registry
+from obs.core.system_datapoints import is_system_datapoint
 from obs.db.database import Database, get_db
 from obs.models.datapoint import DataPointCreate, DataPointUpdate
 from obs.models.visu import PageConfig
@@ -109,6 +110,8 @@ class DataPointOut(BaseModel):
     record_history: bool
     control_class: Literal["room_local", "central_plant"] = "room_local"
     external_write_enabled: bool = False
+    # Backend-managed and read-only (#1370): no edit, duplicate, delete or value write.
+    system: bool = False
     created_at: str
     updated_at: str
     # Runtime
@@ -181,12 +184,21 @@ def _enrich(dp: Any) -> DataPointOut:
         record_history=dp.record_history,
         control_class=getattr(dp, "control_class", "room_local"),
         external_write_enabled=getattr(dp, "external_write_enabled", False),
+        system=is_system_datapoint(dp.id),
         created_at=dp.created_at.isoformat(),
         updated_at=dp.updated_at.isoformat(),
         value=state.value if state else None,
         quality=state.quality if state else None,
         diagnostics=list(state.diagnostics.values()) if state else [],
     )
+
+
+_SYSTEM_DATAPOINT_DETAIL = "System DataPoint is read-only"
+
+
+def _reject_system_datapoint(dp_id: uuid.UUID) -> None:
+    if is_system_datapoint(dp_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, _SYSTEM_DATAPOINT_DETAIL)
 
 
 def _principal_from_dependency(value: Principal | str) -> Principal:
@@ -393,6 +405,7 @@ async def duplicate_datapoint(
     _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> DataPointOut:
+    _reject_system_datapoint(dp_id)
     registry = get_registry()
     now = datetime.datetime.now(datetime.UTC).isoformat()
     cancelled_after_commit: asyncio.CancelledError | None = None
@@ -591,6 +604,7 @@ async def update_datapoint(
     current_dp = reg.get(dp_id)
     if current_dp is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
+    _reject_system_datapoint(dp_id)
     before = _audit_metadata_snapshot(current_dp)
 
     # `body.external_write_enabled` can only be truthy if the field was
@@ -745,6 +759,7 @@ async def delete_datapoint(
     reg = get_registry()
     if reg.get(dp_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
+    _reject_system_datapoint(dp_id)
     await reg.delete(dp_id)
 
 
@@ -849,6 +864,7 @@ async def write_value(
     dp = reg.get(dp_id)
     if dp is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
+    _reject_system_datapoint(dp_id)
 
     principal: Principal | None = None
     authenticated_write_allowed = False

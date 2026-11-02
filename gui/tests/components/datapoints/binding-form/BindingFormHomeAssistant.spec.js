@@ -1,5 +1,7 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
+vi.mock('@/api/client', () => ({ adapterApi: { haProfiles: vi.fn().mockResolvedValue({ data: [] }) } }))
+
 import BindingFormHomeAssistant from '@/components/datapoints/binding-form/BindingFormHomeAssistant.vue'
 
 function mk(cfg = {}) {

@@ -99,7 +99,7 @@ class TestInstanceOut:
 
         monkeypatch.setattr(adp_api.adapter_registry, "get_class", lambda t: None)
         row = _inst_row()
-        result = adp_api._instance_out(row, None)
+        result = adp_api._instance_out(row, None, privileged=True)
         assert result.running is False
         assert result.connected is False
         assert result.registered is False
@@ -135,7 +135,7 @@ class TestInstanceOut:
             },
         )
 
-        result = adp_api._instance_out(row, None)
+        result = adp_api._instance_out(row, None, privileged=True)
 
         assert result.config["providers"]["pushover"]["api_token"] == REDACTED
         assert result.config["providers"]["pushover"]["targets"]["ops"]["user_key"] == REDACTED
@@ -158,7 +158,7 @@ class TestInstanceOut:
         inst.last_detail_params = {}
         inst.get_bindings.return_value = [1, 2, 3]
         row = _inst_row()
-        result = adp_api._instance_out(row, inst)
+        result = adp_api._instance_out(row, inst, privileged=True)
         assert result.running is True
         assert result.connected is True
         assert result.severity == "warning"
@@ -5339,6 +5339,33 @@ class TestStartCronTasks:
                 await task
 
         assert captured_now[0].tzinfo == ZoneInfo("Europe/Zurich")
+
+    @pytest.mark.asyncio
+    async def test_cron_loop_fires_its_node_like_a_debug_fire(self):
+        """A due cron tick runs the sheet with the same event overrides the
+        debug "fire now" uses (#1276)."""
+        import asyncio
+
+        from obs.logic.manager import _cron_fire_overrides
+
+        flow = _make_flow()
+        mgr, _, _, _ = _make_logic_manager(graphs={"g1": ("G1", True, flow)})
+        mgr._execute_graph = AsyncMock(return_value={})
+
+        sleep_calls = []
+
+        async def _fake_sleep(seconds):
+            sleep_calls.append(seconds)
+            if len(sleep_calls) >= 2:
+                raise asyncio.CancelledError()
+
+        with patch("obs.logic.manager.asyncio.sleep", _fake_sleep):
+            task = asyncio.create_task(mgr._cron_loop("g1", "c1", "* * * * *"))
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        mgr._execute_graph.assert_awaited_once_with("g1", "G1", flow, {"c1": {"trigger": True}})
+        assert _cron_fire_overrides(["c1"]) == {"c1": {"trigger": True}}
 
     @pytest.mark.asyncio
     async def test_ical_loop_logs_and_backs_off_on_error(self):

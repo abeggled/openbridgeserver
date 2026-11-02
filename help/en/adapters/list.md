@@ -44,7 +44,8 @@ When an instance is expanded:
 - **Save** — applies changes and reconnects the adapter.
 - **Reconnect** — disconnects and reconnects using the existing configuration, without
   changing it.
-- **Import** (ioBroker only) — imports ioBroker states as new OBS objects with a binding.
+- **Import** (ioBroker and Home Assistant) — imports states or entities as new OBS objects
+  with a binding; for Home Assistant see [Home Assistant](#adapters-homeassistant).
 - **Manage objects** (presence simulation only) — selects simulated Boolean/Integer objects
   and manages their bindings.
 - **Migrate bindings** — moves all of this instance's bindings to another instance of the
@@ -53,6 +54,143 @@ When an instance is expanded:
 
 "Enabled" turns the instance off entirely without deleting it — a disabled instance keeps
 its configuration and bindings but does not connect.
+
+## Home Assistant {#adapters-homeassistant}
+
+The `HOME_ASSISTANT` adapter connects an existing Home Assistant instance. Home Assistant stays
+the runtime for the device integrations (e.g. Sonos, Velux); OBS stays in charge of objects,
+logic, permissions, history and visualization. Several instances are possible.
+
+### Connection and token
+
+- **Host/port/SSL** — address of the Home Assistant instance (default port 8123).
+- **Access token** — a *long-lived access token* from the Home Assistant profile. A regular
+  user is enough for entity states and actions. Home Assistant only returns device, area and
+  integration data in the entity browser to an **administrator** token; without it everything
+  else works unchanged and the browser says so.
+- The token is only sent to Home Assistant, never logged, and never shown to users without
+  administrator rights in OBS.
+
+The status only switches to *Connected* after a successful login. OBS keeps a single
+WebSocket connection per instance, checks it with a ping every 30 s, and reconnects after a
+failure with a growing delay (1 s to 60 s). An invalid token is shown as *Token invalid*.
+
+### Synchronization and quality
+
+OBS only subscribes to the entities needed by reading bindings (source/both). After every
+connect and every change of the bindings, Home Assistant sends a full snapshot: a new binding
+gets its value immediately, and changes during a connection loss are not missed.
+
+| Home Assistant state | Value in OBS | Quality |
+|---|---|---|
+| normal state | new value | good |
+| `unknown`, transitional state (e.g. `locking`, `opening`) | object's value is kept | uncertain |
+| `unavailable`, fault state (e.g. `jammed`), entity removed | object's value is kept | bad |
+| connection to Home Assistant lost | object's value is kept | bad |
+
+After an OBS restart the object's stored value counts as the last stable value, even while
+Home Assistant is unreachable. Changing bindings does not re-send unchanged values to other
+adapters.
+
+Only new values with quality *good* are passed on to other bindings and trigger logic; a
+quality change alone only updates the object's display.
+
+### Importing entities
+
+**Import** on the instance opens the entity browser of the connected instance:
+
+1. Search entities and filter by domain, area, integration, device and availability.
+2. Tick the proposed entry of an entity, or expand it and choose precisely: the state with a
+   matching **profile**, the state without a profile (read only), or individual
+   **attributes** (e.g. `current_position`, `volume_level`). An attribute is always imported
+   read only; to control the device tick the matching profile (e.g. *Position*).
+3. **Preview** shows without any change what would be created: name, data type, unit,
+   direction, tags, read mapping, actions and the Boolean convention (e.g. *true = locked*).
+4. The **name** of a new object can be changed right in the preview; the arrow icon restores the
+   proposal.
+5. **Import** only creates entries with status *new*.
+
+The import can be repeated: entities already bound show as *exists* and are skipped. If an
+entity was renamed in Home Assistant, OBS recognizes it by its registry identity and reports a
+*conflict* instead of creating a duplicate. It is also a *conflict* when the same state or
+attribute is already bound manually (without a profile; write-only bindings do not count) or
+appears twice in the same selection. Existing objects and bindings are never overwritten. The
+data type of an imported state follows its current value (`on`/`off` → Boolean, number →
+number, otherwise text), and the binding later reads the value as exactly that type.
+
+### Profiles
+
+A profile declares how a state is read and which Home Assistant action a write triggers —
+without templates or expressions.
+
+| Profile | OBS value | Action | Read |
+|---|---|---|---|
+| Locked (`lock`) | true/false | `lock.lock` / `lock.unlock` | `locked` → true; `unlocked`, `open` → false |
+| Open (`lock`) | command | `lock.open` | — |
+| Open/closed (`cover`, `valve`) | true/false | `open_cover`/`close_cover` or `open_valve`/`close_valve` | `open` → true; `closed` → false |
+| Position (`cover`, `valve`) | 0–100 | `set_cover_position` / `set_valve_position`, field `position` | attribute `current_position` |
+| Stop (`cover`, `valve`, `media_player`) | command | `stop_cover` / `stop_valve` / `media_stop` | — |
+| On/off (`switch`, `input_boolean`, `fan`, `light`) | true/false | `turn_on` / `turn_off` | `on` → true |
+| Brightness (`light`) | 0–255 | `light.turn_on`, field `brightness` | attribute `brightness`; off → 0 |
+| Number value (`number`, `input_number`) | number | `set_value`, field `value` | state |
+| Selected option (`select`, `input_select`) | text | `select_option`, field `option` | state |
+| Text (`text`, `input_text`) | text | `set_value`, field `value` | state |
+| Press (`button`) / scene (`scene`) | command | `button.press` / `scene.turn_on` | — |
+| Media player | state, volume (0–1), mute, source, title, artist, play/pause, power, next/previous | `media_play`/`media_pause`, `volume_set`, `volume_mute`, `select_source`, … | state or attributes |
+
+**Command profiles** only trigger their action on `true`; `false` does nothing. On a numeric
+object 1 and 0 count as `true` and `false`; a value without a mapped action counts as a failed
+write. When a profile's data type does not fit the object, the binding form says so. A profile is
+only offered when the entity reports the required feature. Ambiguous domains (alarm panel,
+climate, vacuum, lawn mower, media playback versus power) never get a silent write mapping:
+without an explicitly chosen profile they are imported read only.
+
+Examples: a **Velux** roof window becomes fully controllable with *Open/closed*, the attribute
+`current_position` (profile *Position*) and *Stop*. A **Sonos** player with *State*, *Volume*,
+*Mute*, *Play/pause* and *Next*/*Previous*.
+
+### Editing a binding
+
+The binding form shows and edits the profile, the attribute and the **resolved mapping**.
+Entity ID, attribute, service domain, service name and service data key are searchable: while
+typing, OBS suggests the entities, attributes, domains, actions and data fields of the selected,
+connected instance. Free input stays possible, e.g. while Home Assistant is unreachable. The
+entity browser in the import dialog also searches while you type. The
+manual fields *Service domain*, *Service name* and *Service data key* work as before and take
+precedence over a profile — existing bindings therefore behave unchanged, no migration is
+needed. *Advanced mapping (JSON)* additionally accepts:
+
+- `action` — one action `{"domain", "name", "target", "data", "value_path"}`; the object's
+  value goes into the field `value_path`;
+- `write_actions` — value-dependent actions, e.g.
+  `{"true": {"domain": "lock", "name": "lock"}, "false": {"domain": "lock", "name": "unlock"}}`;
+  an empty `{}` counts as not set, the profile's actions stay;
+- `state_map`, `transitional_states`, `fault_states` — custom read normalization. With an
+  attribute, `state_map` applies to its value; values that are not text are looked up as JSON
+  (`true`, `1`, `null`). An empty `state_map` `{}` counts as not set.
+  An own attribute replaces the profile's value together with its type and mapping; the
+  profile's actions stay.
+
+**Read as** sets the type the value is converted to (Boolean, number, text or automatic); a
+value that does not fit keeps the last value with quality *uncertain*. Read as text, values that
+are not text appear in Home Assistant's JSON form (`true`, `[255, 0]`). A profile must fit the
+direction: a read-only profile cannot write and a command profile cannot read — OBS rejects such
+bindings when saving. Invalid JSON in the advanced mapping prevents saving.
+
+The action is chosen from the typed object value; the binding's formula and value map only
+change the value sent, never which action runs.
+
+### Limitations and troubleshooting
+
+- If Home Assistant rejects an action, the write counts as failed and the instance shows the
+  warning *Home Assistant rejected …* until an action succeeds again.
+- Complex actions (e.g. `play_media`, grouping, queues) and action responses are not mapped.
+- *Token invalid*: create a new token in Home Assistant and enter it in the instance.
+- Entity IDs must follow the Home Assistant format `domain.name` (lowercase letters, digits,
+  `_` – but no `_` at the start or end of a part and no double `__`); an invalid binding is skipped, the others keep running.
+- No device/area data in the browser: use an administrator's token.
+- An object shows quality *bad*: check the entity in Home Assistant (`unavailable`, removed)
+  or the instance's connection.
 
 ## Webhook: an incoming HTTP call as a source {#adapters-webhook}
 
