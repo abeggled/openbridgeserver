@@ -52,7 +52,10 @@ describe('visu store auth state', () => {
   })
 
   it('falls back to a non-admin session when the identity lookup fails', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 401 })))
+    // The tree never answers 401: it treats a rejected bearer as anonymous.
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => (
+      String(url).endsWith('/auth/me') ? new Response(null, { status: 401 }) : jsonResponse([])
+    )))
     const store = useVisuStore()
 
     await store.login('jwt-1', 'refresh-1')
@@ -224,6 +227,62 @@ describe('visu store auth state', () => {
     expect(store.nodes.map(n => n.id)).toEqual(['public', 'private'])
   })
 
+  it('reloads the tree on login, so a private start page is found (#1404)', async () => {
+    let authorized = false
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).endsWith('/auth/me')) {
+        authorized = true
+        return jsonResponse({ id: 'u1', username: 'user', is_admin: false })
+      }
+      // Ohne Login liefert das Backend nur die öffentliche Sicht
+      return jsonResponse(authorized
+        ? [{ id: 'public', parent_id: null, name: 'P', type: 'PAGE', order: 0, access: 'public' },
+           { id: 'private', parent_id: null, name: 'Q', type: 'PAGE', order: 1, access: 'user' }]
+        : [{ id: 'public', parent_id: null, name: 'P', type: 'PAGE', order: 0, access: 'public' }])
+    }))
+    const store = useVisuStore()
+    await store.loadTree()
+    expect(store.getNode('private')).toBeUndefined()
+
+    await store.login('jwt-1', 'refresh-1')
+
+    expect(store.getNode('private')?.type).toBe('PAGE')
+  })
+
+  it('does not reload the tree for a login that a logout has overtaken', async () => {
+    let releaseMe: (value: Response) => void = () => {}
+    const fetchMock = vi.fn(async (url: string) => (
+      String(url).endsWith('/auth/me') ? new Promise<Response>(resolve => { releaseMe = resolve }) : jsonResponse([])
+    ))
+    vi.stubGlobal('fetch', fetchMock)
+    const store = useVisuStore()
+
+    const login = store.login('jwt-1', 'refresh-1')
+    await flushPromises()
+    store.logout()
+    releaseMe(jsonResponse({ id: 'u1', username: 'user', is_admin: false }))
+    await login
+
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/visu/tree'))).toHaveLength(0)
+  })
+
+  it('keeps the login and the previous tree when the tree reload fails', async () => {
+    let treeDown = false
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).endsWith('/auth/me')) return jsonResponse({ id: 'u1', username: 'user', is_admin: false })
+      if (treeDown) throw new TypeError('Failed to fetch')
+      return jsonResponse([{ id: 'public', parent_id: null, name: 'P', type: 'PAGE', order: 0, access: 'public' }])
+    }))
+    const store = useVisuStore()
+    await store.loadTree()
+    treeDown = true
+
+    await expect(store.login('jwt-1', 'refresh-1')).resolves.toBeUndefined()
+
+    expect(store.isLoggedIn).toBe(true)
+    expect(store.nodes.map(n => n.id)).toEqual(['public'])
+  })
+
   it('does not even start a tree reload for a superseded renewal', async () => {
     let releaseAliceMe: (value: Response) => void = () => {}
     const alicePendingMe = new Promise<Response>(resolve => { releaseAliceMe = resolve })
@@ -244,12 +303,15 @@ describe('visu store auth state', () => {
 
     mePending = false
     await store.login('jwt-bob', 'refresh-bob')
+    const treeCalls = () => fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/visu/tree')).length
+    const afterLogin = treeCalls()  // Bobs Login lädt den Baum selbst (#1404)
 
     releaseAliceMe(jsonResponse({ id: 'u1', username: 'alice', is_admin: true }))
     await flushPromises()
 
     // Die überholte Erneuerung darf den Server gar nicht erst behelligen
-    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/visu/tree'))).toHaveLength(0)
+    expect(afterLogin).toBe(1)
+    expect(treeCalls()).toBe(afterLogin)
   })
 
   it('does not restore the admin flag from a lookup still running at logout', async () => {

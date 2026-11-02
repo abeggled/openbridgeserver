@@ -160,12 +160,17 @@ export const useVisuStore = defineStore('visu', () => {
       return
     }
     await applyIdentity(generation, 'keep')
-    if (generation !== authGeneration) return
     // Beim Kaltstart mit abgelaufenem Access-Token liefert das Backend keine
     // 401, sondern eine anonym gefilterte Sicht (`_optional_visu_principal`
     // verwirft den abgelaufenen Bearer). Der Baum im Store stammt dann aus
     // dieser Sicht und muss nach der Erneuerung neu geholt werden, sonst
     // bleiben private Knoten unsichtbar.
+    await reloadTreeFor(generation)
+  }
+
+  /** Baum für eine neue Sitzung neu holen; ein Fehler lässt den alten Stand stehen */
+  async function reloadTreeFor(generation: number) {
+    if (generation !== authGeneration) return
     try {
       await loadTreeFor(generation)
     } catch {
@@ -184,6 +189,9 @@ export const useVisuStore = defineStore('visu', () => {
     _jwt.value = accessToken
     // Admin-Status direkt nach Login ermitteln
     await applyIdentity(generation, 'deny')
+    // Der Baum stammt meist aus der anonymen Sicht. Ohne Neuladen fehlen die
+    // privaten Knoten, und eine private Startseite bliebe nach dem Login leer (#1404).
+    await reloadTreeFor(generation)
   }
 
   function logout() {
