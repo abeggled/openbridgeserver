@@ -873,6 +873,120 @@ describe('LogicView WebSocket', () => {
     expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
   })
 
+  it('fires a Trigger block from the debug pane through the run path, once (#1276)', async () => {
+    const graph = makeGraph('graph-1')
+    const { wrapper, logicApi, logicRunAuthzApi } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+    wrapper.vm.toggleDebug()
+    wrapper.vm.selectedNode = wrapper.vm.nodes[0]
+    await wrapper.vm.$nextTick()
+
+    const panel = wrapper.findComponent({ name: 'NodeConfigPanel' })
+    expect(panel.props('fireDisabled')).toBe(false)
+    expect(panel.props('fireDisabledHint')).toBe('')
+
+    // A double click runs the sheet once; the button is locked meanwhile.
+    panel.vm.$emit('fire-trigger', 'n1')
+    panel.vm.$emit('fire-trigger', 'n1')
+    await wrapper.vm.$nextTick()
+    expect(panel.props('fireDisabled')).toBe(true)
+    await flushPromises()
+
+    expect(logicRunAuthzApi.preflight).toHaveBeenCalledTimes(1)
+    expect(logicApi.runGraph).toHaveBeenCalledTimes(1)
+    expect(logicApi.runGraph).toHaveBeenLastCalledWith('graph-1', { debug: true, input_overrides: {}, fire_triggers: ['n1'] })
+    expect(panel.props('fireDisabled')).toBe(false)
+
+    // The next plain run fires nothing.
+    await wrapper.get('[data-testid="btn-run"]').trigger('click')
+    await flushPromises()
+    expect(logicApi.runGraph).toHaveBeenLastCalledWith('graph-1', { debug: true, input_overrides: {} })
+
+    // Outside debug mode a fire request alone still sends a debug-capable run.
+    wrapper.vm.toggleDebug()
+    await wrapper.vm.requestGraphRun(['n1'])
+    expect(logicApi.runGraph).toHaveBeenLastCalledWith('graph-1', { debug: false, input_overrides: {}, fire_triggers: ['n1'] })
+  })
+
+  it('runs a plain run started during a fire without firing, and fires on a confirmed dialog (#1276)', async () => {
+    const graph = makeGraph('graph-1')
+    const { wrapper, logicApi, logicRunAuthzApi } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+    wrapper.vm.toggleDebug()
+
+    // A plain run requested while a fire is pending never fires the trigger.
+    const fire = wrapper.vm.fireTrigger('n1')
+    const run = wrapper.vm.requestGraphRun()
+    await Promise.all([fire, run])
+    for (const call of logicApi.runGraph.mock.calls) {
+      if (call[1]?.fire_triggers) expect(call[1].fire_triggers).toEqual(['n1'])
+    }
+    expect(logicApi.runGraph).toHaveBeenLastCalledWith('graph-1', { debug: true, input_overrides: {} })
+
+    // A denied preflight keeps the fire request with the dialog's snapshot.
+    logicApi.runGraph.mockClear()
+    logicRunAuthzApi.preflight.mockResolvedValueOnce({
+      data: {
+        graph_id: 'graph-1',
+        allowed: false,
+        checks: [{ target_type: 'logic_capability', target_id: 'sms', node_ids: ['n2'], allowed: false, reason: 'missing_allow' }],
+      },
+    })
+    await wrapper.vm.fireTrigger('n1')
+    expect(logicApi.runGraph).not.toHaveBeenCalled()
+    expect(wrapper.vm.preflightFireTriggers).toEqual(['n1'])
+    wrapper.vm.runPreflightItems = [{ id: 'x', label: 'x', allowed: true }]
+    await wrapper.vm.confirmGraphRun()
+    expect(logicApi.runGraph).toHaveBeenLastCalledWith('graph-1', { debug: true, input_overrides: {}, fire_triggers: ['n1'] })
+    expect(wrapper.vm.preflightFireTriggers).toEqual([])
+  })
+
+  it('locks "fire now" with a hint on a disabled sheet (#1276)', async () => {
+    const graph = makeGraph('graph-1', { enabled: false })
+    const { wrapper, logicApi } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+    wrapper.vm.toggleDebug()
+    wrapper.vm.selectedNode = wrapper.vm.nodes[0]
+    await wrapper.vm.$nextTick()
+
+    const panel = wrapper.findComponent({ name: 'NodeConfigPanel' })
+    expect(panel.props('fireDisabled')).toBe(true)
+    expect(panel.props('fireDisabledHint')).toBe('Graph ist deaktiviert — kein Ausführen möglich')
+
+    await wrapper.vm.fireTrigger('n1')
+    expect(logicApi.runGraph).not.toHaveBeenCalled()
+  })
+
+  it('offers no overridable input on a Trigger block, even after a fire captured one (#1276)', async () => {
+    const graph = makeGraph('graph-1', {
+      flow_data: { nodes: [{ id: 'cron1', type: 'timer_cron', position: { x: 0, y: 0 }, data: { cron: '0 7 * * *' } }], edges: [] },
+    })
+    const { wrapper } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+    wrapper.vm.toggleDebug()
+    wrapper.vm.lastRunInputs = { cron1: { trigger: { incoming: true, effective: true, overridden: false } } }
+    wrapper.vm.selectedNode = wrapper.vm.nodes[0]
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.vm.debugInputs).toEqual([])
+  })
+
   it('clears a retained XML preview after an empty payload (#1104)', async () => {
     let wsInstance = null
     global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }
