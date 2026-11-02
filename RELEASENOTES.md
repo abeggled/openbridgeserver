@@ -39,6 +39,7 @@
 * Visu: When all series of a Chart ("Verlauf") widget were assigned to the right axis, an empty left axis with a 0–1 scale was still drawn. The left axis is now only shown when at least one series uses it, like the right one already was (#1111).
 * Visu: Closing a Chart ("Verlauf") widget while it was still loading its history — for example by switching pages quickly — raised an error in the browser console once the response arrived, because the widget then tried to draw into the chart it had already removed. A response that arrives after the widget was closed is now discarded (#1361).
 * Visu: Custom icons (imported SVG, KNX UF, FontAwesome) were only shown while signed in — anonymous and PIN visitors got an empty icon list, because the icon routes required a login. Without login the Visu now gets the icons of the pages the visitor may view: icons used on public and read-only pages and the page icons of the overview, and icons on PIN-protected pages once the PIN was entered. Icons used only on pages that require a login, or not used at all, stay hidden; signed-in users still get every icon.
+* Visu: A page below a PIN-protected location (or another node) that has no access setting of its own could not be opened — after entering the correct PIN it showed **Unauthorized**, because the page was requested with the session of the page instead of the node that defines the PIN. Such a page now opens with the PIN session of that node. https://github.com/abeggled/openbridgeserver/issues/1413
 
 ### Known Issues 🔔
 * none
