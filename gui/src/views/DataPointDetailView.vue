@@ -157,11 +157,12 @@
                     <div
                       v-for="device in knxGaContext(ga.address).devices"
                       :key="`${ga.address}:${device.pa}`"
-                      class="text-xs text-slate-500"
+                      class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs text-slate-500"
+                      data-testid="datapoint-knx-device"
                     >
-                      <span class="font-mono text-slate-700 dark:text-slate-200">{{ device.pa }}</span>
-                      <span v-if="device.name" class="text-slate-700 dark:text-slate-200"> {{ device.name }}</span>
-                      <span v-if="device.comm_objects?.length">
+                      <span class="font-mono text-slate-700 dark:text-slate-200" data-testid="datapoint-knx-device-pa">{{ device.pa }}</span>
+                      <span v-if="device.name" class="text-slate-700 dark:text-slate-200" data-testid="datapoint-knx-device-name">{{ device.name }}</span>
+                      <span v-if="device.comm_objects?.length" data-testid="datapoint-knx-device-comm-objects">
                         · {{ device.comm_objects.map(co => [co.number, co.name].filter(Boolean).join(' ')).filter(Boolean).join(', ') }}
                       </span>
                     </div>
