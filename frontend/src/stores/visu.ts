@@ -94,8 +94,14 @@ export const useVisuStore = defineStore('visu', () => {
   // ── Page-Config ───────────────────────────────────────────────────────────
   const pageConfig = ref<PageConfig | null>(null)
 
-  async function loadPage(nodeId: string) {
-    const sessionToken = getSessionToken(nodeId) ?? undefined
+  /**
+   * Seiten-Config laden.
+   *
+   * Das PIN-Session-Token liegt unter dem Knoten, der den Schutz festlegt —
+   * bei einer geerbten Freigabe ist das ein Vorfahr, nicht die Seite (#1413).
+   */
+  async function loadPage(nodeId: string, accessNodeId: string = nodeId) {
+    const sessionToken = getSessionToken(accessNodeId) ?? undefined
     pageConfig.value = await visuApi.getPage(nodeId, sessionToken)
   }
 
