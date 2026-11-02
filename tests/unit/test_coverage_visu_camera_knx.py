@@ -1391,7 +1391,7 @@ class TestImportKnxprojFile:
         db = _make_db()
 
         with (
-            patch("obs.api.v1.knxproj.parse_knxproj", return_value=[record]),
+            patch("obs.api.v1.knxproj.parse_knxproj_with_style", return_value=([record], "ThreeLevel")),
             patch("obs.api.v1.knxproj.parse_knxproj_locations", return_value=([], [])),
             patch("obs.api.v1.knxproj.parse_knxproj_trades", return_value=[]),
             patch("obs.api.v1.knxproj._bulk_import_datapoints", return_value=(0, 0, 1)),
