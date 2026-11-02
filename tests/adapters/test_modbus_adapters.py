@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -2341,6 +2342,84 @@ class TestSharedEndpointDelayPolicy:
         await b.disconnect()
         assert (host, port) not in _SHARED_BUS_DELAYS  # last gone -> dropped
         assert (host, port) not in _SHARED_BUS_MEMBERS
+
+
+class TestSharedBusAcquireTimeout:
+    """A wedged cross-instance shared_bus semaphore must not block reads forever:
+    the acquire is bounded and a timeout skips the read (yield None) with a
+    warning, instead of hanging silently. Writes are never dropped: they wait
+    for the bus unbounded."""
+
+    def test_default_timeout_is_30s(self):
+        assert ModbusTcpAdapterConfig().shared_bus_acquire_timeout_s == 30.0
+
+    async def _connect_shared(self, host, timeout_s):
+        adapter, _ = _make_tcp({"host": host, "port": 502, "timeout": 1.0, "shared_bus": True, "shared_bus_acquire_timeout_s": timeout_s})
+        client = _make_client(connected=True)
+        fake_mod = MagicMock()
+        fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
+        with patch.dict("sys.modules", {"pymodbus.client": fake_mod}):
+            await adapter.connect()
+        adapter._client = client
+        return adapter, client
+
+    async def test_timeout_skips_transaction_when_semaphore_held(self):
+        adapter, _ = await self._connect_shared("10.9.9.20", 0.2)
+        assert adapter._shared_bus_key == ("10.9.9.20", 502)
+        # Simulate a sibling holding the shared bus and never releasing it.
+        await adapter._io_sem.acquire()
+        try:
+            async with adapter._modbus_io_context() as client:
+                assert client is None  # acquire timed out -> transaction skipped
+        finally:
+            adapter._io_sem.release()
+
+    async def test_acquires_and_yields_client_when_free(self):
+        adapter, client = await self._connect_shared("10.9.9.21", 0.2)
+        async with adapter._modbus_io_context() as c:
+            assert c is client  # free semaphore -> normal transaction
+        # semaphore released again after the context
+        assert adapter._io_sem.locked() is False
+
+    @staticmethod
+    def _release_later(sem, delay):
+        async def _release():
+            await asyncio.sleep(delay)
+            sem.release()
+
+        return asyncio.create_task(_release())
+
+    async def test_zero_timeout_disables_bounding(self):
+        """With shared_bus_acquire_timeout_s=0 a read waits for a held bus
+        (unbounded) instead of timing out immediately."""
+        adapter, client = await self._connect_shared("10.9.9.22", 0.0)
+        await adapter._io_sem.acquire()
+        releaser = self._release_later(adapter._io_sem, 0.3)
+        async with adapter._modbus_io_context() as c:
+            assert c is client  # waited for the release, not skipped
+        await releaser
+
+    async def test_read_timeout_skips_and_warns(self, caplog):
+        adapter, client = await self._connect_shared("10.9.9.23", 0.2)
+        await adapter._io_sem.acquire()
+        try:
+            with caplog.at_level(logging.WARNING, logger="obs.adapters.modbus_tcp.adapter"):
+                result = await adapter._read_register(ModbusBindingConfig(**_HOLDING_CFG))
+        finally:
+            adapter._io_sem.release()
+        assert result is None
+        client.read_holding_registers.assert_not_awaited()
+        assert "timed out after 0.2s" in caplog.text
+
+    async def test_write_waits_for_busy_shared_bus(self):
+        """A write queued behind a busy shared bus is delivered once the bus
+        frees up, even past the acquire timeout (it must not be dropped)."""
+        adapter, client = await self._connect_shared("10.9.9.24", 0.2)
+        await adapter._io_sem.acquire()
+        releaser = self._release_later(adapter._io_sem, 0.5)  # longer than the 0.2 s timeout
+        await adapter.write(make_binding(_HOLDING_CFG, direction="DEST"), 42)
+        await releaser
+        client.write_register.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

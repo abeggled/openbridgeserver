@@ -129,6 +129,13 @@ class ModbusTcpAdapterConfig(BaseModel):
         title="Wartefrist pro Read (ms)",
         description="Pause nach jeder Modbus-Transaktion auf dem (geteilten) Bus, bevor die naechste startet. Gibt langsamen RS485/Modbus-TCP-Gateways Umschaltzeit und entzerrt mehrere Geraete an einem Bus. 0 = deaktiviert.",
     )
+    shared_bus_acquire_timeout_s: float = Field(
+        default=30.0,
+        ge=0.0,
+        le=300.0,
+        title="Shared-Bus Acquire-Timeout (s)",
+        description="Nur bei shared_bus: Obergrenze fuers Warten eines Reads auf die geteilte Bus-Semaphore. Laeuft die Sperre laenger nicht frei (verklemmte Semaphore ueber Instanzen), wird der Read mit WARNING uebersprungen statt unbegrenzt zu blockieren; der naechste Poll holt ihn nach. Writes warten immer, bis der Bus frei ist. 0 = kein Timeout.",
+    )
     startup_jitter_s: float = Field(
         default=30.0,
         ge=0.0,
@@ -631,7 +638,14 @@ class ModbusTcpAdapter(AdapterBase):
                     self._lifecycle_cond.notify_all()
 
     @contextlib.asynccontextmanager
-    async def _modbus_io_context(self):
+    async def _modbus_io_context(self, *, bounded: bool = True):
+        """Serialize one Modbus transaction and track it for the client lifecycle.
+
+        ``bounded`` only affects a shared bus: reads (the default) give up after
+        ``shared_bus_acquire_timeout_s`` and yield ``None`` because the next poll
+        cycle retries them anyway. Writes pass ``bounded=False`` and keep waiting
+        for the bus, so a value is never dropped just because a sibling is busy.
+        """
         if self._io_sem is None:
             # Only serialize via _space_lock when a delay is actually configured —
             # otherwise concurrent poll tasks keep their full existing concurrency.
@@ -642,6 +656,32 @@ class ModbusTcpAdapter(AdapterBase):
                     yield client
                 finally:
                     await self._space_out_bus(client)
+            return
+
+        # Shared bus: bound the acquire for reads so a wedged cross-instance semaphore
+        # surfaces as a logged, skipped poll instead of an unbounded silent hang. The
+        # per-instance serialize lock (not shared) keeps its plain blocking acquire.
+        _sbt = self._adp_cfg.shared_bus_acquire_timeout_s
+        if bounded and self._shared_bus_key is not None and _sbt > 0:
+            try:
+                await asyncio.wait_for(self._io_sem.acquire(), timeout=_sbt)
+            except TimeoutError:
+                logger.warning(
+                    "Modbus shared bus %s: I/O semaphore acquire timed out after %gs (possible cross-instance wedge) — skipping this read",
+                    self._shared_bus_key,
+                    _sbt,
+                )
+                yield None
+                return
+            try:
+                async with self._inflight_modbus_call():
+                    client = self._client if self._client_ready() else None
+                    try:
+                        yield client
+                    finally:
+                        await self._space_out_bus(client)
+            finally:
+                self._io_sem.release()
             return
 
         async with self._io_sem, self._inflight_modbus_call():
@@ -774,7 +814,8 @@ class ModbusTcpAdapter(AdapterBase):
     async def _write_register(self, bc: ModbusBindingConfig, value: Any) -> None:
         # Use the same _io_sem as reads — a concurrent write and read on the same
         # TCP socket reproduce exactly the stream-corruption race the PR fixes.
-        async with self._modbus_io_context() as client:
+        # Unbounded: a write must wait for a busy shared bus, never be dropped.
+        async with self._modbus_io_context(bounded=False) as client:
             if client is None:
                 return
 
