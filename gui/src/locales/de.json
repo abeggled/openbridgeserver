@@ -889,6 +889,14 @@
           "title": "Bus mit Instanzen gleicher IP:Port teilen",
           "description": "Serialisiert I/O über ALLE Instanzen, die denselben Host:Port pollen (z.B. mehrere Geräte hinter einem RS485/Modbus-TCP-Gateway). Verhindert gleichzeitige Requests konkurrierender Instanzen am selben Bus."
         },
+        "inter_read_delay_ms": {
+          "title": "Wartezeit zwischen Reads (ms)",
+          "description": "Pause nach jeder Modbus-Transaktion auf dem (geteilten) Bus, bevor die nächste startet. Gibt langsamen RS485/Modbus-TCP-Gateways die nötige Umschaltzeit und entzerrt mehrere Geräte an einem Bus. 0 = deaktiviert."
+        },
+        "shared_bus_acquire_timeout_s": {
+          "title": "Shared-Bus Acquire-Timeout (s)",
+          "description": "Nur bei geteiltem Bus: Obergrenze für das Warten eines Lesezugriffs auf die gemeinsame Bus-Sperre. Bleibt die Sperre über Instanzen hinweg verklemmt, wird der Lesezugriff mit Warnung übersprungen statt unbegrenzt zu blockieren; der nächste Poll holt ihn nach. Schreibzugriffe warten immer, bis der Bus frei ist. 0 = kein Timeout (unbegrenzt warten)."
+        },
         "startup_jitter_s": {
           "title": "Startup-Jitter (s)",
           "description": "Maximale zufällige Verzögerung (Sekunden) vor dem ersten Poll jedes Bindings. Verhindert einen Request-Burst wenn alle Tasks gleichzeitig starten. 0 = deaktiviert."
