@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -2344,9 +2345,10 @@ class TestSharedEndpointDelayPolicy:
 
 
 class TestSharedBusAcquireTimeout:
-    """A wedged cross-instance shared_bus semaphore must not block forever: the
-    acquire is bounded and a timeout skips the transaction (yield None) with a
-    warning, instead of hanging silently."""
+    """A wedged cross-instance shared_bus semaphore must not block reads forever:
+    the acquire is bounded and a timeout skips the read (yield None) with a
+    warning, instead of hanging silently. Writes are never dropped: they wait
+    for the bus unbounded."""
 
     def test_default_timeout_is_30s(self):
         assert ModbusTcpAdapterConfig().shared_bus_acquire_timeout_s == 30.0
@@ -2379,9 +2381,42 @@ class TestSharedBusAcquireTimeout:
         # semaphore released again after the context
         assert adapter._io_sem.locked() is False
 
+    @staticmethod
+    def _release_later(sem, delay):
+        async def _release():
+            await asyncio.sleep(delay)
+            sem.release()
+
+        return asyncio.create_task(_release())
+
     async def test_zero_timeout_disables_bounding(self):
-        """With shared_bus_acquire_timeout_s=0 the shared path uses the plain
-        blocking acquire (unbounded), same as before this feature."""
+        """With shared_bus_acquire_timeout_s=0 a read waits for a held bus
+        (unbounded) instead of timing out immediately."""
         adapter, client = await self._connect_shared("10.9.9.22", 0.0)
+        await adapter._io_sem.acquire()
+        releaser = self._release_later(adapter._io_sem, 0.3)
         async with adapter._modbus_io_context() as c:
-            assert c is client
+            assert c is client  # waited for the release, not skipped
+        await releaser
+
+    async def test_read_timeout_skips_and_warns(self, caplog):
+        adapter, client = await self._connect_shared("10.9.9.23", 0.2)
+        await adapter._io_sem.acquire()
+        try:
+            with caplog.at_level(logging.WARNING, logger="obs.adapters.modbus_tcp.adapter"):
+                result = await adapter._read_register(ModbusBindingConfig(**_HOLDING_CFG))
+        finally:
+            adapter._io_sem.release()
+        assert result is None
+        client.read_holding_registers.assert_not_awaited()
+        assert "timed out after 0.2s" in caplog.text
+
+    async def test_write_waits_for_busy_shared_bus(self):
+        """A write queued behind a busy shared bus is delivered once the bus
+        frees up, even past the acquire timeout (it must not be dropped)."""
+        adapter, client = await self._connect_shared("10.9.9.24", 0.2)
+        await adapter._io_sem.acquire()
+        releaser = self._release_later(adapter._io_sem, 0.5)  # longer than the 0.2 s timeout
+        await adapter.write(make_binding(_HOLDING_CFG, direction="DEST"), 42)
+        await releaser
+        client.write_register.assert_awaited_once()

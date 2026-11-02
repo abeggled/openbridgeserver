@@ -865,7 +865,7 @@
         },
         "shared_bus_acquire_timeout_s": {
           "title": "Shared bus acquire timeout (s)",
-          "description": "Shared bus only: upper bound on waiting for the shared bus lock. If the lock stays wedged across instances, the transaction is skipped with a warning instead of blocking indefinitely. 0 = no timeout (wait forever)."
+          "description": "Shared bus only: upper bound on how long a read waits for the shared bus lock. If the lock stays wedged across instances, the read is skipped with a warning instead of blocking indefinitely; the next poll retries it. Writes always wait until the bus is free. 0 = no timeout (wait forever)."
         },
         "startup_jitter_s": {
           "title": "Startup jitter (s)",
