@@ -35,7 +35,7 @@ from obs.api.v1.content_disposition import attachment_header
 from obs.db.database import Database, get_db
 from obs.logic.capabilities import LOGIC_CREATE_CAPABILITY
 from obs.logic.graph_analysis import config_schema_warnings, topology_warnings
-from obs.logic.manager import _migrate_legacy_node_data, _normalise_api_client_variables
+from obs.logic.manager import InvalidFireTriggerError, _migrate_legacy_node_data, _normalise_api_client_variables
 from obs.logic.models import (
     FlowData,
     LogicEdge,
@@ -1126,9 +1126,13 @@ async def run_graph(
 
         started = time.perf_counter()
         overrides = body.input_overrides if body else {}
-        debug_requested = bool(body and body.debug) or bool(overrides)
+        fire_triggers = body.fire_triggers if body else []
+        debug_requested = bool(body and body.debug) or bool(overrides) or bool(fire_triggers)
         if debug_requested:
-            outputs, inputs = await get_logic_manager().execute_graph_debug(graph_id, overrides)
+            try:
+                outputs, inputs = await get_logic_manager().execute_graph_debug(graph_id, overrides, fire_triggers=fire_triggers)
+            except InvalidFireTriggerError as exc:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
         else:
             outputs = await get_logic_manager().execute_graph(graph_id)
             inputs = {}
@@ -1144,6 +1148,7 @@ async def run_graph(
                 "control_class": _row_control_class(row),
                 "output_count": len(outputs),
                 "warning_count": len(warnings),
+                "fire_triggers": fire_triggers,
             },
             commit=True,
         )
@@ -1158,6 +1163,8 @@ async def run_graph(
                 "inputs": inputs,
             },
         }
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception("Logic graph run failed for graph %s", graph_id)
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(exc)) from exc

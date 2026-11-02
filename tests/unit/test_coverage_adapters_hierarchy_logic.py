@@ -5341,6 +5341,33 @@ class TestStartCronTasks:
         assert captured_now[0].tzinfo == ZoneInfo("Europe/Zurich")
 
     @pytest.mark.asyncio
+    async def test_cron_loop_fires_its_node_like_a_debug_fire(self):
+        """A due cron tick runs the sheet with the same event overrides the
+        debug "fire now" uses (#1276)."""
+        import asyncio
+
+        from obs.logic.manager import _cron_fire_overrides
+
+        flow = _make_flow()
+        mgr, _, _, _ = _make_logic_manager(graphs={"g1": ("G1", True, flow)})
+        mgr._execute_graph = AsyncMock(return_value={})
+
+        sleep_calls = []
+
+        async def _fake_sleep(seconds):
+            sleep_calls.append(seconds)
+            if len(sleep_calls) >= 2:
+                raise asyncio.CancelledError()
+
+        with patch("obs.logic.manager.asyncio.sleep", _fake_sleep):
+            task = asyncio.create_task(mgr._cron_loop("g1", "c1", "* * * * *"))
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        mgr._execute_graph.assert_awaited_once_with("g1", "G1", flow, {"c1": {"trigger": True}})
+        assert _cron_fire_overrides(["c1"]) == {"c1": {"trigger": True}}
+
+    @pytest.mark.asyncio
     async def test_ical_loop_logs_and_backs_off_on_error(self):
         """_ical_loop swallows an unexpected exception from _execute_graph,
         logs it and backs off for 60s rather than letting the loop die."""
