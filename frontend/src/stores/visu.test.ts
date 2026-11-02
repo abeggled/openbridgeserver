@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { useVisuStore } from './visu'
-import { cancelTokenRefresh } from '@/api/client'
+import { cancelTokenRefresh, setSessionToken } from '@/api/client'
 import { notifyAuthTokenRefreshed } from '@/utils/authEvents'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -568,5 +568,46 @@ describe('visu store auth state', () => {
 
     expect(store.isLoggedIn).toBe(false)
     expect(store.isAdmin).toBe(false)
+  })
+})
+
+describe('visu store page loading', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    sessionStorage.clear()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    sessionStorage.clear()
+  })
+
+  function sentSessionToken(fetchMock: ReturnType<typeof vi.fn>): string | null {
+    const init = fetchMock.mock.calls[0][1] as RequestInit
+    return new Headers(init.headers).get('X-Session-Token')
+  }
+
+  it('sends the session token of the node that defines an inherited protection (#1413)', async () => {
+    // The PIN was entered for the location; the page itself has no token.
+    setSessionToken('location-1', 'session-location')
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => jsonResponse({ widgets: [] }))
+    vi.stubGlobal('fetch', fetchMock)
+    const store = useVisuStore()
+
+    await store.loadPage('page-1', 'location-1')
+
+    expect(fetchMock.mock.calls[0][0]).toContain('/visu/pages/page-1')
+    expect(sentSessionToken(fetchMock)).toBe('session-location')
+    expect(store.pageConfig).toEqual({ widgets: [] })
+  })
+
+  it('sends the session token of the page itself by default', async () => {
+    setSessionToken('page-1', 'session-page')
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => jsonResponse({ widgets: [] }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await useVisuStore().loadPage('page-1')
+
+    expect(sentSessionToken(fetchMock)).toBe('session-page')
   })
 })

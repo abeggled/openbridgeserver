@@ -923,6 +923,53 @@ def _migrate_legacy_api_client_field_names(flow: FlowData) -> None:
                 node.data[new_key] = legacy_value
 
 
+# The timer blocks name their duration differently: (key the block reads, the sibling's key).
+_TIMER_DURATION_KEYS = {
+    "timer_delay": ("delay_s", "duration_s"),
+    "timer_pulse": ("duration_s", "delay_s"),
+}
+
+
+def _migrate_timer_duration_keys(flow: FlowData) -> None:
+    """Move a timer duration saved under the sibling block's key to the one the block reads.
+
+    A Delay saved through the API with only ``duration_s`` (the Pulse's key)
+    ran with the 1 s default (#1377). In-memory and idempotent like the
+    api_client migration above, applied at the same load and read points, so
+    sheets stored that way take their configured duration; the next save
+    from the editor stores it under the block's own key.
+
+    Only a usable duration (a finite number >= 0, not a bool) is moved, and
+    only while the block's own key is absent or null: an empty own key is a
+    deliberate choice of the default, and an unusable sibling value stays an
+    ignored stray key, as it was before.
+    """
+    for node in flow.nodes:
+        keys = _TIMER_DURATION_KEYS.get(node.type)
+        if keys is None:
+            continue
+        own, sibling = keys
+        if node.data.get(own) is not None or sibling not in node.data:
+            continue
+        value = node.data[sibling]
+        if isinstance(value, bool):
+            continue  # float(False) == 0.0 would turn a stray flag into a duration
+        try:
+            seconds = float(value)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not math.isfinite(seconds) or seconds < 0:
+            continue
+        del node.data[sibling]
+        node.data[own] = value
+
+
+def _migrate_legacy_node_data(flow: FlowData) -> None:
+    """All in-memory upgrades of stored ``node.data`` keys, applied wherever a stored flow is loaded or read."""
+    _migrate_legacy_api_client_field_names(flow)
+    _migrate_timer_duration_keys(flow)
+
+
 _normalise_api_client_variables = normalise_variable_slots
 
 
@@ -2222,7 +2269,7 @@ class LogicManager:
     @classmethod
     def _timer_duration(cls, node: Any) -> float:
         """The configured delay_s / duration_s of a timer block."""
-        return cls._timer_seconds(node.data.get("delay_s" if node.type == "timer_delay" else "duration_s"), 1.0)
+        return cls._timer_seconds(node.data.get(_TIMER_DURATION_KEYS[node.type][0]), 1.0)
 
     def _timer_state(self, graph_id: str, node_id: str, kind: str) -> _TimerState:
         nodes = self._timers.setdefault(graph_id, {})
@@ -8679,6 +8726,7 @@ class LogicManager:
             dp_id_str = node.data.get("datapoint_id")
             if not dp_id_str:
                 continue
+            write_val = self._serialize_structured_for_target(dp_id_str, write_val)
 
             ns = graph_state.setdefault(node.id, {})
             if node_out.get("_skip_unchanged") and "last_write_val" in ns and _same_value(ns["last_write_val"], write_val):
@@ -8716,6 +8764,25 @@ class LogicManager:
                         else:
                             ns[key] = value
         return published
+
+    def _serialize_structured_for_target(self, dp_id_str: Any, value: Any) -> Any:
+        """Return a list/dict written to a STRING object as JSON text (#999).
+
+        Blocks such as the iCalendar filter output a Python list. The WriteRouter
+        only propagates values matching the object's type, so a raw list on a
+        STRING object would be refused as a type mismatch on every refresh.
+        A malformed id (persisted ``node.data`` is not schema-checked) is left to
+        the per-write error handling, so later Write Objects still run.
+        """
+        if not isinstance(value, list | dict):
+            return value
+        try:
+            dp = self._registry.get(uuid.UUID(dp_id_str))
+        except (AttributeError, TypeError, ValueError):
+            return value
+        if dp is None or getattr(dp, "data_type", None) != "STRING":
+            return value
+        return json.dumps(value, ensure_ascii=False, default=str)
 
     @staticmethod
     def _write_filters_allow(d: dict[str, Any], ns: dict[str, Any], write_val: Any, write_now: datetime) -> bool:
@@ -8757,7 +8824,7 @@ class LogicManager:
             try:
                 raw = json.loads(row["flow_data"]) if row["flow_data"] else {}
                 flow = FlowData.model_validate(raw)
-                _migrate_legacy_api_client_field_names(flow)
+                _migrate_legacy_node_data(flow)
                 self._graphs[row["id"]] = (row["name"], bool(row["enabled"]), flow)
 
                 # Restore persisted node state (statistics, hysteresis, …) from DB,
@@ -8978,7 +9045,7 @@ class LogicManager:
             # migrated cached flow with the legacy one, silently losing the
             # configured headers/bearer-token file until the next full
             # _load_graphs() reload.
-            _migrate_legacy_api_client_field_names(flow)
+            _migrate_legacy_node_data(flow)
             self._graphs[graph_id] = (name, enabled, flow)
             self._sequence_graph_signatures[graph_id] = flow.model_dump_json()
             # A layout-only save leaves execution semantics untouched by

@@ -1100,6 +1100,32 @@
     "missing": {
       "title": "Unbekannt",
       "ariaLabel": "Unbekannter Widget-Typ"
+    },
+    "terminliste": {
+      "title": "Terminliste",
+      "titlePlaceholder": "z. B. Termine",
+      "sources": "Kalenderquellen (max. {max})",
+      "sourcesHint": "Objekte, in die ein iCalendar-Baustein (Logik) den Array-Ausgang eines Filters schreibt.",
+      "sourceN": "Quelle {n}",
+      "sourceLabelPlaceholder": "Name, z. B. Abfuhr",
+      "color": "Farbe",
+      "addSource": "+ Quelle hinzufügen",
+      "removeSource": "Quelle entfernen",
+      "days": "Anzahl Tage",
+      "separator": "Trennzeichen",
+      "separatorSemicolon": "Semikolon (;)",
+      "separatorStar": "Stern (*)",
+      "separatorNewline": "Zeilenumbruch",
+      "datePattern": "Datumsformat",
+      "datePatternHint": "Platzhalter wie in den allgemeinen Einstellungen, z. B. EEE dd.MM.yy → Mi. 15.07.26",
+      "showTime": "Startzeit anzeigen",
+      "showLocation": "Ort anzeigen",
+      "showEmptyDays": "Tage ohne Termine anzeigen",
+      "today": "Heute",
+      "tomorrow": "Morgen",
+      "noSources": "Keine Kalenderquelle konfiguriert",
+      "noEvents": "Keine Termine in den nächsten {n} Tagen",
+      "noEventsOnDay": "–"
     }
   },
   "datetimeNames": {

@@ -276,6 +276,58 @@ describe('DataPointDetailView', () => {
     expect(wrapper.text()).not.toContain('"group_address"')
   })
 
+  it('renders KNX device PA, name and comm objects as separate elements (#1199)', async () => {
+    apiMocks.dpApi.listBindings.mockResolvedValue({
+      data: [
+        {
+          id: 'binding-knx-devices',
+          enabled: true,
+          direction: 'SOURCE',
+          adapter_type: 'KNX',
+          config: { group_address: '0/7/38' },
+        },
+      ],
+    })
+    apiMocks.dpApi.knxContext.mockResolvedValue({
+      data: {
+        datapoint_id: 'dp-internal',
+        group_addresses: [
+          {
+            address: '0/7/38',
+            name: 'Altmetall Heute',
+            description: '',
+            dpt: 'DPT1.002',
+            roles: ['group_address'],
+            devices: [
+              {
+                pa: '1.1.102',
+                name: 'SCN-GLED1x.01 Glass LED Indicator',
+                comm_objects: [{ id: 'co-33', number: '33', name: 'LED 12', datapoint_type: 'DPT1.002' }],
+              },
+              { pa: '1.1.200', name: '', comm_objects: [] },
+            ],
+          },
+        ],
+      },
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const devices = wrapper.findAll('[data-testid="datapoint-knx-device"]')
+    expect(devices).toHaveLength(2)
+
+    const [named, bare] = devices
+    expect(named.classes()).toContain('flex')
+    expect(named.find('[data-testid="datapoint-knx-device-pa"]').text()).toBe('1.1.102')
+    expect(named.find('[data-testid="datapoint-knx-device-name"]').text()).toBe('SCN-GLED1x.01 Glass LED Indicator')
+    expect(named.find('[data-testid="datapoint-knx-device-comm-objects"]').text()).toBe('· 33 LED 12')
+
+    expect(bare.find('[data-testid="datapoint-knx-device-pa"]').text()).toBe('1.1.200')
+    expect(bare.find('[data-testid="datapoint-knx-device-name"]').exists()).toBe(false)
+    expect(bare.find('[data-testid="datapoint-knx-device-comm-objects"]').exists()).toBe(false)
+  })
+
   it('renders KNX context when adapter_type is lowercase "knx"', async () => {
     apiMocks.dpApi.listBindings.mockResolvedValue({
       data: [

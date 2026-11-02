@@ -6,12 +6,12 @@ import VisuViewer from './VisuViewer.vue'
 const mocks = vi.hoisted(() => {
   const node = {
     id: 'page-1',
-    parent_id: null,
+    parent_id: null as string | null,
     name: 'Privat',
     type: 'PAGE',
     order: 0,
     icon: null,
-    access: 'user',
+    access: 'user' as string | null,
     page_config: null,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
@@ -28,7 +28,7 @@ const mocks = vi.hoisted(() => {
     loadTree: vi.fn().mockResolvedValue(undefined),
     loadBreadcrumb,
     loadPage: vi.fn().mockResolvedValue(undefined),
-    hasSessionToken: () => false,
+    hasSessionToken: (_id: string): boolean => false,
   })
   class ApiRequestError extends Error {
     constructor(message: string, readonly status?: number) {
@@ -94,6 +94,8 @@ describe('VisuViewer session end', () => {
     mocks.getJwt.mockReturnValue('jwt-1')
     mocks.node.access = 'user'
     mocks.store.nodes = [mocks.node]
+    mocks.node.parent_id = null
+    mocks.store.hasSessionToken = (_id: string): boolean => false
   })
 
   it('replaces itself with the login when a private page is opened without a session', async () => {
@@ -117,6 +119,22 @@ describe('VisuViewer session end', () => {
     expect(mocks.replace).toHaveBeenCalledWith({ name: 'pin-auth', params: { id: 'page-1' }, query: { redirect: '/page-1' } })
     expect(mocks.push).not.toHaveBeenCalled()
     expect(mocks.store.loadPage).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('loads a page that inherits the PIN protection with the session of the defining location (#1413)', async () => {
+    // PIN entered for the location; the page below it has no access setting of its own.
+    const location = { ...mocks.node, id: 'location-1', name: 'Ort', type: 'LOCATION', access: 'protected' }
+    mocks.node.access = null
+    mocks.node.parent_id = 'location-1'
+    mocks.store.nodes = [location, mocks.node]
+    mocks.store.hasSessionToken = (id: string) => id === 'location-1'
+    const wrapper = mountViewer()
+    await flushPromises()
+
+    expect(mocks.replace).not.toHaveBeenCalled()
+    expect(mocks.store.loadPage).toHaveBeenCalledWith('page-1', 'location-1')
+    expect(mocks.setWriteContext).toHaveBeenCalledWith(expect.objectContaining({ pageId: 'page-1', definingId: 'location-1' }))
     wrapper.unmount()
   })
 
@@ -295,7 +313,7 @@ describe('VisuViewer session end', () => {
     await flushPromises()
 
     expect(mocks.push).not.toHaveBeenCalled()
-    expect(mocks.store.loadPage).toHaveBeenCalledWith('page-1')
+    expect(mocks.store.loadPage).toHaveBeenCalledWith('page-1', 'page-1')
     expect(wrapper.text()).not.toContain('common.loadError')
     wrapper.unmount()
   })
@@ -386,7 +404,7 @@ describe('VisuViewer session end', () => {
     mocks.store.nodes = [mocks.node]
     await flushPromises()
 
-    expect(mocks.store.loadPage).toHaveBeenCalledWith('page-1')
+    expect(mocks.store.loadPage).toHaveBeenCalledWith('page-1', 'page-1')
     wrapper.unmount()
   })
 
@@ -408,7 +426,7 @@ describe('VisuViewer session end', () => {
     rejectBreadcrumb(new Error('common.loadError'))
     await flushPromises()
 
-    expect(mocks.store.loadPage).toHaveBeenCalledWith('page-1')
+    expect(mocks.store.loadPage).toHaveBeenCalledWith('page-1', 'page-1')
     expect(wrapper.text()).not.toContain('common.loadError')
     wrapper.unmount()
   })

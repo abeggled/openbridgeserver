@@ -47,6 +47,7 @@ import '@/widgets/Wetter/index'
 import '@/widgets/Stufenschalter/index'
 import '@/widgets/Grundriss/index'
 import '@/widgets/HorizontalBar/index'
+import '@/widgets/Terminliste/index'
 
 const { t } = useI18n()
 const props = defineProps<{ id: string }>()
@@ -175,7 +176,7 @@ async function load() {
     }
 
     if (currentNode?.type === 'PAGE') {
-      await visuStore.loadPage(props.id)
+      await visuStore.loadPage(props.id, definingId)
       if (stale()) return
       // Write-Kontext für Backend-Autorisierung setzen (pageId + Session-Token + definingId)
       setWriteContext({
