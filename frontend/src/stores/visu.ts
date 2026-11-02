@@ -197,7 +197,10 @@ export const useVisuStore = defineStore('visu', () => {
     await applyIdentity(generation, 'deny')
     // Der Baum stammt meist aus der anonymen Sicht. Ohne Neuladen fehlen die
     // privaten Knoten, und eine private Startseite bliebe nach dem Login leer (#1404).
-    await reloadTreeFor(generation)
+    // Nicht abwarten: Der Login ist hier schon gültig, und ein hängender Baum-Abruf
+    // hielte sonst die Login-Seite fest. Der Viewer lädt die Seite neu, sobald
+    // ihr Knoten im Baum auftaucht.
+    void reloadTreeFor(generation)
   }
 
   function logout() {

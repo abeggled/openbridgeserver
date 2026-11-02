@@ -245,8 +245,31 @@ describe('visu store auth state', () => {
     expect(store.getNode('private')).toBeUndefined()
 
     await store.login('jwt-1', 'refresh-1')
+    await flushPromises()
 
     expect(store.getNode('private')?.type).toBe('PAGE')
+  })
+
+  it('finishes a successful login even when the follow-up tree request stalls', async () => {
+    // Reproducer from the PR #1419 review: the login must not wait for the tree.
+    let treeCalls = 0
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).endsWith('/auth/me')) return jsonResponse({ id: 'u1', username: 'user', is_admin: false })
+      treeCalls += 1
+      return treeCalls === 1
+        ? jsonResponse([{ id: 'public', parent_id: null, name: 'P', type: 'PAGE', order: 0, access: 'public' }])
+        : new Promise<Response>(() => {})
+    }))
+    const store = useVisuStore()
+    await store.loadTree()
+
+    let loginFinished = false
+    void store.login('jwt-1', 'refresh-1').then(() => { loginFinished = true })
+    await flushPromises()
+
+    expect(store.isLoggedIn).toBe(true)
+    expect(treeCalls).toBe(2)
+    expect(loginFinished).toBe(true)
   })
 
   it('does not reload the tree for a login that a logout has overtaken', async () => {
@@ -262,6 +285,7 @@ describe('visu store auth state', () => {
     store.logout()
     releaseMe(jsonResponse({ id: 'u1', username: 'user', is_admin: false }))
     await login
+    await flushPromises()
 
     expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/visu/tree'))).toHaveLength(0)
   })
@@ -278,6 +302,7 @@ describe('visu store auth state', () => {
     treeDown = true
 
     await expect(store.login('jwt-1', 'refresh-1')).resolves.toBeUndefined()
+    await flushPromises()
 
     expect(store.isLoggedIn).toBe(true)
     expect(store.nodes.map(n => n.id)).toEqual(['public'])
@@ -303,6 +328,7 @@ describe('visu store auth state', () => {
 
     mePending = false
     await store.login('jwt-bob', 'refresh-bob')
+    await flushPromises()
     const treeCalls = () => fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/visu/tree')).length
     const afterLogin = treeCalls()  // Bobs Login lädt den Baum selbst (#1404)
 
