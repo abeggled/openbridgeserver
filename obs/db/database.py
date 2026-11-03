@@ -745,20 +745,15 @@ async def _migration_v55_knx_group_address_style(conn: aiosqlite.Connection) -> 
     rows that are no group address do not count. No valid rows or a tie fall
     back to ThreeLevel, the notation xknx uses.
     """
-    from collections import Counter
+    from obs.adapters.knx.group_address import DEFAULT_GROUP_ADDRESS_STYLE, style_from_addresses
 
-    from obs.adapters.knx.group_address import DEFAULT_GROUP_ADDRESS_STYLE, FREE, THREE_LEVEL, TWO_LEVEL, try_normalize_ga
-
-    part_counts: Counter[int] = Counter()
+    addresses: list[str] = []
     async with conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='knx_group_addresses'") as cur:
         has_addresses = await cur.fetchone() is not None
     if has_addresses:
         async with conn.execute("SELECT address FROM knx_group_addresses") as cur:
-            part_counts.update(len(row["address"].split("/")) for row in await cur.fetchall() if try_normalize_ga(row["address"]))
-    style = DEFAULT_GROUP_ADDRESS_STYLE
-    ranked = part_counts.most_common(2)
-    if ranked and (len(ranked) == 1 or ranked[0][1] > ranked[1][1]):
-        style = {3: THREE_LEVEL, 2: TWO_LEVEL, 1: FREE}[ranked[0][0]]
+            addresses = [row["address"] for row in await cur.fetchall()]
+    style = style_from_addresses(addresses) or DEFAULT_GROUP_ADDRESS_STYLE
     await conn.execute(
         """CREATE TABLE IF NOT EXISTS knx_project (
                id                  INTEGER PRIMARY KEY CHECK (id = 1),
