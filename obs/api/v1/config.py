@@ -39,6 +39,7 @@ from obs.api.v1.bindings import (
     _validate_adapter_binding,
     _webhook_config_with_token,
 )
+from obs.api.v1.knxproj import GroupAddressMergeConflict, _merge_conflicts, _save_group_address_style, _stored_group_address_style
 from obs.api.v1.services.hierarchy_lifecycle import collect_hierarchy_tree_node_ids, delete_hierarchy_grants
 from obs.core.formula import validate_formula
 from obs.core.registry import get_registry
@@ -121,16 +122,6 @@ class ExportedKnxGroupAddress(BaseModel):
     name: str
     description: str
     dpt: str | None
-
-
-class ExportedKnxGaMergeConflict(BaseModel):
-    """A note of migration V56: two spellings of one address disagreed (#1296)."""
-
-    address: str
-    spelling: str
-    field: str
-    kept: str
-    dropped: str
 
 
 # Legacy (v1 export format)
@@ -323,7 +314,7 @@ class ConfigExport(BaseModel):
     knx_group_addresses: list[ExportedKnxGroupAddress] = []
     # Project's group address style and V56 merge notes (#1296); absent in older exports
     knx_group_address_style: str | None = None
-    knx_ga_merge_conflicts: list[ExportedKnxGaMergeConflict] = []
+    knx_ga_merge_conflicts: list[GroupAddressMergeConflict] = []
     logic_graphs: list[ExportedLogicGraph] = []
     # Legacy field (v1) — ignoriert beim Import wenn adapter_instances vorhanden
     adapter_configs: list[ExportedAdapterConfig] = []
@@ -448,11 +439,8 @@ async def export_config(
         )
         for r in ga_rows
     ]
-    style_row = await db.fetchone("SELECT group_address_style FROM knx_project WHERE id = 1")
-    knx_ga_merge_conflicts = [
-        ExportedKnxGaMergeConflict(**dict(r))
-        for r in await db.fetchall("SELECT address, spelling, field, kept, dropped FROM knx_ga_merge_conflicts ORDER BY address, spelling, field")
-    ]
+    knx_group_address_style = await _stored_group_address_style(db)
+    knx_ga_merge_conflicts = await _merge_conflicts(db)
 
     graph_rows = await db.fetchall("SELECT * FROM logic_graphs ORDER BY name")
     logic_graphs = [
@@ -648,7 +636,7 @@ async def export_config(
         bindings=bindings,
         adapter_instances=adapter_instances,
         knx_group_addresses=knx_group_addresses,
-        knx_group_address_style=style_row["group_address_style"] if style_row else None,
+        knx_group_address_style=knx_group_address_style,
         knx_ga_merge_conflicts=knx_ga_merge_conflicts,
         logic_graphs=logic_graphs,
         icons=icons,
@@ -1116,10 +1104,8 @@ async def import_config(
         style = style_from_addresses(ga.address for ga in body.knx_group_addresses)
     if style is not None:
         if style in GROUP_ADDRESS_STYLES:
-            await db.execute_and_commit(
-                "INSERT INTO knx_project (id, group_address_style) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET group_address_style=excluded.group_address_style",
-                (style,),
-            )
+            await _save_group_address_style(db, style)
+            await db.commit()
         else:
             result.errors.append(f"KNX group address style {style!r}: unknown, kept the stored style")
     for conflict in body.knx_ga_merge_conflicts:
