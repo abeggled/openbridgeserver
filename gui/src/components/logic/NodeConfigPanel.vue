@@ -1585,6 +1585,10 @@
       :output-labels="debugOutputLabels"
       :metadata="debugMetadata"
       :has-overrides="hasDebugOverrides"
+      :can-fire="node.type === 'timer_cron'"
+      :fire-disabled="fireDisabled"
+      :fire-disabled-hint="fireDisabledHint"
+      @fire-trigger="emit('fire-trigger', node.id)"
       @set-override="(inputId, text) => emit('set-override', inputId, text)"
       @clear-override="inputId => emit('clear-override', inputId)"
       @clear-all="emit('clear-all')"
@@ -1628,9 +1632,11 @@ const props = defineProps({
   debugInputs:       { type: Array,   default: () => [] },
   debugOutputs:      { type: Object,  default: () => ({}) },
   debugMetadata:     { type: Object,  default: null },
+  fireDisabled:      { type: Boolean, default: false },
+  fireDisabledHint:  { type: String,  default: '' },
   hasDebugOverrides: { type: Boolean, default: false },
 })
-const emit = defineEmits(['update', 'close', 'set-override', 'clear-override', 'clear-all'])
+const emit = defineEmits(['update', 'close', 'set-override', 'clear-override', 'clear-all', 'fire-trigger'])
 
 const EXTRACTOR_OUTPUT_BG = 'rgba(30, 41, 59, 0.6)'
 const EXTRACTOR_OUTPUT_FG = getAutoContrastText(EXTRACTOR_OUTPUT_BG)

@@ -1046,7 +1046,7 @@ class TestRunGraph:
         with patch("obs.logic.manager.get_logic_manager", return_value=mock_manager):
             result = await run_graph(graph_id=row["id"], body=body, _user="admin", db=db)
 
-        mock_manager.execute_graph_debug.assert_awaited_once_with(row["id"], {"node": {"in": 7}})
+        mock_manager.execute_graph_debug.assert_awaited_once_with(row["id"], {"node": {"in": 7}}, fire_triggers=[])
         assert result["debug"]["inputs"] == captured
         assert result["debug"]["used_overrides"] is True
         assert result["debug"]["duration_ms"] >= 0
@@ -1064,8 +1064,70 @@ class TestRunGraph:
         with patch("obs.logic.manager.get_logic_manager", return_value=mock_manager):
             result = await run_graph(graph_id=row["id"], body=LogicGraphRun(debug=True), _user="admin", db=db)
 
-        mock_manager.execute_graph_debug.assert_awaited_once_with(row["id"], {})
+        mock_manager.execute_graph_debug.assert_awaited_once_with(row["id"], {}, fire_triggers=[])
         assert result["debug"]["inputs"] == {"node": {}}
+
+    @pytest.mark.asyncio
+    async def test_fire_triggers_alone_requests_a_debug_run(self):
+        from obs.api.v1.logic import run_graph
+        from obs.logic.models import LogicGraphRun
+
+        row = _make_graph_row(enabled=1)
+        db = _DbStub(one=row)
+        mock_manager = MagicMock()
+        mock_manager.execute_graph_debug = AsyncMock(return_value=({"cron": {"trigger": True}}, {}))
+
+        with (
+            patch("obs.logic.manager.get_logic_manager", return_value=mock_manager),
+            patch("obs.api.v1.logic.write_application_success", new=AsyncMock()) as audit,
+        ):
+            result = await run_graph(graph_id=row["id"], body=LogicGraphRun(fire_triggers=["cron"]), _user="admin", db=db)
+
+        mock_manager.execute_graph_debug.assert_awaited_once_with(row["id"], {}, fire_triggers=["cron"])
+        assert audit.await_args.kwargs["details"]["fire_triggers"] == ["cron"]
+        assert result["outputs"] == {"cron": {"trigger": True}}
+        assert result["debug"]["used_overrides"] is False
+
+    @pytest.mark.asyncio
+    async def test_firing_a_block_that_is_no_trigger_raises_422(self):
+        from fastapi import HTTPException
+
+        from obs.api.v1.logic import run_graph
+        from obs.logic.manager import InvalidFireTriggerError
+        from obs.logic.models import LogicGraphRun
+
+        row = _make_graph_row(enabled=1)
+        db = _DbStub(one=row)
+        mock_manager = MagicMock()
+        mock_manager.execute_graph_debug = AsyncMock(side_effect=InvalidFireTriggerError("Kein Trigger-Baustein: x"))
+
+        with patch("obs.logic.manager.get_logic_manager", return_value=mock_manager), pytest.raises(HTTPException) as exc_info:
+            await run_graph(graph_id=row["id"], body=LogicGraphRun(fire_triggers=["x"]), _user="admin", db=db)
+
+        assert exc_info.value.status_code == 422
+        assert exc_info.value.detail == "Kein Trigger-Baustein: x"
+
+    @pytest.mark.asyncio
+    async def test_value_error_during_a_debug_run_stays_a_logged_500(self):
+        from fastapi import HTTPException
+
+        from obs.api.v1.logic import run_graph
+        from obs.logic.models import LogicGraphRun
+
+        row = _make_graph_row(enabled=1)
+        db = _DbStub(one=row)
+        mock_manager = MagicMock()
+        mock_manager.execute_graph_debug = AsyncMock(side_effect=ValueError("bad value"))
+
+        with (
+            patch("obs.logic.manager.get_logic_manager", return_value=mock_manager),
+            patch("obs.api.v1.logic.logger") as logger,
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await run_graph(graph_id=row["id"], body=LogicGraphRun(debug=True), _user="admin", db=db)
+
+        assert exc_info.value.status_code == 500
+        logger.exception.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_raises_500_on_execution_error(self):

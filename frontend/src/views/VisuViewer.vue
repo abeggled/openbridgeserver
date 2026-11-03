@@ -176,7 +176,7 @@ async function load() {
     }
 
     if (currentNode?.type === 'PAGE') {
-      await visuStore.loadPage(props.id)
+      await visuStore.loadPage(props.id, definingId)
       if (stale()) return
       // Write-Kontext für Backend-Autorisierung setzen (pageId + Session-Token + definingId)
       setWriteContext({

@@ -564,7 +564,7 @@ onMounted(async () => {
     if (!isNew.value) {
       if (!store.treeLoaded) await store.loadTree()
       await store.loadBreadcrumb(props.id)
-      await store.loadPage(props.id)
+      await store.loadPage(props.id, resolveAccessNode(props.id).definingId)
       if (store.pageConfig) config.value = JSON.parse(JSON.stringify(store.pageConfig))
       // Rückwärtskompatibilität: fehlende Felder nachrüsten
       if (!config.value.grid_cell_width) config.value.grid_cell_width = 80

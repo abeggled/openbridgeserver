@@ -616,7 +616,7 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
             PolicyCheck(CheckKind.ROLE, "activate", "datapoint", "derived:logic_flow_datapoints"),
             PolicyCheck(CheckKind.CAPABILITY, "activate", "logic_capability", "derived:logic_node_capabilities", "logic.declared"),
         ),
-        details=("control_class", "denied_checks", "output_count", "warning_count"),
+        details=("control_class", "denied_checks", "fire_triggers", "output_count", "warning_count"),
     ),
     ("POST", "/api/v1/logic/graphs/{graph_id}/duplicate"): _policy(
         "logic_graph",

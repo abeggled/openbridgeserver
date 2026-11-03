@@ -26,7 +26,7 @@ import socket
 import stat
 import uuid
 from collections import deque
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time
 from decimal import Decimal, InvalidOperation
@@ -101,6 +101,17 @@ class _TimerState:
     trigger_sig: tuple[str, str] | None = None
     # Set when the deadline moves, so a task sleeping on it re-reads it.
     wake: asyncio.Event = field(default_factory=asyncio.Event, compare=False, repr=False)
+
+
+class InvalidFireTriggerError(ValueError):
+    """A debug run cannot fire the requested blocks (#1276): one is no
+    Trigger, or the same run also overrides its trigger level."""
+
+
+def _cron_fire_overrides(node_ids: Iterable[str]) -> dict[str, dict[str, Any]]:
+    """Event overrides of a cron tick firing *node_ids* — shared by the cron
+    schedule and the debug "fire now", so both fire a Trigger identically."""
+    return {node_id: {"trigger": True} for node_id in node_ids}
 
 
 class _ObsoleteGraphExecution(Exception):
@@ -3010,8 +3021,7 @@ class LogicManager:
                 entry = self._graphs.get(graph_id)
                 if entry and entry[1]:  # still exists and enabled
                     g_name, _, flow = entry
-                    overrides = {node_id: {"trigger": True}}
-                    await self._execute_graph(graph_id, g_name, flow, overrides)
+                    await self._execute_graph(graph_id, g_name, flow, _cron_fire_overrides([node_id]))
                     logger.info(
                         "Cron graph %s (%s) fired at %s",
                         graph_id[:8],
@@ -3325,18 +3335,33 @@ class LogicManager:
         self,
         graph_id: str,
         input_overrides: dict[str, dict[str, Any]] | None = None,
+        fire_triggers: list[str] | None = None,
     ) -> tuple[dict[str, Any], dict[str, dict[str, dict[str, Any]]]]:
-        """Manually run a graph and return its actual final-pass inputs."""
+        """Manually run a graph and return its actual final-pass inputs.
+
+        *fire_triggers* names Trigger (timer_cron) blocks that fire in this
+        run exactly as on their cron schedule (#1276); a debug session then
+        need not wait for the next tick. An id that is no Trigger, or whose
+        trigger level *input_overrides* also sets (it would silently cancel
+        the fire), raises InvalidFireTriggerError before the sheet runs.
+        """
         entry = self._graphs.get(graph_id)
         if not entry:
             raise KeyError(f"Graph {graph_id} not in cache")
         name, _enabled, flow = entry
+        cron_ids = {node.id for node in flow.nodes if node.type == "timer_cron"}
+        unknown = [node_id for node_id in fire_triggers or [] if node_id not in cron_ids]
+        if unknown:
+            raise InvalidFireTriggerError(f"Kein Trigger-Baustein: {', '.join(unknown)}")
+        overridden = [node_id for node_id in fire_triggers or [] if "trigger" in (input_overrides or {}).get(node_id, {})]
+        if overridden:
+            raise InvalidFireTriggerError(f"Trigger gleichzeitig ausgelöst und überschrieben: {', '.join(overridden)}")
         input_capture: dict[str, dict[str, dict[str, Any]]] = {}
         outputs = await self._execute_graph(
             graph_id,
             name,
             flow,
-            {},
+            _cron_fire_overrides(fire_triggers or []),
             debug_overrides=input_overrides or {},
             debug_input_capture=input_capture,
         )

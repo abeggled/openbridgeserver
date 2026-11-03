@@ -24,6 +24,12 @@ All three levels stay in sync — a change at any level updates the others.
 The schedule is evaluated in the configured application timezone (**Settings → General**), not
 UTC — a "Daily at 07:00" trigger fires at 7am local time and follows daylight-saving transitions.
 
+In debug mode you need not wait for the next scheduled time: the **Debug values** tab of a Trigger
+block offers a **Fire now** button. It runs the logic sheet once as if the schedule had just fired —
+with all follow-up actions such as writes or notifications. Overrides set on other blocks in debug
+mode apply to that run; the trigger itself cannot be overridden. **Run** in the toolbar, in
+contrast, does not fire a trigger.
+
 ## Date/Time {#logic-block-datetime}
 
 Outputs the current date and time in the configured application timezone (**Date**, **Time**,

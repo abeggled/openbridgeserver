@@ -2045,7 +2045,9 @@
       "noExecution": "Logikblatt ausführen, um Ausgänge zu prüfen.",
       "timestamp": "Ausgeführt",
       "duration": "Dauer",
-      "overrideExecution": "Diese Ausführung verwendete temporäre Eingangsüberschreibungen."
+      "overrideExecution": "Diese Ausführung verwendete temporäre Eingangsüberschreibungen.",
+      "fireTrigger": "Jetzt auslösen",
+      "fireTriggerHint": "Löst den Trigger einmal sofort aus – wie zum nächsten Zeitpunkt seines Zeitplans. Das Logikblatt läuft dabei mit allen Folgeaktionen; aktive Überschreibungen anderer Blöcke gelten mit."
     },
     "rename": "Umbenennen",
     "duplicate": "Duplizieren",

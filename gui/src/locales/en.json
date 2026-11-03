@@ -2045,7 +2045,9 @@
       "noExecution": "Run the sheet to inspect outputs.",
       "timestamp": "Executed",
       "duration": "Duration",
-      "overrideExecution": "This execution used temporary input overrides."
+      "overrideExecution": "This execution used temporary input overrides.",
+      "fireTrigger": "Fire now",
+      "fireTriggerHint": "Fires the trigger once right away, just like at the next time of its schedule. The logic sheet runs with all follow-up actions; active overrides of other blocks apply."
     },
     "rename": "Rename",
     "duplicate": "Duplicate",
