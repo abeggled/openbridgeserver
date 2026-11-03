@@ -14,7 +14,20 @@ import { useFormatStore } from '@/stores/format'
 import { useThemeStore } from '@/stores/theme'
 import type { DataPointValue } from '@/types'
 import type { WriteContext } from '@/api/client'
-import { aggregateBucketEndTimestamp, sortedUniqueTimestamps, weightedAverage, weightedValuesByTimestamp } from './aggregation'
+import {
+  aggregateBucketEndTimestamp,
+  aggregateIntervalMs,
+  sortedUniqueTimestamps,
+  weightedAverage,
+  weightedValuesByTimestamp,
+} from './aggregation'
+import {
+  calendarTickLabel,
+  calendarTicks,
+  chooseTimeTickStep,
+  maxTicksForWidth,
+  type CalendarTick,
+} from './timeAxisTicks'
 import {
   TIME_RANGE_PRESETS,
   DEFAULT_TIME_RANGE,
@@ -92,6 +105,60 @@ const theme = useThemeStore()
 function gridColor(): string {
   return theme.isDark ? '#374151' : '#e5e7eb'
 }
+// Tageswechsel (bzw. Monats-/Jahreswechsel) heben sich auf der Zeitachse ab (#1430)
+function majorGridColor(): string {
+  return theme.isDark ? '#4b5563' : '#d1d5db'
+}
+function timeGridColor(ctx: { tick?: { major?: boolean } }): string {
+  return ctx.tick?.major ? majorGridColor() : gridColor()
+}
+
+// Zeitachse an Kalendergrenzen in der Server-Zeitzone statt an „runden"
+// Millisekundenwerten von Chart.js (#1430)
+interface TimeAxisScale { min: number; max: number; width: number; ticks: { value: number; major?: boolean }[] }
+
+function tickLabel(tick: CalendarTick | undefined): string {
+  if (!tick) return ''
+  return calendarTickLabel(tick, {
+    time:     ms => format.fmtDateTime(ms, { hour: '2-digit', minute: '2-digit' }),
+    dayMonth: ms => format.fmtDateTime(ms, { day: '2-digit', month: '2-digit' }),
+    names:    format.localeNames(),
+  })
+}
+
+function ticksForRange(fromMs: number, toMs: number, widthPx: number): CalendarTick[] {
+  const step = chooseTimeTickStep(toMs - fromMs, maxTicksForWidth(widthPx))
+  return calendarTicks(fromMs, toMs, step, format.timezone)
+}
+
+// Linienchart: Ticks sind Zeitstempel auf der linearen Skala
+const lineTicks = new Map<number, CalendarTick>()
+function buildLineTicks(scale: TimeAxisScale) {
+  lineTicks.clear()
+  const ticks = ticksForRange(scale.min, scale.max, scale.width)
+  for (const tick of ticks) lineTicks.set(tick.value, tick)
+  scale.ticks = ticks.map(tick => ({ value: tick.value, major: tick.major }))
+}
+
+// Balkenchart: Ticks sind Bucket-Indizes; beschriftet wird der Bucket, in den
+// eine Kalendergrenze fällt
+let barBuckets: { start: number; end: number }[] = []
+const barTicks = new Map<number, CalendarTick>()
+function buildBarTicks(scale: TimeAxisScale) {
+  barTicks.clear()
+  const ticks: { value: number; major: boolean }[] = []
+  if (barBuckets.length > 0) {
+    const fromMs = barBuckets[0].start
+    const toMs = barBuckets[barBuckets.length - 1].end
+    for (const tick of ticksForRange(fromMs, toMs, scale.width)) {
+      const index = barBuckets.findIndex(b => tick.value >= b.start && tick.value < b.end)
+      if (index < 0 || barTicks.has(index)) continue
+      barTicks.set(index, tick)
+      ticks.push({ value: index, major: tick.major })
+    }
+  }
+  scale.ticks = ticks
+}
 
 function fmtMs(ms: number): string {
   return format.fmtDateTime(ms, {
@@ -164,19 +231,26 @@ function initChart() {
       scales: {
         x: isBar
           ? {
-              type:  'category',
-              ticks: { color: '#6b7280', maxTicksLimit: 8, maxRotation: 0 },
-              grid:  { color: gridColor() },
+              type:            'category',
+              afterBuildTicks: (scale: unknown) => buildBarTicks(scale as TimeAxisScale),
+              ticks: {
+                color:       '#6b7280',
+                maxRotation: 0,
+                callback:    (index: unknown) => tickLabel(barTicks.get(Number(index))),
+              },
+              // Gitterlinie mittig auf dem Bucket der Kalendergrenze, nicht halb
+              // zum nächsten (dünn besetzten) Tick versetzt
+              grid: { color: timeGridColor, offset: false },
             }
           : {
-              type:  'linear',
+              type:            'linear',
+              afterBuildTicks: (scale: unknown) => buildLineTicks(scale as TimeAxisScale),
               ticks: {
-                color:         '#6b7280',
-                maxTicksLimit: 6,
-                maxRotation:   0,
-                callback: (ms) => ms == null ? '' : fmtMs(Number(ms)),
+                color:       '#6b7280',
+                maxRotation: 0,
+                callback:    (ms: unknown) => tickLabel(lineTicks.get(Number(ms))),
               },
-              grid: { color: gridColor() },
+              grid: { color: timeGridColor },
             },
         y: {
           type:     'linear',
@@ -248,6 +322,8 @@ async function loadData() {
   if (isBar) {
     if (requestPlan.mode === 'aggregate') {
       const bucketTimestamps = sortedUniqueTimestamps(results)
+      const intervalMs = aggregateIntervalMs(requestPlan.interval)
+      barBuckets = bucketTimestamps.map((start, i) => ({ start, end: bucketTimestamps[i + 1] ?? start + intervalMs }))
       chart.data.labels = bucketTimestamps.map(fmtMs)
       chart.data.datasets = defs.map((s, i) => ({
         yAxisID:         s.axis,
@@ -265,6 +341,7 @@ async function loadData() {
       const numBuckets    = Math.min(Math.max(Math.round(durationHours * 2), 24), 96)
       const buckets       = buildBuckets(fromDate.getTime(), toDate.getTime(), numBuckets)
 
+      barBuckets          = buckets
       chart.data.labels   = buckets.map(b => fmtMs(b.mid))
       chart.data.datasets = defs.map((s, i) => {
         const raw = results[i]
@@ -374,7 +451,8 @@ watch(selectedTimeRange, loadData)
 // The public display settings load asynchronously from App.vue's onMounted, which
 // Vue runs *after* this child mounted and already built its chart — so the axis
 // locale has to be refreshed once the real regional format arrives (issue #1073).
-watch(() => format.regionFormat, (regionFormat) => {
+// The server timezone arrives the same way and moves the calendar-aligned ticks (#1430).
+watch([() => format.regionFormat, () => format.timezone], ([regionFormat]) => {
   if (!chart) return
   chart.options.locale = regionFormat
   chart.update()
@@ -383,7 +461,9 @@ watch(() => format.regionFormat, (regionFormat) => {
 watch(() => theme.isDark, () => {
   if (!chart) return
   for (const scale of Object.values(chart.options.scales ?? {})) {
-    (scale as { grid: { color: string } }).grid.color = gridColor()
+    const grid = (scale as { grid: { color: unknown } }).grid
+    // Die Zeitachse färbt ihre Linien per Funktion und liest das Theme beim Zeichnen
+    if (typeof grid.color !== 'function') grid.color = gridColor()
   }
   chart.update()
 })
