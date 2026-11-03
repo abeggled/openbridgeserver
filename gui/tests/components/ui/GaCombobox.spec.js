@@ -41,20 +41,20 @@ describe('GaCombobox', () => {
 // #1296: the combobox shows and accepts addresses in the project's style.
 const SHOWN = { ThreeLevel: '1/0/234', TwoLevel: '1/234', Free: '2282' }
 
-function styledApi(style) {
+function styledApi(style, suggestion = {}) {
   return {
     listGA: vi.fn().mockImplementation(async (params) => ({
       data: {
         total: 1,
         group_address_style: style,
-        items: params?.q ? [{ address: '1/0/234', name: 'Licht Küche', description: '', dpt: 'DPT1.001' }] : [],
+        items: params?.q ? [{ address: '1/0/234', name: 'Licht Küche', description: '', dpt: 'DPT1.001', ...suggestion }] : [],
       },
     })),
   }
 }
 
-async function mountStyled(style, props = {}) {
-  vi.doMock('@/api/client', () => ({ knxprojApi: styledApi(style) }))
+async function mountStyled(style, props = {}, suggestion = {}) {
+  vi.doMock('@/api/client', () => ({ knxprojApi: styledApi(style, suggestion) }))
   const mod = await import('@/components/ui/GaCombobox.vue')
   const wrapper = mount(mod.default, { attachTo: document.body, props })
   await flushPromises()
@@ -90,6 +90,13 @@ describe.each(Object.keys(SHOWN))('GaCombobox in a %s project', (style) => {
     expect(wrapper.find('input').element.value).toBe(SHOWN[style])
     expect(wrapper.emitted('select')[0][0].address).toBe('1/0/234')
     expect(wrapper.emitted('update:modelValue').at(-1)).toEqual(['1/0/234'])
+  })
+
+  it('shows the description of a suggestion only when it has one', async () => {
+    const wrapper = await mountStyled(style, {}, { description: 'Kochinsel' })
+    await typeInto(wrapper, 'Licht')
+    expect(wrapper.find('li').text()).toContain('Kochinsel')
+    expect(wrapper.findAll('li span.truncate')).toHaveLength(2)
   })
 
   it('takes an address typed in the project style as it is', async () => {
