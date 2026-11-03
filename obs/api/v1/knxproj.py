@@ -938,10 +938,7 @@ async def import_knxproj_file(
         [(r.address, r.name, r.description, r.dpt, r.main_group_name, r.mid_group_name, now) for r in records],
     )
     # Gruppenadressstil des zuletzt importierten Projekts (#1296)
-    await db.execute(
-        "INSERT INTO knx_project (id, group_address_style) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET group_address_style=excluded.group_address_style",
-        (group_address_style,),
-    )
+    await _save_group_address_style(db, group_address_style)
     await db.commit()
 
     # Import Gebäude/Gewerke structure — already parsed in parallel above
@@ -1429,9 +1426,22 @@ async def _merge_conflicts(db: Database) -> list[GroupAddressMergeConflict]:
     return [GroupAddressMergeConflict(**dict(row)) for row in rows]
 
 
-async def _group_address_style(db: Database) -> str:
+async def _stored_group_address_style(db: Database) -> str | None:
+    """The style recorded for the project, ``None`` when none was ever recorded."""
     row = await db.fetchone("SELECT group_address_style FROM knx_project WHERE id = 1")
-    return row["group_address_style"] if row else DEFAULT_GROUP_ADDRESS_STYLE
+    return row["group_address_style"] if row else None
+
+
+async def _group_address_style(db: Database) -> str:
+    return await _stored_group_address_style(db) or DEFAULT_GROUP_ADDRESS_STYLE
+
+
+async def _save_group_address_style(db: Database, style: str) -> None:
+    """Record the project's style; the caller commits."""
+    await db.execute(
+        "INSERT INTO knx_project (id, group_address_style) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET group_address_style=excluded.group_address_style",
+        (style,),
+    )
 
 
 def _address_in_project_notation(q: str, style: str) -> str | None:

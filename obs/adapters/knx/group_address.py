@@ -14,6 +14,8 @@ pulling in the adapter.
 
 from __future__ import annotations
 
+from collections import Counter
+from collections.abc import Iterable
 from typing import Any
 
 THREE_LEVEL = "ThreeLevel"
@@ -83,6 +85,19 @@ def format_ga(address: str, style: str) -> str:
     if style == TWO_LEVEL:
         return f"{raw >> 11}/{raw & 0x7FF}"
     return str(raw)
+
+
+def style_from_addresses(addresses: Iterable[str]) -> str | None:
+    """The style that addresses written in a project's notation reveal (#1296).
+
+    Majority of the part counts of the valid addresses (3 → ``ThreeLevel``,
+    2 → ``TwoLevel``, 1 → ``Free``); texts that are no group address do not
+    count. ``None`` without valid addresses or on a tie.
+    """
+    ranked = Counter(len(address.split("/")) for address in addresses if try_normalize_ga(address)).most_common(2)
+    if not ranked or (len(ranked) == 2 and ranked[0][1] == ranked[1][1]):
+        return None
+    return {3: THREE_LEVEL, 2: TWO_LEVEL, 1: FREE}[ranked[0][0]]
 
 
 # Spellings of each part in the internal notation: no leading zeros, within range.

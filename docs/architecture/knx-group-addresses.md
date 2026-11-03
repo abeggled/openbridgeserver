@@ -60,7 +60,9 @@ without any error.
    notations so it finds old and new entries alike.
 5. **Invalid input is rejected or reported, never dropped silently.** `normalize_ga()` raises
    `InvalidGroupAddress` (a `ValueError`); the binding API and the config import answer with 422 or
-   an error entry. The binding API normalizes before the schema validation and answers a missing
+   an error entry. One exception: the config import (a restore) drops an invalid
+   `state_group_address` with an error entry and keeps the binding, as the adapter does at runtime.
+   The binding API normalizes before the schema validation and answers a missing
    or invalid address with a structured `detail` (`code` `knxGroupAddressMissing` or
    `knxGroupAddressInvalid`, `field`, `value`, `message`; `GroupAddressInputError` in
    `obs/api/v1/bindings.py`), which the binding form translates and completes with an example in
@@ -127,11 +129,12 @@ single-row table `knx_project` (not in `app_settings`: every `app_settings` row 
 engine's application config). Migration V55 creates the table; for existing installations the
 part count of the stored valid addresses reveals the style by majority (3 → `ThreeLevel`,
 2 → `TwoLevel`, 1 → `Free`); rows that are no group address do not count, no valid rows or a tie
-fall back to `ThreeLevel`. V55 runs before V56 rewrites the
+fall back to `ThreeLevel` (`style_from_addresses()`). V55 runs before V56 rewrites the
 addresses. The factory reset clears it. The JSON config export carries it as
 `knx_group_address_style`, and the config import restores it, so a restored instance shows the
-project's notation; an export without the field (older versions) leaves the stored style alone, and
-an unknown value is reported as an import error.
+project's notation. An export without the field (older versions) still has its group addresses in
+the project's notation, so the import derives the style from them like V55; without valid addresses
+or on a tie it leaves the stored style alone. An unknown value is reported as an import error.
 
 `GET /api/v1/knxproj/group-addresses` returns the style as `group_address_style` next to the
 internal addresses, and its search additionally matches an address typed exactly in the project's
