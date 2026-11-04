@@ -1,4 +1,17 @@
 # Changes
+## 2026.12.0
+### Breaking changes 🚨
+* none
+
+### New features ✨
+* none
+
+### Fixes 🐞
+* none
+
+### Known Issues 🔔
+* none
+
 ## 2026.11.0
 ### Breaking changes 🚨
 * Adapter/KNX: Saving a KNX binding through the API now rejects a group address that is no valid KNX group address with HTTP 422 instead of storing it (the JSON config import skips such a binding and lists it in `errors`; an invalid `state_group_address` alone is dropped and listed, the binding is kept) — e.g. `32/0/0`, `1/8/0`, `x/x/x`, `1.2.3` or an empty `group_address`; this applies to `state_group_address` as well. Such bindings never received or sent a telegram. Valid addresses are accepted in all three ETS notations (`1/0/234`, `1/234`, `2282`) and stored in the three-level notation. The binding API's 422 for such an address now carries an object instead of a string as `detail` — `code` (`knxGroupAddressMissing` or `knxGroupAddressInvalid`), `field`, `value` and `message` — so API clients that read `detail` as text must use `detail.message`. https://github.com/abeggled/openbridgeserver/issues/1296
