@@ -25,17 +25,21 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Re
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from obs.adapters.knx.group_address import GROUP_ADDRESS_STYLES, normalize_ga, style_from_addresses
 from obs.api.audit import AuditLogWriter, AuditOutcome, audit_payload_sha256, build_audit_context
 from obs.api.auth import get_admin_user
 from obs.api.v1.authz import _canonical_principal_id, _require_grant_targets
 from obs.api.v1.bindings import (
+    GroupAddressInputError,
     _ensure_system_datapoint_binding_allowed,
     _ensure_webhook_slug_free,
     _ensure_webhook_target_allowed,
     _json_config,
+    _normalize_knx_group_addresses,
     _validate_adapter_binding,
     _webhook_config_with_token,
 )
+from obs.api.v1.knxproj import GroupAddressMergeConflict, _merge_conflicts, _save_group_address_style, _stored_group_address_style
 from obs.api.v1.services.hierarchy_lifecycle import collect_hierarchy_tree_node_ids, delete_hierarchy_grants
 from obs.core.formula import validate_formula
 from obs.core.registry import get_registry
@@ -308,6 +312,9 @@ class ConfigExport(BaseModel):
     bindings: list[ExportedBinding]
     adapter_instances: list[ExportedAdapterInstance] = []
     knx_group_addresses: list[ExportedKnxGroupAddress] = []
+    # Project's group address style and V56 merge notes (#1296); absent in older exports
+    knx_group_address_style: str | None = None
+    knx_ga_merge_conflicts: list[GroupAddressMergeConflict] = []
     logic_graphs: list[ExportedLogicGraph] = []
     # Legacy field (v1) — ignoriert beim Import wenn adapter_instances vorhanden
     adapter_configs: list[ExportedAdapterConfig] = []
@@ -432,6 +439,8 @@ async def export_config(
         )
         for r in ga_rows
     ]
+    knx_group_address_style = await _stored_group_address_style(db)
+    knx_ga_merge_conflicts = await _merge_conflicts(db)
 
     graph_rows = await db.fetchall("SELECT * FROM logic_graphs ORDER BY name")
     logic_graphs = [
@@ -627,6 +636,8 @@ async def export_config(
         bindings=bindings,
         adapter_instances=adapter_instances,
         knx_group_addresses=knx_group_addresses,
+        knx_group_address_style=knx_group_address_style,
+        knx_ga_merge_conflicts=knx_ga_merge_conflicts,
         logic_graphs=logic_graphs,
         icons=icons,
         fa_api_key=fa_api_key,
@@ -960,17 +971,25 @@ async def import_config(
                 if instance_row is None:
                     raise ValueError(f"MESSAGE adapter instance not found: {effective_instance_id}")
                 instance_config = _json_config(instance_row["config"])
+            try:
+                config = _normalize_knx_group_addresses(effective_adapter_type, b_data.config)
+            except GroupAddressInputError as exc:
+                if exc.detail["field"] != "state_group_address":
+                    raise
+                # A restore keeps the command binding: the adapter treats a broken feedback address as absent anyway.
+                result.errors.append(f"Binding {b_id}: state_group_address {exc.detail['value']!r} is no group address, dropped")
+                config = _normalize_knx_group_addresses(effective_adapter_type, {**b_data.config, "state_group_address": None})
             _validate_adapter_binding(
                 effective_adapter_type,
                 b_data.direction,
-                b_data.config,
+                config,
                 enabled=b_data.enabled,
                 instance_config=instance_config,
             )
             # An existing binding keeps its DataPoint (the UPDATE below never moves it).
             effective_dp_id = existing_binding["datapoint_id"] if existing_binding is not None else b_data.datapoint_id
             _ensure_system_datapoint_binding_allowed(effective_dp_id, effective_adapter_type, b_data.direction)
-            stored_config = b_data.config
+            stored_config = config
             if effective_adapter_type == "WEBHOOK":
                 # Store the config the way the create route would: slug trimmed and
                 # lower-case (so a later create of `bell` cannot collide with an
@@ -1070,12 +1089,34 @@ async def import_config(
                    VALUES (?,?,?,?)
                    ON CONFLICT(address) DO UPDATE
                    SET name=excluded.name, description=excluded.description, dpt=excluded.dpt""",
-                (ga.address, ga.name, ga.description, ga.dpt),
+                (normalize_ga(ga.address), ga.name, ga.description, ga.dpt),
             )
             result.knx_group_addresses_upserted += 1
         except Exception as exc:
             logger.exception(f"KNX GA {ga.address} failed")
             result.errors.append(f"KNX GA {ga.address}: {exc}")
+
+    # --- KNX project style and merge notes (#1296) ---
+    style = body.knx_group_address_style
+    if style is None:
+        # An export of an older version has no style, but its addresses are still in the
+        # project's notation: derive it like migration V55 (no addresses or a tie: keep it).
+        style = style_from_addresses(ga.address for ga in body.knx_group_addresses)
+    if style is not None:
+        if style in GROUP_ADDRESS_STYLES:
+            await _save_group_address_style(db, style)
+            await db.commit()
+        else:
+            result.errors.append(f"KNX group address style {style!r}: unknown, kept the stored style")
+    for conflict in body.knx_ga_merge_conflicts:
+        try:
+            await db.execute_and_commit(
+                "INSERT OR REPLACE INTO knx_ga_merge_conflicts (address, spelling, field, kept, dropped) VALUES (?, ?, ?, ?, ?)",
+                (normalize_ga(conflict.address), conflict.spelling, conflict.field, conflict.kept, conflict.dropped),
+            )
+        except Exception as exc:
+            logger.exception(f"KNX GA merge note {conflict.address} failed")
+            result.errors.append(f"KNX GA merge note {conflict.address}: {exc}")
 
     # --- Logic Graphs ---
     imported_graph_ids: list[str] = []
@@ -1583,7 +1624,7 @@ async def factory_reset(
         result.errors.append(f"DataPoints and adapters reset failed: {exc}")
 
     try:
-        for table in ("knx_space_device_links", "knx_co_ga_links", "knx_comm_objects", "knx_devices"):
+        for table in ("knx_space_device_links", "knx_co_ga_links", "knx_comm_objects", "knx_devices", "knx_project", "knx_ga_merge_conflicts"):
             await db.execute_and_commit(f"DELETE FROM {table}")
         row = await db.fetchone("SELECT COUNT(*) as n FROM knx_group_addresses")
         result.knx_group_addresses_deleted = row["n"] if row else 0

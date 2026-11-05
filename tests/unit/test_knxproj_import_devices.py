@@ -92,7 +92,7 @@ async def test_import_knxproj_persists_devices_comm_objects_and_links(monkeypatc
     db = Database(":memory:")
     await db.connect()
     try:
-        monkeypatch.setattr(knxproj_api, "parse_knxproj", lambda *_args, **_kwargs: [_ga("1/2/3")])
+        monkeypatch.setattr(knxproj_api, "parse_knxproj_with_style", lambda *_args, **_kwargs: ([_ga("1/2/3")], "ThreeLevel"))
         monkeypatch.setattr(knxproj_api, "parse_knxproj_locations", lambda *_args, **_kwargs: ([], []))
         monkeypatch.setattr(knxproj_api, "parse_knxproj_trades", lambda *_args, **_kwargs: [])
         monkeypatch.setattr(
@@ -176,7 +176,7 @@ async def test_import_knxproj_replaces_device_snapshot_on_reimport(monkeypatch: 
     db = Database(":memory:")
     await db.connect()
     try:
-        monkeypatch.setattr(knxproj_api, "parse_knxproj", lambda *_args, **_kwargs: [_ga("1/2/3")])
+        monkeypatch.setattr(knxproj_api, "parse_knxproj_with_style", lambda *_args, **_kwargs: ([_ga("1/2/3")], "ThreeLevel"))
         monkeypatch.setattr(knxproj_api, "parse_knxproj_locations", lambda *_args, **_kwargs: ([], []))
         monkeypatch.setattr(knxproj_api, "parse_knxproj_trades", lambda *_args, **_kwargs: [])
 
@@ -215,7 +215,7 @@ async def test_device_reimport_preserves_manual_hierarchy_links(monkeypatch: pyt
     db = Database(":memory:")
     await db.connect()
     try:
-        monkeypatch.setattr(knxproj_api, "parse_knxproj", lambda *_args, **_kwargs: [_ga("1/2/3")])
+        monkeypatch.setattr(knxproj_api, "parse_knxproj_with_style", lambda *_args, **_kwargs: ([_ga("1/2/3")], "ThreeLevel"))
         monkeypatch.setattr(knxproj_api, "parse_knxproj_locations", lambda *_args, **_kwargs: ([], []))
         monkeypatch.setattr(knxproj_api, "parse_knxproj_trades", lambda *_args, **_kwargs: [])
         monkeypatch.setattr(
@@ -322,7 +322,7 @@ async def test_failed_device_snapshot_rolls_back_before_adapter_import_commit(mo
         await db.execute("INSERT INTO knx_co_ga_links (comm_object_id, ga_address) VALUES ('co-old', '1/2/3')")
         await db.commit()
 
-        monkeypatch.setattr(knxproj_api, "parse_knxproj", lambda *_args, **_kwargs: [_ga("1/2/3")])
+        monkeypatch.setattr(knxproj_api, "parse_knxproj_with_style", lambda *_args, **_kwargs: ([_ga("1/2/3")], "ThreeLevel"))
         monkeypatch.setattr(knxproj_api, "parse_knxproj_locations", lambda *_args, **_kwargs: ([], []))
         monkeypatch.setattr(knxproj_api, "parse_knxproj_trades", lambda *_args, **_kwargs: [])
         monkeypatch.setattr(

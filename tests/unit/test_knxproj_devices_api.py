@@ -607,9 +607,9 @@ async def test_datapoint_knx_context_sorts_devices_by_pa_numerically_per_part():
         await db.disconnect()
 
 
-# Inserted in random order; a TEXT sort would yield 1/10/1, 1/2/1, 1/2/10, 1/2/100, 1/2/11, 1/2/2, 2/0/1.
-_GA_SORT_INSERT_ORDER = ["1/2/10", "2/0/1", "1/2/2", "1/10/1", "1/2/100", "1/2/1", "1/2/11"]
-_GA_SORT_EXPECTED = ["1/2/1", "1/2/2", "1/2/10", "1/2/11", "1/2/100", "1/10/1", "2/0/1"]
+# Inserted in random order; a TEXT sort would yield 1/2/1, 1/2/10, 1/2/100, 1/2/11, 1/2/2, 10/0/1, 2/0/1.
+_GA_SORT_INSERT_ORDER = ["1/2/10", "2/0/1", "1/2/2", "10/0/1", "1/2/100", "1/2/1", "1/2/11"]
+_GA_SORT_EXPECTED = ["1/2/1", "1/2/2", "1/2/10", "1/2/11", "1/2/100", "2/0/1", "10/0/1"]
 
 
 async def _prepare_ga_sort_db() -> Database:
