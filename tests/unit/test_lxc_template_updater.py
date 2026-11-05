@@ -521,12 +521,15 @@ def test_the_throwaway_repos_never_touch_the_repo_pytest_runs_in(tmp_path, monke
     monkeypatch.setenv("GIT_DIR", str(outer / ".git"))
     for name in ("stamp", "meta"):
         (tmp_path / name).mkdir()
-    _run_stamp(tmp_path / "stamp", "20261019")
-    _run_meta(tmp_path / "meta", "20261020", tag="nightly-20261019")
+    stamp = _run_stamp(tmp_path / "stamp", "20261019")
+    meta = _run_meta(tmp_path / "meta", "20261020", tag="nightly-20261019")
 
-    def read(*args: str) -> str:
-        return subprocess.run(["git", *args], cwd=outer, env=clean, capture_output=True, text=True, check=True).stdout
+    def read(*args: str, repo: Path = outer) -> str:
+        return subprocess.run(["git", *args], cwd=repo, env=clean, capture_output=True, text=True, check=True).stdout
 
+    # The steps must also read the throwaway repo, not the one GIT_DIR names.
+    assert stamp == (0, f"nightly-20261019-{read('rev-parse', '--short', 'HEAD', repo=tmp_path / 'stamp').strip()}")
+    assert (meta[0], meta[1]["version"]) == (0, "nightly-20261020")
     log, tags, bare = read("log", "--format=%s"), read("tag"), read("config", "core.bare")
     assert (log, tags, bare) == ("outer\n", "", "false\n")
 
