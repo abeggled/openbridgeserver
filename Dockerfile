@@ -8,7 +8,7 @@
 # ---------------------------------------------------------------------------
 
 # ── Stage 1: build Vue Admin-GUI + Visu-Frontend + Help site ────────────────
-FROM node:24-slim AS node-builder
+FROM node:26-slim AS node-builder
 ARG VITE_INSTANCE_NAME=
 ARG VITE_INSTANCE_COLOR=amber
 ENV VITE_INSTANCE_NAME=${VITE_INSTANCE_NAME}
