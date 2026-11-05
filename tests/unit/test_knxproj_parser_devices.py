@@ -244,7 +244,7 @@ def test_parse_knxproj_devices_tolerates_missing_optional_fields(fake_xknxprojec
     assert devices[0].communication_object_ids == []
 
     assert len(comm_objects) == 1
-    assert comm_objects[0].dpts == ["DPT9.001", "DPT9.001"]
+    assert comm_objects[0].dpts == ["DPT9.001", "DPT9"]  # main type only: no guessed subtype (#1260)
     assert ga_links == []
 
 
@@ -274,3 +274,23 @@ def test_parse_knxproj_group_address_parsing_still_works(monkeypatch: pytest.Mon
     assert records[0].address == "1/0/1"
     assert records[0].main_group_name == "Licht"
     assert records[0].mid_group_name == "EG"
+
+
+def test_parse_knxproj_devices_normalizes_links_of_object_shaped_comm_objects(monkeypatch: pytest.MonkeyPatch):
+    """#1296: the attribute-style branch normalizes KO→GA links like the dict branch."""
+
+    class _ObjectComm(_FakeXKNXProj):
+        def parse(self):
+            return {
+                "devices": {"dev-a": {"identifier": "dev-a", "individual_address": "1.1.20"}},
+                "communication_objects": {
+                    "co-a": SimpleNamespace(identifier="co-a", device_address="1.1.20", group_address_links=["1/234", " "]),
+                },
+            }
+
+    monkeypatch.setitem(sys.modules, "xknxproject", SimpleNamespace(XKNXProj=_ObjectComm))
+
+    _, comm_objects, ga_links = parser.parse_knxproj_devices(b"dummy")
+
+    assert comm_objects[0].group_address_links == ["1/0/234"]
+    assert [(link.comm_object_id, link.ga_address) for link in ga_links] == [("co-a", "1/0/234")]
