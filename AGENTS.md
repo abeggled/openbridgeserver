@@ -173,6 +173,10 @@ acting:
 - Before adding or changing a Logic function block, read `docs/architecture/logic-nodes.md` — it
   defines the node/registry contract, the allowed dependency direction, and the procedure for
   adding a new block. Automated guardrail tests enforce these rules.
+- Before reading, storing, comparing or displaying a KNX group address (adapter, `.knxproj` import,
+  bindings, KNX endpoints), read `docs/architecture/knx-group-addresses.md` — one internal
+  notation, normalized at every entrance, migrated in place. Database triggers, a data-invariant
+  test and a guardrail test enforce it.
 - Before changing workflows, versioning, images, LXC packaging, runtime scripts, or release notes,
   read the applicable parts of `Release & CI`.
 

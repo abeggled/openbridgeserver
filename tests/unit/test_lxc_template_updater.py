@@ -434,14 +434,19 @@ def _stamp_step_script() -> str:
     return step["run"].replace("${{ steps.meta.outputs.version }}", "manual-run")
 
 
+def _throwaway_repo_env(**extra: str) -> dict[str, str]:
+    """Without GIT_* a hook's GIT_DIR cannot point git at the developer's repo (#1427)."""
+    return {**{k: v for k, v in os.environ.items() if not k.startswith("GIT_")}, **extra}
+
+
 def _run_stamp(tmp_path: Path, nightly_date: str) -> tuple[int, str]:
     (tmp_path / "obs").mkdir()
     (tmp_path / "RELEASENOTES.md").write_text("# Release Notes\n\n## 2026.11.0\n", encoding="utf-8")
     git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid"]
-    subprocess.run([*git, "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run([*git, "add", "."], cwd=tmp_path, check=True)
-    subprocess.run([*git, "commit", "-q", "-m", "x"], cwd=tmp_path, check=True)
-    env = {**os.environ, "NIGHTLY_DATE": nightly_date}
+    env = _throwaway_repo_env(NIGHTLY_DATE=nightly_date)
+    subprocess.run([*git, "init", "-q"], cwd=tmp_path, env=env, check=True)
+    subprocess.run([*git, "add", "."], cwd=tmp_path, env=env, check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "x"], cwd=tmp_path, env=env, check=True)
     result = subprocess.run(["bash", "-e", "-c", _stamp_step_script()], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
     version = tmp_path / "obs" / "version"
     return result.returncode, version.read_text(encoding="utf-8").strip() if version.exists() else ""
@@ -467,18 +472,17 @@ def _run_meta(tmp_path: Path, nightly_date: str, *, ref: str = "refs/heads/main"
     assert step["env"]["NIGHTLY_DATE"] == "${{ inputs.nightly_date }}"
     script = step["run"].replace("${{ env.TEMPLATE_NAME }}", "openbridgeserver").replace("${{ matrix.arch }}", "amd64")
     git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid"]
-    subprocess.run([*git, "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "x"], cwd=tmp_path, check=True)
-    if tag:
-        subprocess.run([*git, "tag", tag], cwd=tmp_path, check=True)
     output = tmp_path / "github_output"
-    env = {
-        **os.environ,
-        "NIGHTLY_DATE": nightly_date,
-        "GITHUB_REF_SAFE": ref,
-        "GITHUB_REF_NAME_SAFE": ref.rsplit("/", 1)[-1],
-        "GITHUB_OUTPUT": str(output),
-    }
+    env = _throwaway_repo_env(
+        NIGHTLY_DATE=nightly_date,
+        GITHUB_REF_SAFE=ref,
+        GITHUB_REF_NAME_SAFE=ref.rsplit("/", 1)[-1],
+        GITHUB_OUTPUT=str(output),
+    )
+    subprocess.run([*git, "init", "-q"], cwd=tmp_path, env=env, check=True)
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "x"], cwd=tmp_path, env=env, check=True)
+    if tag:
+        subprocess.run([*git, "tag", tag], cwd=tmp_path, env=env, check=True)
     result = subprocess.run(["bash", "-e", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
     lines = output.read_text(encoding="utf-8").splitlines() if output.exists() else []
     return result.returncode, dict(line.split("=", 1) for line in lines)
@@ -504,6 +508,27 @@ def test_a_tag_push_and_a_manual_run_keep_their_versions(tmp_path):
     manual.mkdir()
     code, outputs = _run_meta(manual, "", tag="2026.10.0")
     assert (code, outputs["version"]) == (0, "2026.10.0")
+
+
+def test_the_throwaway_repos_never_touch_the_repo_pytest_runs_in(tmp_path, monkeypatch):
+    """A pre-push hook in a linked worktree exports GIT_DIR (#1427)."""
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    git = ["git", "-c", "user.name=o", "-c", "user.email=o@example.invalid"]
+    clean = _throwaway_repo_env()
+    subprocess.run([*git, "init", "-q"], cwd=outer, env=clean, check=True)
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "outer"], cwd=outer, env=clean, check=True)
+    monkeypatch.setenv("GIT_DIR", str(outer / ".git"))
+    for name in ("stamp", "meta"):
+        (tmp_path / name).mkdir()
+    _run_stamp(tmp_path / "stamp", "20261019")
+    _run_meta(tmp_path / "meta", "20261020", tag="nightly-20261019")
+
+    def read(*args: str) -> str:
+        return subprocess.run(["git", *args], cwd=outer, env=clean, capture_output=True, text=True, check=True).stdout
+
+    log, tags, bare = read("log", "--format=%s"), read("tag"), read("config", "core.bare")
+    assert (log, tags, bare) == ("outer\n", "", "false\n")
 
 
 def test_the_template_root_marker_carries_the_metadata_version():

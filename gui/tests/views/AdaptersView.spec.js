@@ -208,6 +208,41 @@ describe('AdaptersView — status detail panel', () => {
     })
     expect(wrapper.find('[data-testid="adapter-status-detail-1"]').exists()).toBe(false)
   })
+
+  // #1296: KNX bindings with invalid group addresses — an additional warning on the card
+  it('shows the KNX invalid-group-address warning translated, with its params', async () => {
+    const { wrapper } = await mountAdapters({
+      instances: [makeInstance({
+        severity: 'warning',
+        connected: true,
+        status_detail: 'Invalid KNX group addresses in 2 binding(s) (b-1: state_group_address=\'1/2/x\'; b-2: group_address=\'32/0/0\')',
+        status_detail_code: 'knxInvalidGroupAddresses',
+        status_detail_params: { count: 2, examples: "b-1: state_group_address='1/2/x'; b-2: group_address='32/0/0'" },
+      })],
+    })
+    const panel = wrapper.find('[data-testid="adapter-status-detail-1"]')
+    expect(panel.exists()).toBe(true)
+    expect(panel.classes()).toContain('bg-amber-500/10')
+    expect(panel.text()).toContain('Ungültige KNX-Gruppenadressen in 2 Verknüpfung(en)')
+    expect(panel.text()).toContain("b-2: group_address='32/0/0'")
+  })
+
+  it('shows a connection error as error even when bindings have invalid group addresses', async () => {
+    // The backend combines both: an error is never replaced by the GA warning, so the card gets the error.
+    const { wrapper } = await mountAdapters({
+      instances: [makeInstance({
+        severity: 'error',
+        connected: false,
+        status_detail: 'Tunnel connection could not be established',
+        status_detail_code: null,
+        status_detail_params: {},
+      })],
+    })
+    const panel = wrapper.find('[data-testid="adapter-status-detail-1"]')
+    expect(panel.classes()).toContain('bg-red-500/10')
+    expect(panel.text()).toContain('Tunnel connection could not be established')
+    expect(panel.text()).not.toContain('Gruppenadressen')
+  })
 })
 
 // ─── New instance form ────────────────────────────────────────────────────────
