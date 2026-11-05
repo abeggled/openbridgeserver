@@ -190,7 +190,7 @@ async def _bulk_import_datapoints(
     Gruppenadressen, die ein schreibgeschützter System-Datenpunkt (#1370)
     bereits bedient und für die deshalb kein DataPoint angelegt wird.
     """
-    from obs.adapters.knx.dpt_registry import DPTRegistry
+    from obs.adapters.knx.dpt_registry import DPTRegistry, keeps_stored_subtype
     from obs.core.registry import ValueState, _row_to_datapoint, get_registry
 
     # --- Adapter-Instanz ermitteln ---
@@ -208,7 +208,9 @@ async def _bulk_import_datapoints(
 
     # --- Bestehende Bindings laden (group_address → {binding_id, dp_id}) ---
     existing_rows = await db.fetchall(
-        "SELECT id, datapoint_id, config FROM adapter_bindings WHERE adapter_instance_id=?",
+        """SELECT ab.id, ab.datapoint_id, ab.config, dp.data_type, dp.unit
+           FROM adapter_bindings ab LEFT JOIN datapoints dp ON dp.id = ab.datapoint_id
+           WHERE ab.adapter_instance_id=?""",
         (adapter_instance_id,),
     )
     existing_map: dict[str, dict[str, str]] = {}
@@ -226,6 +228,9 @@ async def _bulk_import_datapoints(
                 existing_map[ga] = {
                     "binding_id": row["id"],
                     "dp_id": row["datapoint_id"],
+                    "dpt_id": cfg.get("dpt_id"),
+                    "data_type": row["data_type"],
+                    "unit": row["unit"],
                 }
         except (json.JSONDecodeError, KeyError):
             pass
@@ -243,9 +248,15 @@ async def _bulk_import_datapoints(
     base_time = datetime.fromisoformat(now)
 
     for row_idx, record in enumerate(records):
+        existing = existing_map.get(record.address)
+        keep = existing is not None and keeps_stored_subtype(record.dpt, existing["dpt_id"])
+        dpt = existing["dpt_id"] if keep else record.dpt
         # DPT → data_type + unit aus Registry
-        dpt_def = DPTRegistry.get(record.dpt) if record.dpt else None
-        if dpt_def and dpt_def.dpt_id != "UNKNOWN":
+        dpt_def = DPTRegistry.get(dpt) if dpt else None
+        if keep:
+            data_type = existing["data_type"]
+            unit = existing["unit"]
+        elif dpt_def and dpt_def.dpt_id != "UNKNOWN":
             data_type = dpt_def.data_type
             unit = dpt_def.unit or None
         else:
@@ -253,15 +264,14 @@ async def _bulk_import_datapoints(
             unit = None
 
         config_dict = {"group_address": record.address}
-        if record.dpt:
-            config_dict["dpt_id"] = record.dpt
+        if dpt:
+            config_dict["dpt_id"] = dpt
         config_json = json.dumps(config_dict)
 
         # Jede Zeile bekommt einen eindeutigen Timestamp → CSV-Reihenfolge bleibt erhalten
         row_ts = (base_time + timedelta(microseconds=row_idx)).isoformat()
 
-        if record.address in existing_map:
-            existing = existing_map[record.address]
+        if existing is not None:
             dp_updates.append((record.name, data_type, unit, row_ts, existing["dp_id"]))
             binding_updates.append((config_json, direction, row_ts, existing["binding_id"]))
         elif record.address in system_gas:

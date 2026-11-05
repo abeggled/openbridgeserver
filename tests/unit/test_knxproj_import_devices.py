@@ -362,7 +362,9 @@ async def test_failed_device_snapshot_rolls_back_before_adapter_import_commit(mo
 async def test_bulk_import_datapoints_updates_existing_and_adds_new_records(monkeypatch: pytest.MonkeyPatch):
     db = MagicMock()
     db.fetchone = AsyncMock(return_value={"id": "inst-1", "adapter_type": "KNX"})
-    db.fetchall = AsyncMock(return_value=[{"id": "binding-1", "datapoint_id": "dp-1", "config": '{"group_address":"1/1/1"}'}])
+    db.fetchall = AsyncMock(
+        return_value=[{"id": "binding-1", "datapoint_id": "dp-1", "config": '{"group_address":"1/1/1"}', "data_type": "BOOLEAN", "unit": None}],
+    )
     db.executemany = AsyncMock()
     db.commit = AsyncMock()
 

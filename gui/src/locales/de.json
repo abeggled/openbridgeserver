@@ -390,6 +390,7 @@
       "groupAddressLabel": "Gruppenadresse *",
       "groupAddressPlaceholder": "z.B. {example} oder Name suchen …",
       "selectDpt": "DPT wählen …",
+      "dptMainType": "DPT {main} (ohne Subtyp)",
       "noValueMapping": "— keine Wertzuordnung —",
       "valueMapNumInvert": "0 ↔ 1 (numerisch invertieren)",
       "valueMapBoolOnOff": "true/false → on/off",
