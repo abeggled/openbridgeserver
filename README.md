@@ -297,7 +297,7 @@ Write commands create a SQLite backup next to the database before changing data 
 
 ### URL target allowlist for internal services
 
-Backend fetches from logic API-client nodes, iCalendar nodes, Pushover `image_url` attachments, the camera proxy, and the weather API block private/local network targets by default. Admins can allow deliberate internal targets under **Settings → Security → URL Target Allowlist** or by editing the YAML file configured through `security.url_target_allowlist_path`.
+Backend fetches from logic API-client nodes, iCalendar nodes, Pushover `image_url` attachments (internal HTTP cameras need an allowlist entry; public image sources must use HTTPS), the camera proxy, and the weather API block private/local network targets by default. Admins can allow deliberate internal targets under **Settings → Security → URL Target Allowlist** or by editing the YAML file configured through `security.url_target_allowlist_path`.
 
 By default, the YAML file is written to `OBS_SECRET_FILE_DIR/url-target-allowlist.yaml` when `OBS_SECRET_FILE_DIR` is set. Otherwise OBS writes it to `secrets/url-target-allowlist.yaml` next to the configured database file. For private targets, use an IP address or CIDR entry, for example `192.168.1.23/32` for a single LAN camera or `10.38.113.0/24` for an internal subnet.
 
@@ -731,6 +731,7 @@ Select one or more blocks (Shift-drag a box, or Ctrl/Cmd-click to add individual
 | **OR** | A, B | Out | True when **at least one** input is true. |
 | **NOT** | In | Out | Inverts the input. |
 | **XOR** | A, B | Out | True when **exactly one** input is true. |
+| **Binary statistics** | IN 1 … IN 30 | Count TRUE, Count FALSE, Majority TRUE, Total, TRUE %, Tie, Threshold reached | Counts TRUE/FALSE over 2–30 binary inputs (per-input negation applied before counting). Unwired inputs are ignored by default or counted as FALSE; `Threshold` enables a "k of n" output. Stateless. |
 | **Memory** | In, Reset | Out | Outputs the stored value from the previous graph run and stores the current input for the next run. Use this block to build controlled feedback loops. |
 | **Compare** | A, B | Result | Compares two values. Options: `>` `<` `=` `>=` `<=` `≠` |
 | **Edge detection** | In, Reset | Out, Trigger rising, Trigger falling | Evaluates the input as a boolean and reacts to the transition: a rising edge (false → true) outputs the configured rising value and sets the Rising trigger, a falling edge (true → false) the falling value and the Falling trigger. Without an edge nothing is sent on Out, so a downstream Write Object does not write on every run. Each direction is configured on its own — send a value, only pulse the trigger, or stay silent — and Reset drops the remembered level so the next value starts fresh. |
@@ -771,11 +772,14 @@ Decision and Mapping share the same condition operators: equals, not equal, grea
 
 | Block | Inputs | Outputs | Description |
 |---|---|---|---|
-| **Delay** | Trigger | Trigger | Delays a signal by N seconds. |
-| **Pulse** | Trigger | Out | Outputs "True" for N seconds, then "False". |
+| **Delay** | Trigger | Trigger | Delays a trigger by N seconds: when the delay has elapsed the sheet runs again and the output fires once. The output is a pulse, so a connected **Write Object** writes only then. Starts on a rising edge, on every single pulse (e.g. from a Change Filter or the Trigger block) and on every repeated true telegram of a directly connected Read Object; a new trigger while it is pending starts it over. The delay counts from the run that saw the trigger, so a slow block elsewhere on the sheet (e.g. API Client) does not lengthen it. A pending delay survives a save and a restart (and fires at once if its time has passed); disabling or deleting the sheet discards it. Its output may lead back to its own input without a Memory; a delay of at least one second begins a new logic cascade when it fires, so a blinker or keep-alive through data points keeps running. |
+| **Pulse** | Trigger | Out | Outputs "True" for N seconds, then "False"; the sheet runs again on both changes. Connect Out directly to the Value of a **Write Object**. Triggers like Delay; a new trigger during the pulse extends it (retriggerable, e.g. staircase lighting). The duration counts from the run that writes the start of the pulse: that run publishes it together with its other writes, after any slow block in it (e.g. API Client), and the data point still stays true for the full duration. A running pulse survives a save and a restart; deleting the sheet or the block ends it. |
+| **Tick** | — | Trigger | Fires the graph automatically every N seconds (interval in seconds, at least 1 s) — for sub-minute cadences a cron schedule is too coarse for. |
 | **Trigger** | — | Trigger | Fires the graph on a schedule (cron format). Configurable via templates, a visual editor (min/hour/day/month/weekday), or direct expression entry. |
 | **Operating hours** | Active, Reset | Hours | Counts operating hours while "Active" is true. Saved counter survives restarts. |
 | **Sensor Watchdog** | IN 1…N (1–10, configurable) | OUT 1…N, Fault text, Fault trigger | Monitors up to 10 inputs for missing new values. Each input has its own timeout and fault value; once an input has gone longer than its timeout without a new value, its output switches to the fault value and a one-shot Fault text/Fault trigger fires. Runs its own internal scheduler, so a timeout is detected autonomously even if nothing else happens elsewhere in the graph. |
+
+Delay and Pulse remember the level of their trigger, also across a save and a restart: a trigger that is still true is no new rising edge. When a save changes what feeds the trigger, its level is evaluated again: if it is false now, the next rise counts; if it is still true, the block does not fire again (a changed threshold behind an input that is still met restarts nothing), and a newly connected input without a value starts it as if new. Renaming a block changes nothing. After a restart, a level whose input has fallen while the server was down is taken back, so the next rise counts. Overlapping runs of a sheet never let an older run overwrite the level a newer one has seen.
 
 #### Script
 
@@ -815,6 +819,12 @@ Decision and Mapping share the same condition operators: equals, not equal, grea
 | **API request** | Trigger, Body | Response, Status code, Success | Sends an HTTP request to an external address. Method selectable (GET/POST/PUT/PATCH/DELETE). Response format: JSON or text. SSL verification configurable. |
 | **JSON extractor** | Data (JSON text) | Value | Parses a JSON string and extracts a value using a dot-notation path, e.g. `sensors.temperature`. |
 | **XML extractor** | Data (XML text) | Value | Parses an XML string and extracts a value using an XPath expression, e.g. `./sensor/temperature`. |
+
+#### Energy Management
+
+| Block | Inputs | Outputs | Description |
+|---|---|---|---|
+| **Surplus control** | Grid power (or import/export, or feed-in only), Enable, Feed-in reserve, Plant OK, per consumer: Measured power / Maximum power / Reset | Per consumer: setpoint (0–100 %), on/off or trigger pulse plus status; diagnostics: Grid power, Surplus, Budget, Allocated, Remaining, Status, Warning | HEMS Lite: distributes the surplus measured at the grid connection point across any number of consumers by priority (list order, drag and drop). Consumers are continuous (0–100 %), on/off with hysteresis, or one-shot triggers, with minimum run/off times and switch-on/off delays. An invalid or stale meter value puts all outputs into the safe state (0 %, off, no trigger). Runs its own control interval (default 30 s). |
 
 ---
 
@@ -1055,6 +1065,7 @@ Response from the upload endpoint:
 | `dpt_id` | DPT identifier — table below |
 | `state_group_address` | Optional feedback address for DEST bindings |
 | `respond_to_read` | `true`: **open bridge server** responds to KNX read requests (GroupValueRead) with the current value. Default: `false` |
+| `read_interval_s` | SOURCE/BOTH only: sends a `GroupValueRead` to `state_group_address` (otherwise `group_address`) every *n* seconds, so devices that do not send their state on their own stay current. Empty or `0` = off (default), otherwise `10` to `86400` (one day). Adds KNX bus load |
 
 **Supported DPTs:**
 
@@ -1556,6 +1567,8 @@ Sends notifications when a linked data point changes and the binding condition i
 | `message` | Message template with placeholders |
 | `title` | Optional message title |
 | `providers` | List of provider and target name to send to |
+| `priority` | Optional Pushover priority (`-2` … `2`) |
+| `pushover` | Optional Pushover options for Pushover targets only: `image_url`, `url`, `url_title`, `sound`, `format` (`text`/`html`/`monospace`), `ttl`, `timestamp`, `retry`/`expire` (required for priority `2`). `image_url`, `url` and `url_title` support the placeholders below. |
 | `send_on_change` | Sends only when entering the fulfilled state; for `any`, only when the value changes |
 | `cooldown_seconds` | Minimum delay between two sent messages |
 | `enabled` | Enables/disables the binding |

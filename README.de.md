@@ -294,7 +294,7 @@ Schreibende Befehle erzeugen standardmäßig vor der Änderung ein SQLite-Backup
 
 ### URL-Ziel-Allowlist für interne Dienste
 
-Backend-Abrufe aus Logik-API-Client-Knoten, iCalendar-Knoten, Pushover-`image_url`-Anhängen, dem Kamera-Proxy und der Wetter-API blockieren private/lokale Netzwerkziele standardmäßig. Admins können bewusst benötigte interne Ziele unter **Einstellungen → Sicherheit → URL-Ziel-Allowlist** freigeben oder die YAML-Datei bearbeiten, die über `security.url_target_allowlist_path` konfiguriert ist.
+Backend-Abrufe aus Logik-API-Client-Knoten, iCalendar-Knoten, Pushover-`image_url`-Anhängen (interne HTTP-Kameras brauchen einen Allowlist-Eintrag; öffentliche Bildquellen müssen HTTPS verwenden), dem Kamera-Proxy und der Wetter-API blockieren private/lokale Netzwerkziele standardmäßig. Admins können bewusst benötigte interne Ziele unter **Einstellungen → Sicherheit → URL-Ziel-Allowlist** freigeben oder die YAML-Datei bearbeiten, die über `security.url_target_allowlist_path` konfiguriert ist.
 
 Standardmäßig wird die YAML-Datei nach `OBS_SECRET_FILE_DIR/url-target-allowlist.yaml` geschrieben, wenn `OBS_SECRET_FILE_DIR` gesetzt ist. Sonst schreibt OBS nach `secrets/url-target-allowlist.yaml` neben der konfigurierten Datenbankdatei. Für private Ziele sollte eine IP-Adresse oder ein CIDR-Eintrag verwendet werden, zum Beispiel `192.168.1.23/32` für eine einzelne LAN-Kamera oder `10.38.113.0/24` für ein internes Netz.
 
@@ -728,6 +728,7 @@ Ein oder mehrere Blöcke lassen sich markieren (Shift + Rahmen aufziehen, oder S
 | **ODER** | A, B | Aus | Wahr wenn **mindestens ein** Eingang wahr ist. |
 | **NICHT** | Ein | Aus | Kehrt den Eingang um. |
 | **EXKLUSIV-ODER** | A, B | Aus | Wahr wenn **genau ein** Eingang wahr ist. |
+| **Binärstatistik** | Ein 1 … Ein 30 | Anzahl TRUE, Anzahl FALSE, Mehrheit TRUE, Gesamt, Anteil TRUE %, Gleichstand, Schwelle erreicht | Zählt TRUE/FALSE über 2–30 Binäreingänge (Negation je Eingang vor der Zählung). Unverbundene Eingänge werden standardmässig ignoriert oder als FALSE gezählt; mit „Schwelle“ entsteht ein „k von n“-Ausgang. Ohne Zustand. |
 | **Speicher** | Ein, Zurücksetzen | Aus | Gibt den gespeicherten Wert aus dem vorherigen Graph-Lauf aus und speichert den aktuellen Eingang für den nächsten Lauf. Für kontrollierte Rückkopplungen verwenden. |
 | **Vergleich** | A, B | Ergebnis | Vergleicht zwei Werte. Auswahl: `>` `<` `=` `>=` `<=` `≠` |
 | **Flankenerkennung** | Ein, Zurücksetzen | Aus, Trigger-Steigend, Trigger-Fallend | Wertet den Eingang boolesch aus und reagiert auf den Wechsel: Bei steigender Flanke (falsch → wahr) wird der konfigurierte Wert für steigende Flanken ausgegeben und der Trigger „Steigend" gesetzt, bei fallender Flanke (wahr → falsch) entsprechend der Wert für fallende Flanken und der Trigger „Fallend". Ohne Flanke wird nichts auf „Aus" gesendet, ein nachgelagertes Objekt schreiben schreibt also nicht bei jedem Lauf. Jede Flankenrichtung wird für sich eingestellt — Wert senden, nur den Trigger auslösen oder ganz stumm bleiben — und „Zurücksetzen" verwirft den gemerkten Vorzustand, sodass der nächste Wert wieder flankenlos startet. |
@@ -768,11 +769,14 @@ Entscheidung und Zuordnung teilen dieselben Bedingungsoperatoren: gleich, unglei
 
 | Block | Eingänge | Ausgänge | Beschreibung |
 |---|---|---|---|
-| **Verzögerung** | Trigger | Trigger | Verzögert ein Signal um N Sekunden. |
-| **Impuls** | Trigger | Aus | Gibt für N Sekunden „Wahr" aus, dann „Falsch". |
+| **Verzögerung** | Trigger | Trigger | Verzögert einen Trigger um N Sekunden: Ist die Zeit abgelaufen, läuft das Logikblatt erneut und der Ausgang löst einmal aus. Der Ausgang ist ein Impuls, ein angeschlossenes **Objekt schreiben** schreibt also nur dann. Startet bei einer steigenden Flanke, bei jedem einzelnen Impuls (z. B. vom Änderungsfilter oder vom Block Trigger) und bei jedem wiederholten Wahr-Telegramm eines direkt angeschlossenen **Objekt lesen**; ein neuer Trigger während der Wartezeit startet sie neu. Die Zeit zählt ab dem Lauf, der den Trigger gesehen hat, ein langsamer Block an anderer Stelle des Logikblatts (z. B. API Client) verlängert sie also nicht. Eine laufende Verzögerung übersteht Speichern und Neustart (und löst sofort aus, wenn ihre Zeit schon vorbei ist); Deaktivieren oder Löschen des Logikblatts verwirft sie. Der Ausgang darf ohne Speicher auf den eigenen Eingang zurückführen; ab einer Sekunde beginnt beim Auslösen eine neue Logik-Kaskade, ein Blinker oder Keep-alive über Datenpunkte läuft also weiter. |
+| **Impuls** | Trigger | Aus | Gibt für N Sekunden „Wahr" aus, dann „Falsch"; das Logikblatt läuft bei beiden Wechseln erneut. Den Ausgang direkt auf den Wert eines **Objekt schreiben** legen. Auslösung wie bei der Verzögerung; ein neuer Trigger während des Impulses verlängert ihn (nachtriggerbar, z. B. Treppenhauslicht). Die Dauer zählt ab dem Lauf, der den Beginn des Impulses schreibt: Dieser Lauf veröffentlicht ihn zusammen mit seinen übrigen Schreibvorgängen, also nach einem langsamen Block darin (z. B. API Client), und der Datenpunkt bleibt trotzdem die volle Dauer wahr. Ein laufender Impuls übersteht Speichern und Neustart; Löschen des Logikblatts oder des Blocks beendet ihn. |
+| **Takt** | — | Trigger | Löst den Graphen automatisch alle N Sekunden aus (Intervall in Sekunden, mindestens 1 s) — für Abläufe im Sekundenbereich, für die ein Cron-Zeitplan zu grob ist. |
 | **Trigger** | — | Trigger | Löst den Graphen nach einem Zeitplan aus (Cron-Format). Konfigurierbar über Vorlagen, einen visuellen Editor (Min/Std/Tag/Mon/Wochentag) oder direkte Eingabe des Ausdrucks. |
 | **Betriebsstunden** | Aktiv, Zurücksetzen | Stunden | Zählt Betriebsstunden solange „Aktiv" wahr ist. Gespeicherter Zählerstand überlebt Neustarts. |
 | **Sensor Watchdog** | IN 1…N (1–10, konfigurierbar) | OUT 1…N, Fehlertext, Fehler-Trigger | Überwacht bis zu 10 Eingänge auf das Ausbleiben neuer Werte. Jeder Eingang hat einen eigenen Timeout und Fault-Value; bleibt ein neuer Wert länger als der Timeout aus, wechselt der Ausgang auf den Fault-Value und ein einmaliger Fehlertext/Fehler-Trigger wird ausgelöst. Arbeitet über einen eigenen internen Scheduler und erkennt den Timeout autonom, auch wenn sonst nichts im Graphen passiert. |
+
+Verzögerung und Impuls merken sich den Pegel ihres Triggers, auch über Speichern und Neustart hinweg: Ein Trigger, der noch wahr ist, ist keine neue steigende Flanke. Ändert ein Speichern, was den Trigger speist, wird sein Pegel neu ausgewertet: Ist er jetzt falsch, zählt der nächste Anstieg; ist er weiterhin wahr, löst der Block nicht erneut aus (ein geänderter Schwellwert bei weiterhin erfülltem Vergleich startet nichts neu), und ein neu verbundener Eingang ohne Wert beginnt wie neu. Das Umbenennen eines Blocks ändert nichts. Nach einem Neustart wird ein Pegel zurückgenommen, dessen Eingang inzwischen gefallen ist, damit der nächste Anstieg zählt. Überlappende Läufe eines Logikblatts überschreiben nie den Pegel, den ein neuerer Lauf schon gesehen hat.
 
 #### Skript
 
@@ -812,6 +816,12 @@ Entscheidung und Zuordnung teilen dieselben Bedingungsoperatoren: gleich, unglei
 | **API-Abfrage** | Trigger, Inhalt | Antwort, Statuscode, Erfolg | Sendet eine HTTP-Anfrage an eine externe Adresse. Methode wählbar (GET/POST/PUT/PATCH/DELETE). Antwortformat: JSON oder Text. SSL-Prüfung konfigurierbar. |
 | **JSON-Extraktor** | Daten (JSON-Text) | Wert | Parst einen JSON-String und extrahiert einen Wert anhand eines Pfads mit Punktnotation, z. B. `sensors.temperature`. |
 | **XML-Extraktor** | Daten (XML-Text) | Wert | Parst einen XML-String und extrahiert einen Wert per XPath-Ausdruck, z. B. `./sensor/temperature`. |
+
+#### Energiemanagement
+
+| Block | Eingänge | Ausgänge | Beschreibung |
+|---|---|---|---|
+| **Überschussregelung** | Netzleistung (oder Bezug/Einspeisung bzw. nur Einspeisung), Freigabe, Einspeisereserve, Anlage OK, je Verbraucher: Gemessene Leistung / Maximalleistung / Reset | Je Verbraucher: Sollwert (0–100 %), Ein/Aus oder Triggerimpuls plus Status; Diagnose: Netzleistung, Überschuss, Budget, Verteilt, Verbleibend, Status, Warnung | HEMS Lite: verteilt den am Netzanschlusspunkt gemessenen Überschuss nach Priorität (Listenreihenfolge, Drag-and-drop) auf beliebig viele Verbraucher. Verbraucher sind stufenlos (0–100 %), Ein/Aus mit Hysterese oder einmalige Trigger, mit Mindestlauf-/Auszeiten und Ein-/Ausschaltverzögerung. Ein ungültiger oder veralteter Zählerwert setzt alle Ausgänge in den sicheren Zustand (0 %, aus, kein Trigger). Eigenes Regelintervall (Standard 30 s). |
 
 ---
 
@@ -1052,6 +1062,7 @@ Antwort des Upload-Endpunkts:
 | `dpt_id` | DPT-Kennung — Tabelle unten |
 | `state_group_address` | Optionale Rückmelde-Adresse für DEST-Verknüpfungen |
 | `respond_to_read` | `true`: **open bridge server** beantwortet KNX-Leseanfragen (GroupValueRead) mit dem aktuellen Wert. Standard: `false` |
+| `read_interval_s` | Nur SOURCE/BOTH: sendet alle *n* Sekunden einen `GroupValueRead` an `state_group_address` (sonst `group_address`), damit Geräte, die ihren Zustand nicht selbst senden, aktuell bleiben. Leer oder `0` = aus (Standard), sonst `10` bis `86400` (ein Tag). Erzeugt zusätzliche KNX-Buslast |
 
 **Unterstützte DPTs:**
 
@@ -1555,6 +1566,8 @@ Sendet Benachrichtigungen, wenn sich ein verknüpfter Datenpunkt ändert und die
 | `message` | Nachrichtenvorlage mit Platzhaltern |
 | `title` | Optionaler Nachrichtentitel |
 | `providers` | Liste aus Provider und Zielname, an die gesendet wird |
+| `priority` | Optionale Pushover-Priorität (`-2` … `2`) |
+| `pushover` | Optionale Pushover-Optionen, nur für Pushover-Ziele: `image_url`, `url`, `url_title`, `sound`, `format` (`text`/`html`/`monospace`), `ttl`, `timestamp`, `retry`/`expire` (Pflicht bei Priorität `2`). `image_url`, `url` und `url_title` unterstützen die Platzhalter unten. |
 | `send_on_change` | Sendet nur beim Wechsel in den erfüllten Zustand; bei `any` nur bei geändertem Wert |
 | `cooldown_seconds` | Mindestabstand zwischen zwei gesendeten Nachrichten |
 | `enabled` | Aktiviert/deaktiviert die Verknüpfung |

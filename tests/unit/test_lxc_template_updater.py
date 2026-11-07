@@ -2,6 +2,7 @@ import io
 import json
 import os
 import re
+import subprocess
 import sys
 import textwrap
 from pathlib import Path
@@ -370,3 +371,174 @@ def test_version_list_puts_release_without_published_at_last():
     lines = _run_version_list_script(releases, show_nightlies=False)
 
     assert lines == ["stable 2026.10.0", "stable 2026.9.1"]
+
+
+def test_updater_follows_redirects_of_transferred_repos():
+    """A transferred repo answers the API with 301 + JSON body; -f alone lets it through (#1322)."""
+    obs_update = _obs_update_text()
+
+    assert 'ALL_RELEASES=$(curl -sfL "https://api.github.com/repos/${REPO}/releases")' in obs_update
+    assert 'MANIFEST=$(curl -sfL "https://raw.githubusercontent.com/' in obs_update
+    assert not re.search(r"curl -sf ", obs_update)
+
+
+def _run_version_recovery(tmp_path: Path, version: str | None, stamp: str | None) -> tuple[str, str | None]:
+    """Run the startup block of obs-update (up to the migration recovery) against a fake install dir."""
+    obs_update = _obs_update_text()
+    m = re.search(r"^CURRENT=\$\(cat .*?^fi\n", obs_update, re.DOTALL | re.MULTILINE)
+    assert m, "Could not find CURRENT / migration recovery block"
+    install_dir = tmp_path / "opt-obs"
+    (install_dir / "obs").mkdir(parents=True)
+    if version is not None:
+        (install_dir / "version").write_text(version + "\n")
+    if stamp is not None:
+        (install_dir / "obs" / "version").write_text(stamp + "\n")
+    script = f'set -euo pipefail\nINSTALL_DIR="{install_dir}"\n{m.group(0)}printf "%s" "$CURRENT"\n'
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True)
+    version_file = install_dir / "version"
+    return result.stdout, version_file.read_text().strip() if version_file.exists() else None
+
+
+def test_version_recovery_restores_real_version_after_migration_patch(tmp_path):
+    current, written = _run_version_recovery(tmp_path, "2026.99.0", "2026.10.0")
+
+    assert current == "2026.10.0"
+    assert written == "2026.10.0"
+
+
+def test_version_recovery_leaves_regular_version_untouched(tmp_path):
+    current, written = _run_version_recovery(tmp_path, "2026.11.0", "2026.10.0")
+
+    assert current == "2026.11.0"
+    assert written == "2026.11.0"
+
+
+def test_version_recovery_keeps_patch_tag_without_version_stamp(tmp_path):
+    current, written = _run_version_recovery(tmp_path, "2026.99.0", None)
+
+    assert current == "2026.99.0"
+    assert written == "2026.99.0"
+
+
+# ---------------------------------------------------------------------------
+# Version stamp of nightly LXC builds (#1370)
+# ---------------------------------------------------------------------------
+
+
+def _stamp_step_script() -> str:
+    import yaml
+
+    steps = yaml.safe_load(_workflow_text())["jobs"]["build"]["steps"]
+    (step,) = [s for s in steps if s.get("name") == "Stamp version file"]
+    assert step["env"] == {"NIGHTLY_DATE": "${{ inputs.nightly_date }}"}
+    return step["run"].replace("${{ steps.meta.outputs.version }}", "manual-run")
+
+
+def _throwaway_repo_env(**extra: str) -> dict[str, str]:
+    """Without GIT_* a hook's GIT_DIR cannot point git at the developer's repo (#1427)."""
+    return {**{k: v for k, v in os.environ.items() if not k.startswith("GIT_")}, **extra}
+
+
+def _run_stamp(tmp_path: Path, nightly_date: str) -> tuple[int, str]:
+    (tmp_path / "obs").mkdir()
+    (tmp_path / "RELEASENOTES.md").write_text("# Release Notes\n\n## 2026.11.0\n", encoding="utf-8")
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+    env = _throwaway_repo_env(NIGHTLY_DATE=nightly_date)
+    subprocess.run([*git, "init", "-q"], cwd=tmp_path, env=env, check=True)
+    subprocess.run([*git, "add", "."], cwd=tmp_path, env=env, check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "x"], cwd=tmp_path, env=env, check=True)
+    result = subprocess.run(["bash", "-e", "-c", _stamp_step_script()], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
+    version = tmp_path / "obs" / "version"
+    return result.returncode, version.read_text(encoding="utf-8").strip() if version.exists() else ""
+
+
+def test_nightly_build_is_stamped_with_the_date_of_its_release_tag(tmp_path):
+    code, version = _run_stamp(tmp_path, "20261019")
+    assert code == 0
+    assert re.fullmatch(r"nightly-20261019-[0-9a-f]{7}", version)
+
+
+def test_a_manual_build_without_nightly_date_is_no_nightly(tmp_path):
+    code, version = _run_stamp(tmp_path, "")
+    assert (code, version) == (0, "2026.11.0")
+
+
+def _run_meta(tmp_path: Path, nightly_date: str, *, ref: str = "refs/heads/main", tag: str | None = None) -> tuple[int, dict[str, str]]:
+    """Run the "Set template metadata" step in a throwaway repo; returns its exit code and outputs."""
+    import yaml
+
+    steps = yaml.safe_load(_workflow_text())["jobs"]["build"]["steps"]
+    (step,) = [s for s in steps if s.get("name") == "Set template metadata"]
+    assert step["env"]["NIGHTLY_DATE"] == "${{ inputs.nightly_date }}"
+    script = step["run"].replace("${{ env.TEMPLATE_NAME }}", "openbridgeserver").replace("${{ matrix.arch }}", "amd64")
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+    output = tmp_path / "github_output"
+    env = _throwaway_repo_env(
+        NIGHTLY_DATE=nightly_date,
+        GITHUB_REF_SAFE=ref,
+        GITHUB_REF_NAME_SAFE=ref.rsplit("/", 1)[-1],
+        GITHUB_OUTPUT=str(output),
+    )
+    subprocess.run([*git, "init", "-q"], cwd=tmp_path, env=env, check=True)
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "x"], cwd=tmp_path, env=env, check=True)
+    if tag:
+        subprocess.run([*git, "tag", tag], cwd=tmp_path, env=env, check=True)
+    result = subprocess.run(["bash", "-e", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
+    lines = output.read_text(encoding="utf-8").splitlines() if output.exists() else []
+    return result.returncode, dict(line.split("=", 1) for line in lines)
+
+
+def test_an_invalid_nightly_date_fails_the_build(tmp_path):
+    code, outputs = _run_meta(tmp_path, "2026-10-19")
+    assert (code, outputs) == (1, {})
+
+
+def test_a_nightly_on_an_already_tagged_commit_is_named_after_its_own_tag(tmp_path):
+    """/opt/obs/version gets this value and wins over obs/version (PR #1371 Codex review)."""
+    code, outputs = _run_meta(tmp_path, "20261020", tag="nightly-20261019")
+    assert code == 0
+    assert outputs["version"] == "nightly-20261020"
+    assert outputs["app_bundle_file"] == "openbridgeserver-app-bundle_nightly-20261020.tar.gz"
+
+
+def test_a_tag_push_and_a_manual_run_keep_their_versions(tmp_path):
+    code, outputs = _run_meta(tmp_path, "", ref="refs/tags/2026.11.0")
+    assert (code, outputs["version"]) == (0, "2026.11.0")
+    manual = tmp_path / "manual"
+    manual.mkdir()
+    code, outputs = _run_meta(manual, "", tag="2026.10.0")
+    assert (code, outputs["version"]) == (0, "2026.10.0")
+
+
+def test_the_throwaway_repos_never_touch_the_repo_pytest_runs_in(tmp_path, monkeypatch):
+    """A pre-push hook in a linked worktree exports GIT_DIR (#1427)."""
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    git = ["git", "-c", "user.name=o", "-c", "user.email=o@example.invalid"]
+    clean = _throwaway_repo_env()
+    subprocess.run([*git, "init", "-q"], cwd=outer, env=clean, check=True)
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "outer"], cwd=outer, env=clean, check=True)
+    monkeypatch.setenv("GIT_DIR", str(outer / ".git"))
+    for name in ("stamp", "meta"):
+        (tmp_path / name).mkdir()
+    _run_stamp(tmp_path / "stamp", "20261019")
+    _run_meta(tmp_path / "meta", "20261020", tag="nightly-20261019")
+
+    def read(*args: str) -> str:
+        return subprocess.run(["git", *args], cwd=outer, env=clean, capture_output=True, text=True, check=True).stdout
+
+    log, tags, bare = read("log", "--format=%s"), read("tag"), read("config", "core.bare")
+    assert (log, tags, bare) == ("outer\n", "", "false\n")
+
+
+def test_the_template_root_marker_carries_the_metadata_version():
+    assert 'echo "${{ steps.meta.outputs.version }}" | sudo tee "$ROOTFS/opt/obs/version"' in _workflow_text()
+
+
+def test_nightly_dispatcher_uses_one_date_for_stamp_and_release_tag():
+    root = Path(__file__).resolve().parents[2]
+    nightly = (root / ".github" / "workflows" / "nightly-lxc.yml").read_text(encoding="utf-8")
+    assert '-f nightly_date="$NIGHTLY_DATE"' in nightly
+    assert "NIGHTLY_DATE: ${{ steps.dispatch.outputs.nightly_date }}" in nightly
+    assert 'TAG="nightly-${NIGHTLY_DATE}"' in nightly
+    assert "date -u +%Y%m%d)" not in nightly.split("Publish nightly release", 1)[1]

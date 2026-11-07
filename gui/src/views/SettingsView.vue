@@ -23,6 +23,11 @@
       {{ $t('common.demoMode') }}
     </div>
 
+    <!-- ── Updates (#1370) ── -->
+    <div v-if="activeTab === 'updates'" class="flex flex-col gap-4 max-w-xl" data-testid="updates-tab">
+      <UpdateSettingsPanel />
+    </div>
+
     <!-- ── Allgemein ── -->
     <div v-if="activeTab === 'general'" class="flex flex-col gap-4 max-w-md">
 
@@ -882,6 +887,36 @@
             </li>
           </ul>
         </div>
+        <div v-if="knxProject.mergeConflicts.length" class="p-3 rounded-lg text-sm bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/30" data-testid="knx-merge-conflicts">
+          <p class="font-medium">{{ $t('settings.importexport.knxMergeConflictsTitle') }}</p>
+          <p class="mt-1">{{ $t('settings.importexport.knxMergeConflictsText', { n: knxProject.mergeConflicts.length }) }}</p>
+          <details class="mt-2 text-xs">
+            <summary class="cursor-pointer">{{ $t('settings.importexport.knxMergeConflictsShow') }}</summary>
+            <div class="mt-2 overflow-x-auto">
+              <table class="w-full text-left">
+                <thead>
+                  <tr>
+                    <th class="pr-2 font-medium">{{ $t('settings.importexport.knxMergeConflictsAddress') }}</th>
+                    <th class="pr-2 font-medium">{{ $t('settings.importexport.knxMergeConflictsSpelling') }}</th>
+                    <th class="pr-2 font-medium">{{ $t('settings.importexport.knxMergeConflictsField') }}</th>
+                    <th class="pr-2 font-medium">{{ $t('settings.importexport.knxMergeConflictsKept') }}</th>
+                    <th class="font-medium">{{ $t('settings.importexport.knxMergeConflictsDropped') }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="conflict in knxProject.mergeConflicts" :key="`${conflict.address}:${conflict.spelling}:${conflict.field}`" data-testid="knx-merge-conflict">
+                    <td class="pr-2 font-mono">{{ formatGa(conflict.address, knxProject.groupAddressStyle) }}</td>
+                    <!-- the spelling as it was stored before the conversion, deliberately not reformatted -->
+                    <td class="pr-2 font-mono">{{ conflict.spelling }}</td>
+                    <td class="pr-2 font-mono">{{ conflict.field }}</td>
+                    <td class="pr-2">{{ conflict.kept }}</td>
+                    <td>{{ conflict.dropped }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </details>
+        </div>
       </div>
     </div>
 
@@ -1362,6 +1397,16 @@
       </div>
     </div>
 
+    <!-- ── Visu-Geräte ── -->
+    <div v-if="activeTab === 'visudevices' && (auth.isAdmin || isDemo)" class="max-w-3xl" data-testid="visudevices-tab" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
+      <VisuDevicesPanel />
+    </div>
+
+    <!-- ── Visu-Alarme ── -->
+    <div v-if="activeTab === 'visualarms' && (auth.isAdmin || isDemo)" class="max-w-3xl" data-testid="visualarms-tab" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
+      <VisuAlarmsPanel />
+    </div>
+
     <!-- ── Danger Zone ── -->
     <div v-if="activeTab === 'dangerzone'" class="flex flex-col gap-4 max-w-lg" :class="{ 'pointer-events-none select-none opacity-60': isDemo }">
       <div class="rounded-lg border border-red-500/40 bg-red-500/5 overflow-hidden">
@@ -1382,7 +1427,7 @@
               <p class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ $t('settings.dangerzone.bindings.label') }}</p>
               <p class="text-xs text-slate-500 mt-1">{{ $t('settings.dangerzone.bindings.desc') }}</p>
             </div>
-            <button @click="showConfirm('bindings')" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
+            <button @click="showConfirm('bindings')" data-testid="dz-bindings" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
           </div>
 
           <!-- DataPoints -->
@@ -1391,7 +1436,7 @@
               <p class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ $t('settings.dangerzone.datapoints.label') }}</p>
               <p class="text-xs text-slate-500 mt-1">{{ $t('settings.dangerzone.datapoints.desc') }}</p>
             </div>
-            <button @click="showConfirm('datapoints')" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
+            <button @click="showConfirm('datapoints')" data-testid="dz-datapoints" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
           </div>
 
           <!-- Logic -->
@@ -1400,7 +1445,7 @@
               <p class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ $t('settings.dangerzone.logic.label') }}</p>
               <p class="text-xs text-slate-500 mt-1">{{ $t('settings.dangerzone.logic.desc') }}</p>
             </div>
-            <button @click="showConfirm('logic')" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
+            <button @click="showConfirm('logic')" data-testid="dz-logic" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
           </div>
 
           <!-- Adapters -->
@@ -1409,7 +1454,7 @@
               <p class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ $t('settings.dangerzone.adapters.label') }}</p>
               <p class="text-xs text-slate-500 mt-1">{{ $t('settings.dangerzone.adapters.desc') }}</p>
             </div>
-            <button @click="showConfirm('adapters')" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
+            <button @click="showConfirm('adapters')" data-testid="dz-adapters" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
           </div>
 
           <!-- KNX Group Addresses -->
@@ -1418,7 +1463,7 @@
               <p class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ $t('settings.dangerzone.knxga.label') }}</p>
               <p class="text-xs text-slate-500 mt-1">{{ $t('settings.dangerzone.knxga.desc', { n: knxGaCount }) }}</p>
             </div>
-            <button @click="showConfirm('knxga')" :disabled="knxGaCount === 0" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
+            <button @click="showConfirm('knxga')" data-testid="dz-knxga" :disabled="knxGaCount === 0" class="btn-danger btn-sm shrink-0">{{ $t('common.delete') }}</button>
           </div>
 
           <!-- Factory Reset -->
@@ -1427,7 +1472,7 @@
               <p class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ $t('settings.dangerzone.factory.label') }}</p>
               <p class="text-xs text-slate-500 mt-1">{{ $t('settings.dangerzone.factory.desc') }}</p>
             </div>
-            <button @click="showConfirm('all')" class="btn-danger btn-sm shrink-0">{{ $t('settings.dangerzone.factory.confirmLabel') }}</button>
+            <button @click="showConfirm('factory')" data-testid="dz-factory" class="btn-danger btn-sm shrink-0">{{ $t('settings.dangerzone.factory.confirmLabel') }}</button>
           </div>
 
           <!-- Feedback -->
@@ -1585,23 +1630,31 @@ import { useI18n } from 'vue-i18n'
 import { useNavLinksStore } from '@/stores/navLinks'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
+import { useKnxProjectStore } from '@/stores/knxProject'
+import { formatGa } from '@/utils/groupAddress'
 import { useTz } from '@/composables/useTz'
 import Badge            from '@/components/ui/Badge.vue'
 import Spinner          from '@/components/ui/Spinner.vue'
 import HierarchyManager from '@/components/HierarchyManager.vue'
 import UserRightsEditor from '@/components/settings/UserRightsEditor.vue'
+import VisuAlarmsPanel from '@/components/settings/VisuAlarmsPanel.vue'
+import VisuDevicesPanel from '@/components/settings/VisuDevicesPanel.vue'
 import Modal          from '@/components/ui/Modal.vue'
 import ConfirmDialog  from '@/components/ui/ConfirmDialog.vue'
 import IconPicker     from '@/components/ui/IconPicker.vue'
 import VisuIcon       from '@/components/ui/VisuIcon.vue'
 import LocaleSwitcher from '@/components/ui/LocaleSwitcher.vue'
 import HelpButton     from '@/components/ui/HelpButton.vue'
+import UpdateSettingsPanel from '@/components/updates/UpdateSettingsPanel.vue'
+import { useUpdatesStore } from '@/stores/updates'
 import { formatCurrency, formatNumber } from '@/utils/numberFormat'
 import { resolveCurrency, resolveRegionFormat, useRegionalFormat } from '@/composables/useRegionalFormat'
 
 const { t, te } = useI18n()
 const auth     = useAuthStore()
 const settings = useSettingsStore()
+// Group address style and V56 merge notes of the KNX project (#1296)
+const knxProject = useKnxProjectStore()
 const navStore = useNavLinksStore()
 const { fmtDate, fmtDateTime } = useTz()
 const activeTab = ref('general')
@@ -1796,7 +1849,10 @@ const tabs = computed(() => [
   { id: 'apikeys',      label: t('settings.tabs.apikeys') },
   ...(auth.isAdmin || isDemo.value ? [{ id: 'security', label: t('settings.tabs.security') }] : []),
   ...(auth.isAdmin || isDemo.value ? [{ id: 'support', label: t('settings.tabs.support') }] : []),
+  { id: 'updates',      label: t('settings.tabs.updates') },
   { id: 'links',        label: t('settings.tabs.links') },
+  ...(auth.isAdmin || isDemo.value ? [{ id: 'visudevices', label: t('settings.tabs.visuDevices') }] : []),
+  ...(auth.isAdmin || isDemo.value ? [{ id: 'visualarms', label: t('settings.tabs.visuAlarms') }] : []),
   { id: 'hierarchy',    label: t('settings.tabs.hierarchy') },
   ...(auth.isAdmin || isDemo.value ? [{ id: 'importexport', label: t('settings.tabs.importexport') }] : []),
   { id: 'icons',        label: t('settings.tabs.icons') },
@@ -1808,6 +1864,30 @@ watch(
   () => tabs.value.map((tab) => tab.id).join('|'),
   () => activateTabFromRoute(),
 )
+
+// The global update notice links here; while this view is already open the
+// URL alone cannot switch tabs (tab clicks do not touch it), so the notice
+// also signals through the store (#1370). Its link adds a history entry, so
+// Back/Forward must follow it: an entry with ?tab= shows that tab, the entry
+// without it the tab that was open before the notice switched.
+const updatesStore = useUpdatesStore()
+let tabBeforeNotice = null
+watch(
+  () => updatesStore.updatesTabRequests,
+  () => {
+    // A repeated click while Updates is open keeps the tab to return to.
+    if (activeTab.value !== 'updates') tabBeforeNotice = activeTab.value
+    activeTab.value = 'updates'
+  },
+)
+
+function onHistoryNavigation() {
+  const tab = new URLSearchParams(window.location.search).get('tab')
+  if (tabs.value.some((item) => item.id === tab)) activeTab.value = tab
+  else if (tabBeforeNotice !== null) activeTab.value = tabBeforeNotice
+}
+onMounted(() => window.addEventListener('popstate', onHistoryNavigation))
+onUnmounted(() => window.removeEventListener('popstate', onHistoryNavigation))
 
 // ── URL Target Allowlist ──────────────────────────────────────────────────
 const urlTargetsLoading = ref(false)
@@ -2281,7 +2361,8 @@ async function loadHistoryFilterDps() {
   histFilterLoading.value = true
   try {
     const { data } = await dpApi.listAll()
-    histAllDps.value = data.items ?? []
+    // Read-only system DataPoints (#1370) refuse every change: no toggle for them.
+    histAllDps.value = (data.items ?? []).filter(dp => !dp.system)
   } catch { /* non-critical */ }
   finally { histFilterLoading.value = false }
 }
@@ -2654,6 +2735,7 @@ async function onImportFile(e) {
     importResult.value = { ok: true, text: t('settings.importexport.importResultOk', { objects: data.datapoints_created + data.datapoints_updated, bindings: data.bindings_created + data.bindings_updated }) + gaInfo + lgInfo + iconInfo + visuInfo }
     await loadFaSettings()
     if ((data.icons_imported ?? 0) > 0) await loadIcons()
+    await knxProject.load({ force: true })
   } catch (err) {
     importResult.value = { ok: false, text: err.response?.data?.detail ?? t('settings.importexport.importFailed') }
   }
@@ -2666,6 +2748,7 @@ async function onImportDbFile(e) {
   try {
     const { data } = await configApi.importDb(file)
     importDbResult.value = { ok: true, text: t('settings.importexport.dbImportResultOk', { message: data.message ?? '', adapters: data.adapters_restarted ?? 0 }) }
+    await knxProject.load({ force: true })
   } catch (err) {
     importDbResult.value = { ok: false, text: err.response?.data?.detail ?? t('settings.importexport.dbImportFailed') }
   }
@@ -2724,6 +2807,7 @@ async function restoreAutobackup() {
     autobackupRestoreMsg.value = { ok: true, text: t('settings.importexport.autobackupRestoreOk', { objects: data.datapoints, bindings: data.bindings, visu: data.visu_nodes }) + errInfo }
     await loadFaSettings()
     await loadIcons()
+    await knxProject.load({ force: true })
   } catch (err) {
     autobackupRestoreMsg.value = { ok: false, text: err.response?.data?.detail ?? t('settings.importexport.autobackupRestoreFailed') }
   } finally { autobackupRestoring.value = false }
@@ -2844,10 +2928,14 @@ async function doKnxImport() {
     let msg = t('settings.importexport.knxImportResultOk', { n: data.imported })
     if (data.created  > 0) msg += t('settings.importexport.knxImportResultCreated',   { n: data.created })
     if (data.updated  > 0) msg += t('settings.importexport.knxImportResultUpdated',   { n: data.updated })
+    // Named, not silent: a GA a read-only system DataPoint already writes to gets
+    // no second DataPoint, and the missing one would otherwise look like a bug (#1370).
+    if (data.skipped_system > 0) msg += t('settings.importexport.knxImportResultSkippedSystem', { n: data.skipped_system })
     if (data.locations > 0) msg += t('settings.importexport.knxImportResultLocations', { n: data.locations })
     if (data.trades   > 0) msg += t('settings.importexport.knxImportResultTrades',    { n: data.trades })
     knxResult.value = { ok: true, text: msg, hierarchies: Array.isArray(data.hierarchies) ? data.hierarchies : [] }
     await loadKnxGaCount()
+    await knxProject.load({ force: true })
   } catch (err) {
     const resp = err.response?.data
     const code = resp?.error_code
@@ -2865,6 +2953,7 @@ onMounted(async () => {
   if (auth.isAdmin) await loadUsers()
   await loadKeys()
   await loadKnxGaCount()
+  await knxProject.load()
   await loadKnxAdapterInstances()
   await loadAutobackupConfig()
   await loadAutobackupList()
@@ -2912,13 +3001,13 @@ const DZ_CONFIG = {
     },
     after: () => { knxGaCount.value = 0 },
   },
-  all: {
+  factory: {
     action: async () => {
       const { data } = await configApi.reset()
       const iconInfo = (data.icons_deleted ?? 0) > 0 ? t('settings.dangerzone.factory.resultIcons', { n: data.icons_deleted }) : ''
       return t('settings.dangerzone.factory.result', { dp: data.datapoints_deleted, bindings: data.bindings_deleted, adapters: data.adapter_instances_deleted, knxga: data.knx_group_addresses_deleted, logic: data.logic_graphs_deleted }) + iconInfo
     },
-    after: () => { knxGaCount.value = 0; faSavedKey.value = null; icons.value = [] },
+    after: () => { knxGaCount.value = 0; faSavedKey.value = null; icons.value = []; knxProject.load({ force: true }) },
   },
 }
 

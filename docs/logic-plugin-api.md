@@ -236,7 +236,7 @@ threshold = float(config.get("threshold") or 20)
 
 `NodeTypeDef` has two more fields, `has_external_side_effect` and `required_capability` — deliberately left out of the reference above, because **your `node_type_def()` must not set them**. OBS ignores whatever your block declares here and always classifies every plugin node type the same way: `has_external_side_effect=True` with a single shared capability, `plugin_execution`.
 
-This only affects the *manual* trigger — the editor's Run button and `POST /api/v1/logic/graphs/{id}/run`. Automatic execution (a graph reacting to a cron schedule, a `timer_pulse`, a datapoint event, …) is unaffected regardless of node type or grants.
+This only affects the *manual* trigger — the editor's Run button and `POST /api/v1/logic/graphs/{id}/run`. Automatic execution (a graph reacting to a cron schedule, a `timer_interval`, a datapoint event, …) is unaffected regardless of node type or grants.
 
 For the manual trigger, an admin user can always run any graph. A non-admin user or an API key needs the `plugin_execution` capability explicitly granted (Settings → Users → Rights, "advanced grant": `logic_capability` / `plugin_execution`) before they can manually run a graph containing *any* plugin block — this grant is all-or-nothing across every installed plugin, not per block type, since plugin code has no central review the way built-in blocks do.
 

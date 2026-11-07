@@ -31,10 +31,11 @@ from obs.api.auth import Principal, get_current_principal, get_current_user
 from obs.api.authz import AuthzAction, AuthzDecision, AuthzTarget, RoleGrant, authorize
 from obs.api.authz_service import filter_authorized_datapoints, load_role_grants, resolve_datapoint_targets
 from obs.api.v1.application_audit import audit_application_contract, mark_contract_audited, write_application_success
+from obs.api.v1.content_disposition import attachment_header
 from obs.db.database import Database, get_db
 from obs.logic.capabilities import LOGIC_CREATE_CAPABILITY
 from obs.logic.graph_analysis import config_schema_warnings, topology_warnings
-from obs.logic.manager import _migrate_legacy_api_client_field_names, _normalise_api_client_variables
+from obs.logic.manager import InvalidFireTriggerError, _migrate_legacy_node_data, _normalise_api_client_variables
 from obs.logic.models import (
     FlowData,
     LogicEdge,
@@ -51,7 +52,7 @@ from obs.logic.models import (
     NodeTypeDef,
 )
 from obs.logic.registry import get_node_type, list_node_types
-from obs.logic.validation import validate_timer_durations
+from obs.logic.validation import validate_timer_durations, validate_write_targets
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,7 @@ def _validate_timer_durations(flow_data: FlowData) -> None:
     """Translate shared persistence validation to an API error."""
     try:
         validate_timer_durations(flow_data)
+        validate_write_targets(flow_data)
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
@@ -96,7 +98,7 @@ def _normalized_without_positions(raw: dict) -> dict:
     dicts would misclassify a move-only save as an execution change.
     """
     flow_data = FlowData.model_validate(raw)
-    _migrate_legacy_api_client_field_names(flow_data)
+    _migrate_legacy_node_data(flow_data)
     return _without_positions(json.loads(flow_data.model_dump_json()))
 
 
@@ -137,7 +139,7 @@ def _normalize_missing_node_placeholders(flow_data: FlowData) -> None:
 def _row_to_out(row: dict) -> LogicGraphOut:
     raw = json.loads(row["flow_data"]) if row["flow_data"] else {}
     flow_data = FlowData.model_validate(raw)
-    _migrate_legacy_api_client_field_names(flow_data)
+    _migrate_legacy_node_data(flow_data)
     _normalize_missing_node_placeholders(flow_data)
     return LogicGraphOut(
         id=row["id"],
@@ -643,8 +645,9 @@ async def get_node_types(_user: str = Depends(get_current_user)) -> list[NodeTyp
       block itself (e.g. `change_filter` only sets `changed` when the input actually changed).
       This is different from the key being present with value `null`/`None`, which means a value
       arrived but was empty/unset.
-    - `memory` is the **only** node allowed to close a feedback loop within one graph (it outputs
-      the previous tick's stored value) — any other cycle is rejected, see `POST /graphs/validate`.
+    - `memory`, `timer_delay` and `timer_pulse` are the only nodes allowed to close a feedback loop
+      within one graph (memory outputs the previous tick's stored value, a timer what its timer
+      decided) — any other cycle is rejected, see `POST /graphs/validate`.
 
     **Resolving `help_id` to full prose documentation** (English and German, one paragraph per
     block with the exact intended behaviour): `GET /help/help-index.json`, then
@@ -679,9 +682,13 @@ async def validate_graph(
 ) -> dict:
     """Check `flow_data` for problems before saving it — advisory, does not persist anything.
 
-    Two independent checks, both returned as one flat `warnings` list (`{node_id, code, message}`):
-    - **Graph-cycle topology**: a cycle not broken by a `memory` node (see `GET /node-types`'s
-      "Memory is the only node allowed to close a feedback loop"). Codes: `graph_cycle`,
+    Four checks, all returned as one flat `warnings` list (`{node_id, code, message}`). Every
+    warning code: `graph_cycle`, `graph_cycle_blocked`, `unknown_node_type`,
+    `config_schema_type_mismatch`, `config_schema_enum_invalid`, `config_schema_malformed_json`,
+    `config_schema_missing_required_field`, `unknown_config_field`, `ignored_config_field`,
+    `missing_node_type`.
+    - **Graph-cycle topology**: a cycle not broken by a `memory`, `timer_delay` or `timer_pulse`
+      node (see `GET /node-types` on closing a feedback loop). Codes: `graph_cycle`,
       `graph_cycle_blocked`.
     - **Config-schema conformance**: each node's `data` checked against its type's `config_schema`
       from `GET /node-types` — unknown node types, values that don't match a declared `type` or
@@ -691,6 +698,20 @@ async def validate_graph(
       `config_schema_missing_required_field`. Deliberately narrow: no cross-entity checks (e.g.
       whether a `datapoint_id` actually exists), and a key absent from `data` is never flagged
       (it falls back to the schema default).
+    - **Unknown config keys**: a top-level `data` key that is not in the type's `config_schema`
+      (typically a typo such as `operater` for `operator`) is ignored by the block, which then
+      runs with the default — code `unknown_config_field`, with a "did you mean" hint where a
+      known key is close. Not flagged: `label` (the block name) on every type, and a few
+      type-specific keys the editor writes: `negate_in1`…`negate_in30` on `and`/`or`/`xor`/
+      `binary_stats` and `negate_out` on `and`/`or`/`xor` (per-port negation),
+      `string_concat.text_1`…`text_20`, `datapoint_read`/`datapoint_write.value_map`, and
+      `heating_circuit`'s legacy `temp_winter`/`temp_summer` — reported as
+      `ignored_config_field` where the block does not read them (`threshold_temp` set, or
+      `temp_summer` without `temp_winter`).
+    - **Import placeholders**: a `missing_node` stands in for a node type this server does not
+      know (e.g. from an import) and does nothing at run time — code `missing_node_type`, the
+      message names the original type from `data.original_type` (or, for older placeholders,
+      `data.label`).
 
     `status` is always `"ok"` — an empty `warnings` list is the actual "nothing found" signal, not
     `status`. This endpoint is **not** enforced anywhere else: `POST`/`PUT /graphs` persist a graph
@@ -698,6 +719,9 @@ async def validate_graph(
     for timer duration bounds (`timer_delay`/`timer_pulse`/`api_client.timeout_s`), which those two
     endpoints reject outright (422) at save time — independently of this endpoint.
     """
+    # Checked in the shape the runtime loads: a key a migration moves (e.g. a timer duration
+    # under the sibling's key, #1377) is used at run time, so it is no unknown field.
+    _migrate_legacy_node_data(body)
     return {"status": "ok", "warnings": topology_warnings(body) + config_schema_warnings(body)}
 
 
@@ -1102,9 +1126,13 @@ async def run_graph(
 
         started = time.perf_counter()
         overrides = body.input_overrides if body else {}
-        debug_requested = bool(body and body.debug) or bool(overrides)
+        fire_triggers = body.fire_triggers if body else []
+        debug_requested = bool(body and body.debug) or bool(overrides) or bool(fire_triggers)
         if debug_requested:
-            outputs, inputs = await get_logic_manager().execute_graph_debug(graph_id, overrides)
+            try:
+                outputs, inputs = await get_logic_manager().execute_graph_debug(graph_id, overrides, fire_triggers=fire_triggers)
+            except InvalidFireTriggerError as exc:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
         else:
             outputs = await get_logic_manager().execute_graph(graph_id)
             inputs = {}
@@ -1120,6 +1148,7 @@ async def run_graph(
                 "control_class": _row_control_class(row),
                 "output_count": len(outputs),
                 "warning_count": len(warnings),
+                "fire_triggers": fire_triggers,
             },
             commit=True,
         )
@@ -1134,6 +1163,8 @@ async def run_graph(
                 "inputs": inputs,
             },
         }
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception("Logic graph run failed for graph %s", graph_id)
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(exc)) from exc
@@ -1302,5 +1333,5 @@ async def export_graph(
     safe_name = row["name"].replace(" ", "_").replace("/", "_")
     return JSONResponse(
         content=export_data,
-        headers={"Content-Disposition": f'attachment; filename="{safe_name}.json"'},
+        headers={"Content-Disposition": attachment_header(f"{safe_name}.json")},
     )

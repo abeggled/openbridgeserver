@@ -1,4 +1,4 @@
-"""Node definition for the ``timer_pulse`` function block (Takt)."""
+"""Node definition for the ``timer_pulse`` function block (Impuls)."""
 
 from __future__ import annotations
 
@@ -7,12 +7,12 @@ from obs.logic.nodes.base import port
 
 NODE_TYPE = NodeTypeDef(
     type="timer_pulse",
-    label="Takt",
+    label="Impuls",
     category="timer",
-    description="Sendet automatisch alle N Sekunden einen Trigger-Impuls.",
-    inputs=[],
-    outputs=[port("trigger", "Trigger", "trigger")],
-    config_schema={"interval_s": {"type": "number", "default": 5.0, "min": 0, "label": "Interval (s)"}},
+    description="Gibt einen Impuls für N Sekunden aus",
+    inputs=[port("trigger", "Trigger", "trigger")],
+    outputs=[port("out", "Out")],
+    config_schema={"duration_s": {"type": "number", "default": 1.0, "min": 0}},
     color="#b45309",
     help_id="logic-block-timer-pulse",
 )

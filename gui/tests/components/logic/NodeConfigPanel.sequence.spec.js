@@ -55,6 +55,20 @@ describe('NodeConfigPanel value sequence', () => {
     w.unmount()
   })
 
+  it('offers no read-only system DataPoint as a step target (#1370)', async () => {
+    search.mockResolvedValue({ data: { items: [
+      { id: 'dp-1', name: 'Lamp', data_type: 'bool' },
+      { id: 'sys', name: 'OBS Update Channel', data_type: 'STRING', system: true },
+    ] } })
+    const w = await mountPanel({ steps: [{ datapoint_id: '', datapoint_name: '', value: '', delay_ms: 0 }] })
+    await w.get('[data-testid="sequence-step-0"]').find('input').setValue('a')
+    await flushPromises()
+    const labels = w.get('[data-testid="sequence-step-0"]').findAll('button').map(b => b.text())
+    expect(labels.some(text => text.includes('Lamp'))).toBe(true)
+    expect(labels.some(text => text.includes('OBS Update Channel'))).toBe(false)
+    w.unmount()
+  })
+
   it('keeps a sequence object search query visible while results update', async () => {
     const w = await mountPanel({ steps: [{ datapoint_id: '', datapoint_name: '', value: '', delay_ms: 0 }] })
     const input = w.get('[data-testid="sequence-step-0"]').find('input')

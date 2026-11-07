@@ -12,8 +12,14 @@ Sends a message via a configured MESSAGE adapter. Once an adapter is selected, t
 that adapter instance's active, configured **targets** as checkboxes — only the checked targets
 receive the message. Title and message are fallback values: if the **Message** input is
 connected, its value is sent instead of the fallback text. Without data point context in the
-logic block, MESSAGE placeholders in the text are sent unchanged. **Priority** ranges from -2
-(very low) to 1 (high).
+logic block, MESSAGE placeholders in the text are sent unchanged.
+
+When a Pushover target is selected, the block offers the
+[Pushover options](../adapters/list#adapters-message-pushover): image URL, URL, URL title,
+priority (-2 to 2, with retry and expire for 2), sound, formatting, TTL and timestamp. The
+additional **URL**, **URL title** and **Image URL** inputs override the static values, which
+support the same variables as the title; inserted values are URL-encoded in URL and image URL. With HTML formatting, inserted variable values and a message arriving on the input are HTML-escaped for Pushover; HTML markup belongs in the fallback message. Other providers are unaffected. A stored priority 2 without retry and expire is sent as priority 1, as before, and noted in the log. **Sent** fires only
+when every target was delivered successfully — an image that cannot be loaded fails the send.
 
 **Title** and **fallback message** support variables: date/time (`###HH###`, `###DATE###`,
 `###TS###` …) and objects assigned under **Variables** (`###OBS1###` …), list: [JSON Extractor](./blocks-integration#logic-block-json-extractor). The message

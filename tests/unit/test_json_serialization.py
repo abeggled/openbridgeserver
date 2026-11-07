@@ -3,6 +3,8 @@ from __future__ import annotations
 import datetime
 import json
 
+import pytest
+
 from obs.core.json import json_dumps, jsonable
 from obs.core.mqtt_client import build_payload
 
@@ -50,3 +52,26 @@ def test_mqtt_payload_accepts_time_values():
     payload = build_payload(datetime.time(20, 50, 23), None, "good")
 
     assert json.loads(payload)["v"] == "20:50:23"
+
+
+def _strict_loads(payload):
+    def reject(constant):
+        raise ValueError(f"invalid JSON constant: {constant}")
+
+    return json.loads(payload, parse_constant=reject)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_mqtt_payload_maps_non_finite_floats_to_null(value):
+    # Bare NaN/Infinity tokens are not valid JSON (RFC 8259) (#1153).
+    assert _strict_loads(build_payload(value, None, "good"))["v"] is None
+
+
+def test_mqtt_payload_maps_nested_non_finite_floats_to_null():
+    value = {"a": float("nan"), "b": [1.5, float("inf"), (float("-inf"), "x")], "c": 2}
+
+    assert _strict_loads(build_payload(value, None, "good"))["v"] == {"a": None, "b": [1.5, None, [None, "x"]], "c": 2}
+
+
+def test_mqtt_payload_keeps_finite_float():
+    assert _strict_loads(build_payload(21.5, "°C", "good"))["v"] == 21.5

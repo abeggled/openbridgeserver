@@ -10,6 +10,7 @@ from obs.logic.models import NodeTypeDef
 from obs.logic.nodes.timer.cron import NODE_TYPE as TIMER_CRON
 from obs.logic.nodes.timer.datetime_node import NODE_TYPE as DATETIME
 from obs.logic.nodes.timer.delay import NODE_TYPE as TIMER_DELAY
+from obs.logic.nodes.timer.interval import NODE_TYPE as TIMER_INTERVAL
 from obs.logic.nodes.timer.operating_hours import NODE_TYPE as OPERATING_HOURS
 from obs.logic.nodes.timer.pulse import NODE_TYPE as TIMER_PULSE
 from obs.logic.nodes.timer.sensor_watchdog import NODE_TYPE as SENSOR_WATCHDOG
@@ -18,6 +19,7 @@ from obs.logic.nodes.timer.value_sequence import NODE_TYPE as VALUE_SEQUENCE
 NODE_TYPES: tuple[NodeTypeDef, ...] = (
     TIMER_DELAY,
     TIMER_PULSE,
+    TIMER_INTERVAL,
     VALUE_SEQUENCE,
     TIMER_CRON,
     DATETIME,

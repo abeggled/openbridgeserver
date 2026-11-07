@@ -2141,6 +2141,32 @@ class TestSystemHistorySettings:
         assert seen["password"] == "stored-password"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("ping_error", "expected"),
+        [
+            ("token rejected (HTTP 401)", "InfluxDB v2 at http://influx:8086: token rejected (HTTP 401)"),
+            (None, "InfluxDB v2 not reachable at http://influx:8086"),
+        ],
+    )
+    async def test_test_history_connection_influx_failure_message(self, monkeypatch, ping_error, expected):
+        import obs.api.v1.system as sys_api
+
+        class _InfluxPlugin:
+            def __init__(self, **kwargs):
+                self.last_ping_error = ping_error
+
+            async def ping(self):
+                return False
+
+        monkeypatch.setattr("obs.history.influxdb_plugin.InfluxDBHistoryPlugin", _InfluxPlugin)
+        body = sys_api.HistorySettingsIn(plugin="influxdb", influx_url="http://influx:8086")
+
+        result = await sys_api.test_history_connection(body=body, db=_DbStub(), _admin="admin")
+
+        assert result.ok is False
+        assert result.message == expected
+
+    @pytest.mark.asyncio
     async def test_test_history_connection_unknown_plugin(self):
         import obs.api.v1.system as sys_api
 

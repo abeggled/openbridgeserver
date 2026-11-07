@@ -11,12 +11,12 @@
         <NodeTitleEditor
           :value="customLabel"
           :fallback="defaultLabel"
-          :editable="auth.isAdmin"
+          :editable="auth.isAdmin && canvasEditable"
           :title-class="['gn-label', customLabel && 'gn-label--custom']"
           @rename="renameNode"
         />
         <span v-if="hasFilter" class="gn-filter-badge" :title="$t('logic.filterBadge')">⊘</span>
-        <button v-show="hovered" class="gn-delete nodrag" @click.stop="remove" :title="$t('logic.deleteBlock')">✕</button>
+        <button v-if="canvasEditable" v-show="hovered" class="gn-delete nodrag" @click.stop="remove" :title="$t('logic.deleteBlock')">✕</button>
       </div>
       <div class="gn-body">
         <div class="gn-sublabel">{{ $t('logic.ports.object') }}</div>
@@ -52,6 +52,7 @@ import { useI18n } from 'vue-i18n'
 import { nodeTint } from '@/utils/logicNodeSurface'
 import NodeTitleEditor from '@/components/logic/NodeTitleEditor.vue'
 import { useAuthStore } from '@/stores/auth'
+import { useCanvasEditable } from '@/components/logic/nodes/canvasEditable'
 
 const { t } = useI18n()
 
@@ -69,6 +70,9 @@ const cardTint = nodeTint(DATAPOINT_COLOR)
 const isWrite   = computed(() => props.type === 'datapoint_write')
 const hovered   = ref(false)
 const { removeNodes, updateNodeData } = useVueFlow()
+// Card edits (delete, title, and per card negation/resize) pause while the
+// editor holds the canvas read-only (a sheet is loading or being swapped).
+const canvasEditable = useCanvasEditable()
 function remove() { removeNodes([props.id]) }
 
 // ── User-defined block name (issue #1157) ─────────────────────────────────

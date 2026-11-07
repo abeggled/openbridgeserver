@@ -9,13 +9,11 @@ def test_delay_duration_is_non_negative():
     assert TIMER_DELAY.config_schema["delay_s"]["default"] == 1.0
 
 
-def test_pulse_interval_is_non_negative():
-    assert TIMER_PULSE.config_schema["interval_s"]["min"] == 0
-    assert TIMER_PULSE.config_schema["interval_s"]["default"] == 5.0
+def test_pulse_duration_is_non_negative():
+    assert TIMER_PULSE.config_schema["duration_s"]["min"] == 0
+    assert TIMER_PULSE.config_schema["duration_s"]["default"] == 1.0
 
 
-def test_delay_passes_a_trigger_through_while_pulse_fires_on_its_own():
-    assert TIMER_DELAY.inputs and [port.type for port in TIMER_DELAY.inputs] == ["trigger"]
+def test_delay_passes_a_trigger_through_while_pulse_emits_a_value():
     assert [port.type for port in TIMER_DELAY.outputs] == ["trigger"]
-    assert TIMER_PULSE.inputs == []
-    assert [port.type for port in TIMER_PULSE.outputs] == ["trigger"]
+    assert [port.type for port in TIMER_PULSE.outputs] == ["value"]

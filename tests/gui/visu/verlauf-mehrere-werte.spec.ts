@@ -119,7 +119,9 @@ test('Verlauf-Widget: zwei Reihen rendern ohne Fehler', async ({ page }) => {
     await expect(canvas).toBeVisible({ timeout: 8000 })
 
     // Widget-Label wird angezeigt
-    await expect(page.getByText('Temperaturen')).toBeVisible()
+    // Der Titel steht auch in der HTML-Legende (Reihe ohne eigenes Label, #1361)
+    await expect(page.locator('span', { hasText: 'Temperaturen' })).toBeVisible()
+    await expect(page.locator('.chart-legend-item')).toHaveCount(2)
 
     // Kein JavaScript-Fehler aufgetreten
     const chartErrors = errors.filter(e => e.toLowerCase().includes('chart') || e.toLowerCase().includes('cannot'))

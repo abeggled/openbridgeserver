@@ -188,7 +188,7 @@ describe('LogicView auth gates', () => {
     wrapper.vm.onNodeClick({ node: wrapper.vm.nodes[0] })
     expect(wrapper.vm.selectedNode).toBe(null)
 
-    await wrapper.vm.saveGraph()
+    await wrapper.vm.saveGraph({ manual: true })
     await wrapper.vm.runGraph()
     await wrapper.vm.doToggleEnabled()
     wrapper.vm.openDuplicate()
@@ -459,7 +459,7 @@ describe('LogicView auth gates', () => {
     await flushPromises()
     expect(wrapper.vm.nodes[0].data.value).toBe(7)
 
-    await wrapper.vm.saveGraph()
+    await wrapper.vm.saveGraph({ manual: true })
     expect(logicApi.saveGraph).toHaveBeenCalledWith('graph-1', expect.objectContaining({ name: 'Main Graph' }))
 
     await wrapper.vm.runGraph()
@@ -472,7 +472,7 @@ describe('LogicView auth gates', () => {
     expect(wrapper.vm.lastRunDebugOutputs.n1.value).toBe(42)
     expect(wrapper.vm.nodes[0].data._dbg).toBe('= 42')
 
-    await wrapper.vm.saveGraph()
+    await wrapper.vm.saveGraph({ manual: true })
     const savedPayload = logicApi.saveGraph.mock.calls.at(-1)[1]
     expect(savedPayload.flow_data.nodes[0].data).not.toHaveProperty('_dbg')
     expect(savedPayload.flow_data.nodes[0].data).not.toHaveProperty('_dbg_title')
@@ -873,6 +873,120 @@ describe('LogicView WebSocket', () => {
     expect(wrapper.vm.nodes[0].data._dbg).toBeUndefined()
   })
 
+  it('fires a Trigger block from the debug pane through the run path, once (#1276)', async () => {
+    const graph = makeGraph('graph-1')
+    const { wrapper, logicApi, logicRunAuthzApi } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+    wrapper.vm.toggleDebug()
+    wrapper.vm.selectedNode = wrapper.vm.nodes[0]
+    await wrapper.vm.$nextTick()
+
+    const panel = wrapper.findComponent({ name: 'NodeConfigPanel' })
+    expect(panel.props('fireDisabled')).toBe(false)
+    expect(panel.props('fireDisabledHint')).toBe('')
+
+    // A double click runs the sheet once; the button is locked meanwhile.
+    panel.vm.$emit('fire-trigger', 'n1')
+    panel.vm.$emit('fire-trigger', 'n1')
+    await wrapper.vm.$nextTick()
+    expect(panel.props('fireDisabled')).toBe(true)
+    await flushPromises()
+
+    expect(logicRunAuthzApi.preflight).toHaveBeenCalledTimes(1)
+    expect(logicApi.runGraph).toHaveBeenCalledTimes(1)
+    expect(logicApi.runGraph).toHaveBeenLastCalledWith('graph-1', { debug: true, input_overrides: {}, fire_triggers: ['n1'] })
+    expect(panel.props('fireDisabled')).toBe(false)
+
+    // The next plain run fires nothing.
+    await wrapper.get('[data-testid="btn-run"]').trigger('click')
+    await flushPromises()
+    expect(logicApi.runGraph).toHaveBeenLastCalledWith('graph-1', { debug: true, input_overrides: {} })
+
+    // Outside debug mode a fire request alone still sends a debug-capable run.
+    wrapper.vm.toggleDebug()
+    await wrapper.vm.requestGraphRun(['n1'])
+    expect(logicApi.runGraph).toHaveBeenLastCalledWith('graph-1', { debug: false, input_overrides: {}, fire_triggers: ['n1'] })
+  })
+
+  it('runs a plain run started during a fire without firing, and fires on a confirmed dialog (#1276)', async () => {
+    const graph = makeGraph('graph-1')
+    const { wrapper, logicApi, logicRunAuthzApi } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+    wrapper.vm.toggleDebug()
+
+    // A plain run requested while a fire is pending never fires the trigger.
+    const fire = wrapper.vm.fireTrigger('n1')
+    const run = wrapper.vm.requestGraphRun()
+    await Promise.all([fire, run])
+    for (const call of logicApi.runGraph.mock.calls) {
+      if (call[1]?.fire_triggers) expect(call[1].fire_triggers).toEqual(['n1'])
+    }
+    expect(logicApi.runGraph).toHaveBeenLastCalledWith('graph-1', { debug: true, input_overrides: {} })
+
+    // A denied preflight keeps the fire request with the dialog's snapshot.
+    logicApi.runGraph.mockClear()
+    logicRunAuthzApi.preflight.mockResolvedValueOnce({
+      data: {
+        graph_id: 'graph-1',
+        allowed: false,
+        checks: [{ target_type: 'logic_capability', target_id: 'sms', node_ids: ['n2'], allowed: false, reason: 'missing_allow' }],
+      },
+    })
+    await wrapper.vm.fireTrigger('n1')
+    expect(logicApi.runGraph).not.toHaveBeenCalled()
+    expect(wrapper.vm.preflightFireTriggers).toEqual(['n1'])
+    wrapper.vm.runPreflightItems = [{ id: 'x', label: 'x', allowed: true }]
+    await wrapper.vm.confirmGraphRun()
+    expect(logicApi.runGraph).toHaveBeenLastCalledWith('graph-1', { debug: true, input_overrides: {}, fire_triggers: ['n1'] })
+    expect(wrapper.vm.preflightFireTriggers).toEqual([])
+  })
+
+  it('locks "fire now" with a hint on a disabled sheet (#1276)', async () => {
+    const graph = makeGraph('graph-1', { enabled: false })
+    const { wrapper, logicApi } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+    wrapper.vm.toggleDebug()
+    wrapper.vm.selectedNode = wrapper.vm.nodes[0]
+    await wrapper.vm.$nextTick()
+
+    const panel = wrapper.findComponent({ name: 'NodeConfigPanel' })
+    expect(panel.props('fireDisabled')).toBe(true)
+    expect(panel.props('fireDisabledHint')).toBe('Graph ist deaktiviert — kein Ausführen möglich')
+
+    await wrapper.vm.fireTrigger('n1')
+    expect(logicApi.runGraph).not.toHaveBeenCalled()
+  })
+
+  it('offers no overridable input on a Trigger block, even after a fire captured one (#1276)', async () => {
+    const graph = makeGraph('graph-1', {
+      flow_data: { nodes: [{ id: 'cron1', type: 'timer_cron', position: { x: 0, y: 0 }, data: { cron: '0 7 * * *' } }], edges: [] },
+    })
+    const { wrapper } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+    wrapper.vm.toggleDebug()
+    wrapper.vm.lastRunInputs = { cron1: { trigger: { incoming: true, effective: true, overridden: false } } }
+    wrapper.vm.selectedNode = wrapper.vm.nodes[0]
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.vm.debugInputs).toEqual([])
+  })
+
   it('clears a retained XML preview after an empty payload (#1104)', async () => {
     let wsInstance = null
     global.WebSocket = class { constructor() { wsInstance = this; this.close = vi.fn() } }
@@ -1104,8 +1218,23 @@ describe('LogicView inspector inputs', () => {
     wrapper.vm.selectedNode = { id: 'gate', type: 'and', data: { input_count: 3 } }
     expect(wrapper.vm.debugInputs.map(input => input.id)).toEqual(['in1', 'in2', 'in3'])
 
+    wrapper.vm.selectedNode = { id: 'stats', type: 'binary_stats', data: { input_count: 2.5 } }
+    expect(wrapper.vm.debugInputs.map(input => input.id)).toEqual(['in1', 'in2', 'in3'])
+
     wrapper.vm.selectedNode = { id: 'average', type: 'avg_multi', data: { input_count: 4 } }
     expect(wrapper.vm.debugInputs.map(input => input.id)).toEqual(['in_1', 'in_2', 'in_3', 'in_4'])
+
+    // An unwired HEMS block offers the same inputs as its card, so the meter can be injected.
+    wrapper.vm.selectedNode = {
+      id: 'hems',
+      type: 'hems_surplus',
+      data: { grid_mode: 'split', max_age_s: 60, consumers: [{ id: 'load', mode: 'percent', power_source: 'input' }] },
+    }
+    wrapper.vm.edges = []
+    expect(wrapper.vm.debugInputs.map(input => input.id)).toEqual([
+      'grid_import', 'grid_import_changed', 'grid_export', 'grid_export_changed',
+      'enable', 'target', 'plant_ok', 'c_load_enable', 'c_load_power', 'c_load_max_power',
+    ])
 
     wrapper.vm.selectedNode = { id: 'concat', type: 'string_concat', data: { count: 3 } }
     wrapper.vm.edges = [{ id: 'custom', source: 'n1', target: 'concat', sourceHandle: 'value', targetHandle: 'in_4' }]
@@ -1323,6 +1452,32 @@ describe('LogicView graph cycle validation', () => {
     expect(wrapper.vm.validationWarnings).toEqual([])
   })
 
+  it.each(['timer_delay', 'timer_pulse'])('allows feedback connections through %s nodes', async (timerType) => {
+    const graph = makeGraph('graph-1', {
+      flow_data: {
+        nodes: [
+          { id: 'timer', type: timerType, position: { x: 0, y: 0 }, data: {} },
+          { id: 'or', type: 'or', position: { x: 160, y: 0 }, data: {} },
+        ],
+        edges: [
+          { id: 'or-timer', source: 'or', target: 'timer', sourceHandle: 'out', targetHandle: 'trigger' },
+        ],
+      },
+    })
+    const { wrapper } = await mountLogicView({
+      isAdmin: true,
+      graphs: [graph],
+      routeQuery: { graph: 'graph-1' },
+      graphDetails: { 'graph-1': graph },
+    })
+
+    const handle = timerType === 'timer_delay' ? 'trigger' : 'out'
+    wrapper.vm.onConnect({ source: 'timer', target: 'or', sourceHandle: handle, targetHandle: 'in2' })
+
+    expect(wrapper.vm.edges).toHaveLength(2)
+    expect(wrapper.vm.validationWarnings).toEqual([])
+  })
+
   it('blocks saving graphs with direct cycles and marks the nodes', async () => {
     const graph = makeGraph('graph-1', {
       flow_data: {
@@ -1343,7 +1498,7 @@ describe('LogicView graph cycle validation', () => {
       graphDetails: { 'graph-1': graph },
     })
 
-    await wrapper.vm.saveGraph()
+    await wrapper.vm.saveGraph({ manual: true })
 
     expect(logicApi.saveGraph).not.toHaveBeenCalled()
     expect(wrapper.vm.statusMsg.ok).toBe(false)
@@ -1483,7 +1638,7 @@ describe('LogicView duplicate target handle validation (#1116)', () => {
       graphDetails: { 'graph-1': graph },
     })
 
-    await wrapper.vm.saveGraph()
+    await wrapper.vm.saveGraph({ manual: true })
 
     expect(logicApi.saveGraph).not.toHaveBeenCalled()
     expect(wrapper.vm.statusMsg.ok).toBe(false)
@@ -1545,7 +1700,7 @@ describe('LogicView duplicate target handle validation (#1116)', () => {
       graphDetails: { 'graph-1': graph },
     })
 
-    await wrapper.vm.saveGraph()
+    await wrapper.vm.saveGraph({ manual: true })
 
     expect(logicApi.saveGraph).not.toHaveBeenCalled()
     // Two cycle warnings (a, b) plus one duplicate-handle warning (e) — the
@@ -1615,7 +1770,7 @@ describe('LogicView operation error handling', () => {
     })
     logicApi.saveGraph.mockRejectedValue({ response: { data: { detail: 'Save failed' } } })
 
-    await wrapper.vm.saveGraph()
+    await wrapper.vm.saveGraph({ manual: true })
 
     expect(wrapper.vm.statusMsg.ok).toBe(false)
   })

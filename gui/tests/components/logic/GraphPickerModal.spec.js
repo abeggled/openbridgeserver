@@ -475,6 +475,25 @@ describe('GraphPickerModal — unassigned pseudo-folder (#1217 follow-up)', () =
     expect(wrapper.emitted('select')).toBeFalsy()
   })
 
+  it('waits for writes the editor still has queued before deleting (#1333)', async () => {
+    const { wrapper, deleteGraph, logicStore } = await mountWithUnassigned(true)
+    await wrapper.find('[data-testid="picker-unassigned"]').trigger('click')
+    await flushPromises()
+    let finishSave
+    logicStore.enqueueWrite(() => new Promise(resolve => { finishSave = resolve }), 'u1')
+
+    await wrapper.find('[data-testid="picker-graph-delete-u1"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="btn-confirm"]').trigger('click')
+    await flushPromises()
+    expect(deleteGraph).not.toHaveBeenCalled()
+
+    finishSave(true)
+    await flushPromises()
+    expect(deleteGraph).toHaveBeenCalledWith('u1')
+    expect(wrapper.emitted('graph-deleted')).toEqual([['u1']])
+  })
+
   it('cancelling the confirmation deletes nothing', async () => {
     const { wrapper, deleteGraph } = await mountWithUnassigned(true)
     await wrapper.find('[data-testid="picker-unassigned"]').trigger('click')

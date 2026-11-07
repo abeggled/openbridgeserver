@@ -10,11 +10,11 @@
         <NodeTitleEditor
           :value="customLabel"
           :fallback="$t('logic.nodeTypes.python_script')"
-          :editable="auth.isAdmin"
+          :editable="auth.isAdmin && canvasEditable"
           :title-class="['gn-label', customLabel && 'gn-label--custom']"
           @rename="renameNode"
         />
-        <button v-show="hovered" class="gn-delete nodrag" @click.stop="remove" :title="$t('logic.deleteBlock')">✕</button>
+        <button v-if="canvasEditable" v-show="hovered" class="gn-delete nodrag" @click.stop="remove" :title="$t('logic.deleteBlock')">✕</button>
       </div>
       <div class="gn-body">
         <pre class="script-preview">{{ shortScript }}</pre>
@@ -41,6 +41,7 @@ import { Handle, Position, useVueFlow } from '@vue-flow/core'
 import { nodeTint } from '@/utils/logicNodeSurface'
 import NodeTitleEditor from '@/components/logic/NodeTitleEditor.vue'
 import { useAuthStore } from '@/stores/auth'
+import { useCanvasEditable } from '@/components/logic/nodes/canvasEditable'
 
 const props = defineProps({
   id:   { type: String, required: true },
@@ -60,6 +61,9 @@ const shortScript = computed(() => {
 
 const hovered = ref(false)
 const { removeNodes, updateNodeData } = useVueFlow()
+// Card edits (delete, title, and per card negation/resize) pause while the
+// editor holds the canvas read-only (a sheet is loading or being swapped).
+const canvasEditable = useCanvasEditable()
 function remove() { removeNodes([props.id]) }
 
 // ── User-defined block name (issue #1157) ─────────────────────────────────

@@ -12,22 +12,27 @@ import asyncio
 import base64
 import copy
 import email.utils
+import hashlib
+import html
 import http.cookies
 import ipaddress
+import itertools
 import json
 import logging
+import math
 import os
 import re
 import socket
 import stat
 import uuid
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Iterator
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time
 from decimal import Decimal, InvalidOperation
 from functools import partial
 from pathlib import Path
-from time import perf_counter
+from time import monotonic, perf_counter
 from typing import Any
 from urllib.parse import quote, unquote, urljoin, urlparse, urlunparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -35,7 +40,20 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import httpx
 
 from obs.core.json import jsonable
-from obs.logic.executor import GraphExecutor, _OpaqueRecoveredDict, _OpaqueRecoveredSet, _OpaqueRecoveredStr, _replay_known_output_value
+from obs.core.url_values import encode_url_value
+from obs.logic import hems_surplus
+from obs.logic.executor import (
+    GraphExecutor,
+    _OpaqueRecoveredDict,
+    _OpaqueRecoveredSet,
+    _OpaqueRecoveredStr,
+    _replay_known_output_value,
+    _snapshot_debug_value,
+    forget_hems_undo,
+    hems_clock,
+    undo_hems_run,
+)
+from obs.logic.graph_analysis import TICK_BOUNDARY_NODE_TYPES, TIMER_NODE_TYPES
 from obs.logic.models import FlowData
 from obs.logic.node_types import get_node_type
 from obs.logic.variables import (
@@ -56,6 +74,44 @@ _run_graph_executor_in_worker = asyncio.to_thread
 _run_graph_state_copy_in_worker = asyncio.to_thread
 _run_logic_debug_serialization_in_worker = asyncio.to_thread
 _MISSING_STATE = object()
+
+
+@dataclass
+class _TimerState:
+    """Runtime state of a timer_delay / timer_pulse block (issue #1166)."""
+
+    kind: str
+    # The trigger level the block saw last, for its rising-edge detection.
+    prev_trigger: bool = False
+    # Counts the changes of prev_trigger: a run's pending delay starts only if
+    # no newer run recorded another level meanwhile.
+    level_changes: int = 0
+    # Monotonic time a pending delay fires or a pulse that is on ends; None when idle.
+    deadline: float | None = None
+    # timer_pulse: the run publishing the pulse's start is still due.
+    need_on: bool = False
+    # Cascade depth of the run that triggered it (see _timer_run_depth).
+    depth: int = 0
+    # Consecutive runs that failed before they acted (see _timer_retry_due).
+    errors: int = 0
+    # The deadline a failed delay run was re-armed with: a save keeps that pause.
+    retry_at: float | None = None
+    # What fed the trigger when the level was recorded (see
+    # _timer_trigger_signature): a level seen on another input is no baseline.
+    trigger_sig: tuple[str, str] | None = None
+    # Set when the deadline moves, so a task sleeping on it re-reads it.
+    wake: asyncio.Event = field(default_factory=asyncio.Event, compare=False, repr=False)
+
+
+class InvalidFireTriggerError(ValueError):
+    """A debug run cannot fire the requested blocks (#1276): one is no
+    Trigger, or the same run also overrides its trigger level."""
+
+
+def _cron_fire_overrides(node_ids: Iterable[str]) -> dict[str, dict[str, Any]]:
+    """Event overrides of a cron tick firing *node_ids* — shared by the cron
+    schedule and the debug "fire now", so both fire a Trigger identically."""
+    return {node_id: {"trigger": True} for node_id in node_ids}
 
 
 class _ObsoleteGraphExecution(Exception):
@@ -108,6 +164,11 @@ def _copy_graph_worker_state(state: dict[str, Any]) -> tuple[dict[str, Any], dic
     return base, _safe_deepcopy_state(base)
 
 
+def _same_value(a: Any, b: Any) -> bool:
+    """Equal and of the same type — so True is not taken for an already written 1."""
+    return type(a) is type(b) and a == b
+
+
 def _serialize_logic_debug_payload(
     graph_id: str,
     outputs: dict[str, Any],
@@ -151,11 +212,21 @@ _THROTTLE_UNITS: dict[str, float] = {
 }
 _MAX_LOGIC_CASCADE_DEPTH = 10
 _MAX_SEQUENCE_REPEAT_COUNT = 10_000
+# A timer run a save made obsolete is tried again after this pause.
+_TIMER_RETRY_DELAY_S = 1.0
+# How long stop() waits for the runs it cut short to settle.
+_TIMER_STOP_CUT_WAIT_S = 1.0
+# The run tag of a timer run that has not started yet: in no acted set.
+_NOT_STARTED = object()
+# A timer run that fails before it acts is tried this often in all.
+_TIMER_MAX_ERROR_ATTEMPTS = 3
+# A delay or pulse at least this long starts a new logic cascade when it fires or ends.
+_TIMER_NEW_CASCADE_S = 1.0
 
 # Node types the side-effect-free initialization pass (initialize_graph) must
 # not publish through: async/action nodes are not executed there, so their
-# executor outputs are placeholders (e.g. api_client.success=False, timers
-# and missing_node return {}); per-sample accumulators run on a throwaway
+# executor outputs are placeholders (e.g. api_client.success=False, an
+# unfired timer_delay, missing_node returns {}); per-sample accumulators run on a throwaway
 # state copy, so their outputs would include the seed while the persisted
 # state stays untouched; random_value generates a fresh value on every
 # evaluation, so a save would publish a new random actuator value; memory
@@ -174,6 +245,7 @@ _INIT_EXCLUDED_NODE_TYPES = frozenset(
         "timer_delay",
         "timer_pulse",
         "timer_cron",
+        "timer_interval",
         "ical",
         "missing_node",
         "python_script",
@@ -183,6 +255,7 @@ _INIT_EXCLUDED_NODE_TYPES = frozenset(
         "min_max_tracker",
         "consumption_counter",
         "heating_circuit",
+        "hems_surplus",
         "random_value",
         "memory",
     }
@@ -224,7 +297,15 @@ _HELD_ON_UNRESOLVED_SOURCE = frozenset({"change_filter", "edge_detect"})
 # Blocks whose outputs are discrete event pulses rather than sustained levels.
 # They are the roots of the pulse-provenance trace: a consumer fed from one of
 # them must not read the "no pulse this pass" placeholder as a real value.
-_PULSE_ORIGIN_NODE_TYPES = frozenset({"change_filter", "edge_detect"})
+# hems_surplus counts with its trigger outputs only (``_hems_trigger_handles``);
+# its other outputs are levels.
+_PULSE_ORIGIN_NODE_TYPES = frozenset({"change_filter", "edge_detect", "hems_surplus", "timer_delay"})
+
+# An event run wakes a hems_surplus node early only when this much earlier
+# than its loop would anyway.
+_HEMS_WAKE_SLACK_S = 0.5
+# How long stop() waits for HEMS runs still in flight.
+_HEMS_STOP_TIMEOUT_S = 10.0
 
 # Merge's input ports (in1…in30). Merge remembers the last value seen on every
 # wired port plus which one was "active", so a no-pulse placeholder arriving on
@@ -759,6 +840,7 @@ _PUSHOVER_ATTACHMENT_MAX_BYTES = 5_000_000
 _SECRET_FILE_MAX_BYTES = 8192
 _SECRET_FILE_DEFAULT_ROOT = "/run/secrets"
 _API_CLIENT_RETRYABLE_METHODS = {"GET", "HEAD", "OPTIONS"}
+_API_CLIENT_MAX_RESPONSE_BYTES = 1_000_000
 _API_CLIENT_VARIABLE_RE = VARIABLE_RE
 _API_CLIENT_URL_LEADING_STRIP_CHARS = "".join(chr(value) for value in range(0x21))
 _API_CLIENT_URL_REMOVE_CHARS = str.maketrans("", "", "\r\n\t")
@@ -851,6 +933,53 @@ def _migrate_legacy_api_client_field_names(flow: FlowData) -> None:
             legacy_value = node.data.pop(old_key)
             if new_key not in node.data:
                 node.data[new_key] = legacy_value
+
+
+# The timer blocks name their duration differently: (key the block reads, the sibling's key).
+_TIMER_DURATION_KEYS = {
+    "timer_delay": ("delay_s", "duration_s"),
+    "timer_pulse": ("duration_s", "delay_s"),
+}
+
+
+def _migrate_timer_duration_keys(flow: FlowData) -> None:
+    """Move a timer duration saved under the sibling block's key to the one the block reads.
+
+    A Delay saved through the API with only ``duration_s`` (the Pulse's key)
+    ran with the 1 s default (#1377). In-memory and idempotent like the
+    api_client migration above, applied at the same load and read points, so
+    sheets stored that way take their configured duration; the next save
+    from the editor stores it under the block's own key.
+
+    Only a usable duration (a finite number >= 0, not a bool) is moved, and
+    only while the block's own key is absent or null: an empty own key is a
+    deliberate choice of the default, and an unusable sibling value stays an
+    ignored stray key, as it was before.
+    """
+    for node in flow.nodes:
+        keys = _TIMER_DURATION_KEYS.get(node.type)
+        if keys is None:
+            continue
+        own, sibling = keys
+        if node.data.get(own) is not None or sibling not in node.data:
+            continue
+        value = node.data[sibling]
+        if isinstance(value, bool):
+            continue  # float(False) == 0.0 would turn a stray flag into a duration
+        try:
+            seconds = float(value)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not math.isfinite(seconds) or seconds < 0:
+            continue
+        del node.data[sibling]
+        node.data[own] = value
+
+
+def _migrate_legacy_node_data(flow: FlowData) -> None:
+    """All in-memory upgrades of stored ``node.data`` keys, applied wherever a stored flow is loaded or read."""
+    _migrate_legacy_api_client_field_names(flow)
+    _migrate_timer_duration_keys(flow)
 
 
 _normalise_api_client_variables = normalise_variable_slots
@@ -1410,13 +1539,53 @@ def _is_public_http_url(url: str) -> bool:
     return True
 
 
-async def _read_limited_response_body(resp: httpx.Response, max_bytes: int) -> bytes:
+class _ResponseTooLargeError(ValueError):
+    pass
+
+
+async def _read_limited_response_body(resp: httpx.Response, max_bytes: int, *, label: str = "iCal response") -> bytes:
     body = bytearray()
     async for chunk in resp.aiter_bytes():
         body.extend(chunk)
         if len(body) > max_bytes:
-            raise ValueError(f"iCal response too large: {len(body)} bytes")
+            raise _ResponseTooLargeError(f"{label} too large: {len(body)} bytes")
     return bytes(body)
+
+
+async def _send_api_client_request(client: httpx.AsyncClient, method: str, url: str, **kwargs: Any) -> tuple[httpx.Response, bytes | None]:
+    """Send an api_client request and read at most the response size limit (#530).
+
+    The body is streamed and abandoned as soon as it exceeds the limit (or the
+    declared Content-Length already does), so an oversized response is never
+    materialized or JSON-parsed in full. ``None`` as body marks that case.
+    """
+    async with client.stream(method, url, **kwargs) as resp:
+        declared = resp.headers.get("content-length", "")
+        # 204 and 304 have no body; a 304 may still declare the length of the 200 it stands for (RFC 9110 §8.6).
+        if resp.status_code not in (204, 304) and declared.isdigit() and int(declared) > _API_CLIENT_MAX_RESPONSE_BYTES:
+            return resp, None
+        try:
+            return resp, await _read_limited_response_body(resp, _API_CLIENT_MAX_RESPONSE_BYTES, label="API response")
+        except _ResponseTooLargeError:
+            return resp, None
+
+
+def _api_client_response_output(resp: httpx.Response, body: bytes | None, resp_type: str) -> dict[str, Any]:
+    """Node output for a received api_client response; oversized bodies fail the node."""
+    if body is None:
+        return {
+            "response": f"Response exceeds the size limit of {_API_CLIENT_MAX_RESPONSE_BYTES} bytes",
+            "status": resp.status_code,
+            "success": False,
+        }
+    text = body.decode(resp.encoding or "utf-8", errors="replace")
+    data: Any = text
+    if resp_type in ("json", "application/json"):
+        try:
+            data = json.loads(body)
+        except ValueError:
+            data = text
+    return {"response": data, "status": resp.status_code, "success": 200 <= resp.status_code < 300}
 
 
 def _ical_payload_limit_bytes(node_data: dict[str, Any]) -> int:
@@ -1445,6 +1614,192 @@ def init_logic_manager(db: Any, event_bus: Any, registry: Any) -> LogicManager:
     return _manager
 
 
+# Multi-output fan-in blocks: each output handle can be decided by a different input.
+_PER_HANDLE_FAN_IN_TYPES = frozenset({"binary_stats"})
+# Stateless gates the probe evaluates to follow such a block's outputs downstream.
+_PROBE_TRANSPARENT_TYPES = frozenset({"not", "and", "or", "xor"})
+# Upper bound on volatile inputs probed combinatorially (2**n evaluations), and
+# on the joint combinations of one probe once correlated groups are expanded.
+_MAX_PROBED_VOLATILE_INPUTS = 8
+_MAX_PROBED_COMBINATIONS = 2**_MAX_PROBED_VOLATILE_INPUTS
+
+
+def _handle_independent_of_volatile_inputs(
+    probe: GraphExecutor,
+    node_by_id: dict[str, Any],
+    edges: list[Any],
+    debug_overrides: dict[str, dict[str, Any]],
+    node_id: str,
+    output_handle: str,
+    volatile_edge: Callable[[Any], bool],
+    outs: dict[str, dict[str, Any]],
+    cache: dict[Any, bool],
+    seeds: frozenset[str] = frozenset(),
+    _seen: frozenset[str] = frozenset(),
+) -> bool:
+    """True if ``output_handle`` of a multi-output fan-in node ignores its volatile inputs.
+
+    A whole-node taint (unresolved source, missing pulse) is too coarse
+    for a block like Binary Statistics, where one input can change
+    ``total`` yet leave ``threshold_reached`` decided by a sibling. Every
+    combination of the volatile inputs is probed and only the handle a
+    consumer reads is compared. An input fed by another such block counts
+    as volatile only if the upstream handle itself is; debug-overridden
+    ports never are.
+
+    ``cache`` memoises answers for one taint pass, during which ``outs``
+    must not change; the caller creates a fresh dict per pass. A node in
+    ``seeds`` is tainted itself, whatever its inputs are, so none of its
+    handles is independent.
+    """
+
+    def fan_in_node(nid: str, seen: frozenset[str]) -> Any | None:
+        candidate = node_by_id.get(nid)
+        return candidate if candidate is not None and candidate.type in _PER_HANDLE_FAN_IN_TYPES and nid not in seen else None
+
+    def volatile_state(nid: str, seen: frozenset[str]) -> tuple[dict[str, Any], dict[str, Any]]:
+        inputs: dict[str, Any] = {}
+        volatile: dict[str, Any] = {}
+        for incoming in edges:
+            if incoming.target != nid or incoming.source not in node_by_id:
+                # An edge from a deleted node is not wired for the executor either.
+                continue
+            handle = incoming.targetHandle or "in"
+            inputs[handle] = GraphExecutor._get_output_value(outs.get(incoming.source, {}), incoming.sourceHandle or "out")
+            if (
+                handle not in debug_overrides.get(nid, {})
+                and volatile_edge(incoming)
+                and not _handle_independent_of_volatile_inputs(
+                    probe,
+                    node_by_id,
+                    edges,
+                    debug_overrides,
+                    incoming.source,
+                    incoming.sourceHandle or "out",
+                    volatile_edge,
+                    outs,
+                    cache,
+                    seeds,
+                    seen | {nid},
+                )
+            ):
+                volatile[handle] = incoming
+        inputs.update(debug_overrides.get(nid, {}))
+        return inputs, volatile
+
+    def correlation(incoming: Any, seen: frozenset[str]) -> tuple[tuple[str, ...], Callable[[dict[str, Any]], Any]] | None:
+        """Common origin of a volatile edge, and how its value arrives.
+
+        The edge is followed upstream through stateless blocks (gates and
+        fan-in blocks) that have exactly one volatile input; their remaining
+        inputs keep their current values. It ends at a fan-in block with
+        several volatile inputs, whose feasible outputs are probed, or at the
+        volatile output of any other block, probed as a free boolean. Returns
+        a key for that origin and a function mapping the origin's outputs to
+        the value arriving over ``incoming``; None for a gate with several
+        volatile inputs or a cycle.
+        """
+        hops: list[tuple[Any, dict[str, Any], str, str]] = []
+        visited: set[str] = set()
+        while True:
+            source = node_by_id[incoming.source]
+            if source.type not in _PROBE_TRANSPARENT_TYPES and source.type not in _PER_HANDLE_FAN_IN_TYPES:
+                origin: tuple[str, ...] = ("output", source.id, incoming.sourceHandle or "out")
+                break
+            if source.id in visited or source.id in seen:
+                return None
+            visited.add(source.id)
+            source_inputs, source_volatile = volatile_state(source.id, seen)
+            if len(source_volatile) != 1:
+                if source.type not in _PER_HANDLE_FAN_IN_TYPES:
+                    return None
+                origin = ("block", source.id)
+                break
+            ((source_handle, source_incoming),) = source_volatile.items()
+            hops.append((source, source_inputs, source_handle, incoming.sourceHandle or "out"))
+            incoming = source_incoming
+        origin_handle = incoming.sourceHandle or "out"
+
+        def carried(result: dict[str, Any]) -> Any:
+            value = GraphExecutor._get_output_value(result, origin_handle)
+            for hop, hop_inputs, hop_handle, out_handle in reversed(hops):
+                hop_result = probe._eval_node(hop, GraphExecutor._resolve_effective_inputs(hop, {**hop_inputs, hop_handle: value}))
+                value = GraphExecutor._get_output_value(hop_result, out_handle)
+            return value
+
+        return origin, carried
+
+    def assignments(nid: str, inputs: dict[str, Any], volatile: dict[str, Any], seen: frozenset[str]) -> Iterator[dict[str, Any]]:
+        """Joint values the volatile inputs of ``nid`` can take together.
+
+        Handles derived from the same origin are correlated (for example
+        ``count_true`` and ``count_false`` of one block always add up to the
+        supplied inputs), also through gates and chained blocks in between,
+        so only the values that origin can actually produce are combined;
+        unrelated handles are probed as free booleans. The combinations are
+        yielded lazily and capped at ``_MAX_PROBED_COMBINATIONS``: chained
+        blocks multiply.
+        """
+        if len(volatile) > _MAX_PROBED_VOLATILE_INPUTS:
+            raise ValueError("too many volatile inputs")
+        carriers: dict[str, Callable[[dict[str, Any]], Any]] = {}
+        by_origin: dict[tuple[str, ...], list[str]] = {}
+        for handle, incoming in volatile.items():
+            link = correlation(incoming, seen | {nid})
+            if link is not None:
+                by_origin.setdefault(link[0], []).append(handle)
+                carriers[handle] = link[1]
+        grouped = {h for group in by_origin.values() if len(group) > 1 for h in group}
+        options: list[list[dict[str, Any]]] = [[{h: False}, {h: True}] for h in sorted(volatile) if h not in grouped]
+        for origin, group in sorted(by_origin.items()):
+            if len(group) < 2:
+                continue
+            if origin[0] == "block":
+                upstream = node_by_id[origin[1]]
+                up_inputs, up_volatile = volatile_state(origin[1], seen | {nid})
+                results: Iterator[dict[str, Any]] = (
+                    probe._eval_node(upstream, GraphExecutor._resolve_effective_inputs(upstream, {**up_inputs, **up_assignment}))
+                    for up_assignment in assignments(origin[1], up_inputs, up_volatile, seen | {nid})
+                )
+            else:
+                results = iter([{origin[2]: False}, {origin[2]: True}])
+            # Many upstream combinations give the same handle values (256 input
+            # patterns yield at most 9 count pairs), so keep each one once.
+            group_options: dict[str, dict[str, Any]] = {}
+            for result in results:
+                values = {h: carriers[h](result) for h in sorted(group)}
+                group_options.setdefault(repr(sorted(values.items())), values)
+            options.append(list(group_options.values()))
+        if math.prod(len(option) for option in options) > _MAX_PROBED_COMBINATIONS:
+            raise ValueError("too many probe combinations")
+        return ({k: v for part in combo for k, v in part.items()} for combo in itertools.product(*options))
+
+    node = fan_in_node(node_id, _seen)
+    if node is None or node_id in seeds:
+        return False
+    # ``outs`` and ``debug_overrides`` are fixed for one pass, so within it the
+    # answer only depends on which edges are volatile (taint grows during a
+    # pass). Look it up before the recursive volatile_state() walk.
+    key = (node_id, output_handle, tuple(i for i, e in enumerate(edges) if volatile_edge(e)), _seen)
+    if key in cache:
+        return cache[key]
+    try:
+        inputs, volatile = volatile_state(node_id, _seen)
+        actual = GraphExecutor._get_output_value(outs.get(node_id, {}), output_handle)
+        independent = True
+        # An output can depend on a conjunction of volatile inputs, so
+        # every feasible combination is probed, not one input at a time.
+        for assignment in assignments(node_id, inputs, volatile, _seen):
+            result = probe._eval_node(node, GraphExecutor._resolve_effective_inputs(node, {**inputs, **assignment}))
+            if not GraphExecutor._nan_aware_equal(GraphExecutor._get_output_value(result, output_handle), actual):
+                independent = False
+                break
+    except Exception:  # noqa: BLE001 - malformed imported config remains conservative
+        independent = False
+    cache[key] = independent
+    return independent
+
+
 class LogicManager:
     def __init__(self, db: Any, event_bus: Any, registry: Any):
         self._db = db
@@ -1466,6 +1821,21 @@ class LogicManager:
         self._bulk_init_pending: set[str] = set()
         # cron tasks: (graph_id, node_id) → asyncio.Task
         self._cron_tasks: dict[tuple[str, str], asyncio.Task] = {}  # type: ignore[type-arg]
+        # When each hems_surplus loop next wakes on its own (hems_clock seconds).
+        self._hems_planned_wake: dict[tuple[str, str], float] = {}
+        # (graph id, node id) of early-wake runs executing right now.
+        self._hems_waking: set[tuple[str, str]] = set()
+        # The sheet run currently executing for each (graph id, node id).
+        self._hems_runs: dict[tuple[str, str], asyncio.Future] = {}  # type: ignore[type-arg]
+        # Runs (by run tag) that acted outside the graph; see _undo_hems_run.
+        self._hems_acted_runs: set[object] = set()
+        self._hems_run_ids = itertools.count(1)
+        # Set by stop(): runs still finishing must not schedule new wakes.
+        self._hems_stopping = False
+        # Earliest pending early wake per (graph id, node id), and every
+        # early-wake task per graph so they can be cancelled with it.
+        self._hems_wake_at: dict[tuple[str, str], float] = {}
+        self._hems_wake_tasks: dict[str, set[asyncio.Task]] = {}  # type: ignore[type-arg]
         # Coalesce concurrent refreshes per iCalendar node.  Keep this lock
         # scoped to the fetch itself: graph execution may synchronously publish
         # an event that re-enters the same graph.
@@ -1495,6 +1865,27 @@ class LogicManager:
         self._sequence_graph_signatures: dict[str, str] = {}
         self._sequence_restarts: set[tuple[str, str]] = set()
         self._sequence_restart_sources: dict[tuple[str, str], asyncio.Task] = {}
+        # Delay/pulse timers: their state per graph and node, and per
+        # (graph id, node id) the task waiting for each and its run in flight.
+        self._timers: dict[str, dict[str, _TimerState]] = {}
+        # Sheets whose timer state changed since it was last persisted.
+        self._timer_dirty: set[str] = set()
+        # Per sheet and timer block, the sequence number of the run that last
+        # recorded its trigger level: an older run finishing later does not
+        # overwrite it (runs overlap while one waits on an action).
+        self._timer_run_seqs = itertools.count(1)
+        self._timer_level_seqs: dict[str, dict[str, int]] = {}
+        # Replaced when a sheet's timers are forgotten (reset) and dropped when
+        # the sheet is deleted, so a run still in flight does not bring them back.
+        self._timer_epochs: dict[str, object] = {}
+        # Sheets whose persisted timer state has been taken over.
+        self._timers_adopted: set[str] = set()
+        # Set by stop(): a run still finishing must not start a new timer.
+        self._timers_stopping = False
+        self._timer_tasks: dict[tuple[str, str], asyncio.Task] = {}  # type: ignore[type-arg]
+        self._timer_runs: dict[tuple[str, str], asyncio.Future] = {}  # type: ignore[type-arg]
+        # A timer run in flight -> marks its timer due if stop() gives up on it before it acted.
+        self._timer_cut_hooks: dict[asyncio.Future, Callable[[], None]] = {}  # type: ignore[type-arg]
         # application-level config (e.g. timezone) — loaded from app_settings table
         self._app_config: dict[str, Any] = {
             "timezone": "Europe/Zurich",
@@ -1507,6 +1898,8 @@ class LogicManager:
 
     async def start(self) -> None:
         """Subscribe to EventBus, load all graphs and start cron schedulers."""
+        self._hems_stopping = False
+        self._timers_stopping = False
         await self._load_app_config()
         await self._load_graphs()
         from obs.core.event_bus import DataPointRenamedEvent, DataValueEvent
@@ -1514,6 +1907,9 @@ class LogicManager:
         self._event_bus.subscribe(DataValueEvent, self._on_value_event)
         self._event_bus.subscribe(DataPointRenamedEvent, self._on_datapoint_renamed)
         self._start_cron_tasks()
+        self._adopt_persisted_timer_state()
+        self._resume_timers()
+        await self._persist_dirty_timers()
         logger.info("LogicManager started — %d graphs loaded", len(self._graphs))
 
     async def stop(self) -> None:
@@ -1524,7 +1920,34 @@ class LogicManager:
         for task in list(self._cron_tasks.values()):
             task.cancel()
         self._cron_tasks.clear()
+        self._hems_planned_wake.clear()
+        self._hems_stopping = True
+        self._cancel_hems_wakes()
+        self._timers_stopping = True
+        timer_tasks = list(self._timer_tasks.values())
+        self._cancel_timer_tasks()
+        # Let them handle the cancellation (a pulse end still due is marked so)
+        # before their state is persisted below.
+        await asyncio.gather(*timer_tasks, return_exceptions=True)
+        # A HEMS or timer run in flight is never cut short (see _hems_run): let
+        # it finish before the bus goes away, within a bound.
+        if runs := [run for run in (*self._hems_runs.values(), *self._timer_runs.values()) if not run.done()]:
+            _done, pending = await asyncio.wait(runs, timeout=_HEMS_STOP_TIMEOUT_S)
+            for run in pending:
+                run.cancel()  # past the bound: it must not publish once the bus is gone
+            if pending:
+                # Their done-callbacks run first: one cut short marks its timer
+                # due. Bounded too: a run waiting on a script worker thread
+                # cannot be cancelled right away.
+                await asyncio.wait(pending, timeout=_TIMER_STOP_CUT_WAIT_S)
+                # Still not settled (a script worker thread): it can no longer
+                # publish, so one that had not acted yet stays due in what is saved.
+                for run in pending:
+                    if not run.done() and (cut := self._timer_cut_hooks.get(run)) is not None:
+                        cut()
         self._cancel_sequence_tasks()
+        # Pending timers resume after the restart only from what is saved.
+        await self._persist_dirty_timers()
 
     async def reload(self) -> None:
         """Reload graph cache from DB and restart cron schedulers."""
@@ -1532,8 +1955,16 @@ class LogicManager:
         for task in list(self._cron_tasks.values()):
             task.cancel()
         self._cron_tasks.clear()
+        # Pending HEMS early wakes are kept: they re-read the graph when they
+        # fire, and a reload restarts every loop only at its planned wake.
         await self._load_graphs()
         live_graph_ids = set(self._graphs)
+        # Plans of sheets that are gone (e.g. a config restore) must not outlive them.
+        for plans in (self._hems_planned_wake, self._hems_wake_at):
+            for key in [k for k in plans if k[0] not in live_graph_ids]:
+                del plans[key]
+        for graph_id in [gid for gid, tasks in self._hems_wake_tasks.items() if not tasks]:
+            del self._hems_wake_tasks[graph_id]  # emptied by their tasks finishing
         # A reload restarts all schedulers, but it must not invalidate work for
         # unrelated graphs.  Rotate only configurations that actually changed
         # (or disappeared); save paths that called invalidate_cache() already
@@ -1550,6 +1981,11 @@ class LogicManager:
             self._prune_graph_executor_lock(graph_id)
         for graph_id in set(self._hysteresis) - live_graph_ids:
             self._hysteresis.pop(graph_id, None)
+        for graph_id in (
+            set(self._timers) | set(self._timer_epochs) | set(self._timer_level_seqs) | self._timers_adopted | self._timer_dirty
+        ) - live_graph_ids:
+            self._forget_timers(graph_id)  # e.g. a bulk delete or restore
+            self._timer_epochs.pop(graph_id, None)
         for key in [key for key in self._ical_fetch_locks if key[0] not in live_graph_ids]:
             self._ical_fetch_locks.pop(key, None)
         for key in [key for key in self._ical_precompute_locks if key[0] not in live_graph_ids]:
@@ -1599,6 +2035,9 @@ class LogicManager:
             ):
                 self._cancel_sequence_tasks(graph_id)
         self._start_cron_tasks()
+        self._adopt_persisted_timer_state()
+        self._resume_timers()
+        await self._persist_dirty_timers()
 
     # ── App Config ────────────────────────────────────────────────────────
 
@@ -1812,6 +2251,641 @@ class LogicManager:
         )
         self._sequence_tasks[key] = task
 
+    # ── Delay / pulse timers (issue #1166) ───────────────────────────────
+    #
+    # A trigger pulse on timer_delay fires its output delay_s later in a run of
+    # its own; a new trigger while the delay is pending starts it over. A
+    # trigger on timer_pulse sets "out" for duration_s; a new trigger while the
+    # pulse is on extends it to duration_s from then. Each firing re-runs the
+    # whole sheet like a cron tick and, after a real wait, starts a new cascade
+    # (see _timer_run_depth). A pending delay or pulse is persisted with the node state: after
+    # a save or a restart it still fires or ends at its planned time (at once
+    # when that has passed). Disabling a sheet drops its pending delays; a pulse
+    # ends on reactivation. Runs for one block never overlap, a run a save made
+    # obsolete is retried (and one that failed before it acted, a few times),
+    # and deadlines run on the monotonic clock.
+
+    @staticmethod
+    def _timer_seconds(raw: Any, default: float) -> float:
+        """A configured duration in seconds: unset or unusable means *default*, negative 0."""
+        if raw is None or raw == "":
+            return default
+        try:
+            seconds = float(raw)
+        except (TypeError, ValueError, OverflowError):
+            return default
+        if not math.isfinite(seconds):
+            return default
+        return max(0.0, seconds)
+
+    @classmethod
+    def _timer_duration(cls, node: Any) -> float:
+        """The configured delay_s / duration_s of a timer block."""
+        return cls._timer_seconds(node.data.get(_TIMER_DURATION_KEYS[node.type][0]), 1.0)
+
+    def _timer_state(self, graph_id: str, node_id: str, kind: str) -> _TimerState:
+        nodes = self._timers.setdefault(graph_id, {})
+        state = nodes.get(node_id)
+        if state is None or state.kind != kind:
+            state = nodes[node_id] = _TimerState(kind)
+        return state
+
+    def _current_timer_node(self, graph_id: str, node: Any) -> Any | None:
+        """*node* as the sheet now stands — None when a save removed, retyped
+        or disabled it. While a save briefly unloads the sheet, *node* itself."""
+        entry = self._graphs.get(graph_id)
+        if entry is None:
+            return node
+        if not entry[1]:
+            return None
+        return next((current for current in entry[2].nodes if current.id == node.id and current.type == node.type), None)
+
+    def _active_pulses(self, graph_id: str) -> frozenset[str]:
+        """The timer_pulse blocks of a sheet that are on."""
+        return frozenset(
+            node_id for node_id, timer in self._timers.get(graph_id, {}).items() if timer.kind == "timer_pulse" and timer.deadline is not None
+        )
+
+    @staticmethod
+    def _timer_trigger_signature(flow: FlowData, node_id: str) -> tuple[str, str]:
+        """What feeds a timer block's trigger: its edge and everything upstream of it.
+
+        Two hashes: the whole input, block settings included, and its wiring
+        alone — the connections, the blocks' types and the data points their
+        Read Objects read. A settings change keeps the wiring.
+        """
+        # The last edge into a handle is the effective one (GraphExecutor._build_edge_map).
+        effective: dict[tuple[str, str], Any] = {}
+        for edge in flow.edges:
+            effective[(edge.target, edge.targetHandle or "in")] = edge
+        incoming: dict[str, list[Any]] = {}
+        for (target, _handle), edge in effective.items():
+            incoming.setdefault(target, []).append(edge)
+        nodes_by_id = {node.id: node for node in flow.nodes}
+        wiring: list[str] = []
+        settings: list[str] = []
+        seen: set[str] = set()
+        frontier = [edge for edge in (effective.get((node_id, "trigger")),) if edge is not None]
+        while frontier:
+            edge = frontier.pop()
+            wiring.append(json.dumps(["edge", edge.source, edge.sourceHandle, edge.target, edge.targetHandle]))
+            if edge.source in seen or edge.source == node_id:
+                continue
+            seen.add(edge.source)
+            source = nodes_by_id.get(edge.source)
+            if source is None:
+                wiring.append(json.dumps(["node", edge.source]))
+                continue
+            datapoint = source.data.get("datapoint_id") if source.type == "datapoint_read" else None
+            wiring.append(json.dumps(["node", edge.source, source.type, datapoint], default=str))
+            # Without its label: a rename is a layout-only save (update_cached_graph), no new input.
+            data = {key: value for key, value in source.data.items() if key != "label"}
+            settings.append(json.dumps(["data", edge.source, data], sort_keys=True, default=str))
+            frontier.extend(incoming.get(edge.source, ()))
+        wiring_hash = hashlib.sha256("\n".join(sorted(wiring)).encode()).hexdigest()
+        return hashlib.sha256("\n".join([wiring_hash, *sorted(settings)]).encode()).hexdigest(), wiring_hash
+
+    def _set_timer_level(self, graph_id: str, node: Any, level: bool, trigger_sig: tuple[str, str] | None = None) -> None:
+        """Record a block's trigger level (seen on the input *trigger_sig* describes).
+
+        A low level of an idle block needs no state, so a sheet whose timers
+        are all idle and low has nothing to keep.
+        """
+        nodes = self._timers.get(graph_id, {})
+        timer = nodes.get(node.id)
+        if timer is None or timer.kind != node.type:
+            if not level:
+                return
+            timer = self._timer_state(graph_id, node.id, node.type)
+        if trigger_sig is not None:
+            timer.trigger_sig = trigger_sig
+        # A rise needs no write of its own: it starts the timer, which persists
+        # it. A fall is persisted, or a restart would take the input as still
+        # high and miss its next rise.
+        if timer.prev_trigger and not level:
+            self._timer_dirty.add(graph_id)
+        if timer.prev_trigger != level:
+            timer.level_changes += 1
+        timer.prev_trigger = level
+        task = self._timer_tasks.get((graph_id, node.id))
+        if level or timer.deadline is not None or timer.need_on or (task is not None and not task.done()):
+            return
+        del nodes[node.id]
+        if not nodes:
+            del self._timers[graph_id]
+
+    async def _persist_dirty_timers(self) -> None:
+        """Persist every sheet whose timer state changed outside a run."""
+        for graph_id in list(self._timer_dirty):
+            # A sheet briefly unloaded by a save keeps its mark; a deleted one
+            # lost it already (_forget_timers).
+            if graph_id in self._graphs:
+                await self._persist_node_state(graph_id)
+
+    def _cancel_timer_tasks(self, graph_id: str | None = None) -> None:
+        for key in [key for key in self._timer_tasks if graph_id is None or key[0] == graph_id]:
+            self._cancel_timer_task(key)
+
+    def _cancel_timer_task(self, key: tuple[str, str]) -> None:
+        task = self._timer_tasks.pop(key, None)
+        if task is not None:
+            task.cancel()
+
+    def _forget_timers(self, graph_id: str) -> None:
+        """Cancel and drop every timer of a sheet (deleted or reset)."""
+        self._cancel_timer_tasks(graph_id)
+        self._timers.pop(graph_id, None)
+        self._timer_level_seqs.pop(graph_id, None)
+        self._timers_adopted.discard(graph_id)
+        self._timer_dirty.discard(graph_id)
+        self._timer_epochs[graph_id] = object()
+
+    def _spawn_timer(self, graph_id: str, node_id: str, kind: str) -> None:
+        if self._timers_stopping:
+            return  # the state stays and is persisted; the next start resumes it
+        run = self._run_timer_delay if kind == "timer_delay" else self._run_timer_pulse
+        self._timer_tasks[(graph_id, node_id)] = asyncio.create_task(run(graph_id, node_id), name=f"{kind}-{graph_id[:8]}-{node_id[:8]}")
+
+    def _start_timer(self, graph_id: str, node: Any, logic_depth: int, triggered_at: float | None = None) -> bool:
+        """(Re)start a triggered delay or pulse; False when the cascade limit refuses it.
+
+        A delay runs from *triggered_at* (the monotonic start of the run that
+        saw the trigger) when given: a slow action of that run is no part of it.
+        """
+        # The runs it causes count one more step — a pulse's start at once, a
+        # short timer's firing or end too (_timer_run_depth) — and no sheet runs
+        # at the limit (see _on_value_event).
+        next_cascade = node.type == "timer_delay" and self._timer_duration(node) >= _TIMER_NEW_CASCADE_S
+        if not next_cascade and logic_depth + 1 >= _MAX_LOGIC_CASCADE_DEPTH:
+            logger.warning("Logic cascade depth limit reached: timer graph=%s node=%s not started", graph_id[:8], node.id[:8])
+            self._timer_dirty.add(graph_id)  # the used-up edge is persisted, or a restart would revive the loop
+            return False
+        key = (graph_id, node.id)
+        state = self._timer_state(graph_id, node.id, node.type)
+        state.depth = logic_depth
+        self._timer_dirty.add(graph_id)
+        if node.type == "timer_delay":
+            # Starts over: a waiting task sleeps on to the new deadline, and one
+            # busy firing fires again for it afterwards.
+            state.deadline = (monotonic() if triggered_at is None else triggered_at) + self._timer_duration(node)
+        else:
+            if state.deadline is None:
+                state.need_on = True
+            state.deadline = monotonic() + self._timer_duration(node)
+        state.wake.set()
+        task = self._timer_tasks.get(key)
+        if task is None or task.done():
+            # A running task picks the new deadline (or a retrigger during its
+            # run) up by itself; cancelling it could lose a due firing or start.
+            self._spawn_timer(graph_id, node.id, node.type)
+        return True
+
+    def _adopt_persisted_timer_state(self) -> None:
+        """Take the timer state restored with the node state over — once per sheet.
+
+        _load_graphs re-reads the row of a sheet without hysteresis state on
+        every reload; by then the manager's own timer state is the current one,
+        so the row's timer entries are only dropped.
+        """
+        now_wall, now_mono = datetime.now(UTC).timestamp(), monotonic()
+        for graph_id, (_name, _enabled, flow) in list(self._graphs.items()):
+            adopting = graph_id not in self._timers_adopted
+            self._timers_adopted.add(graph_id)
+            hyst = self._hysteresis.get(graph_id)
+            if not hyst:
+                continue
+            restored_high: list[Any] = []
+            for node in flow.nodes:
+                saved = hyst.pop(node.id, None) if node.type in TIMER_NODE_TYPES else None
+                if isinstance(saved, dict) and node.data.get("persist_state") is False:
+                    # A row left from before the opt-out: rewritten without it,
+                    # or re-enabling persistence later would revive it.
+                    self._timer_dirty.add(graph_id)
+                if (
+                    not adopting
+                    or not isinstance(saved, dict)
+                    or node.id in self._timers.get(graph_id, {})
+                    or node.data.get("persist_state") is False  # a row left from before the opt-out
+                ):
+                    continue
+                state = self._timer_state(graph_id, node.id, node.type)
+                state.prev_trigger = saved.get("timer_prev_trigger") is True
+                if state.prev_trigger:
+                    restored_high.append(node)
+                if "timer_deadline" in saved:
+                    # At most one configured duration ahead: a wall clock that
+                    # jumped (a host without RTC before NTP) must not hold it for years.
+                    duration_s = self._timer_duration(node)
+                    try:
+                        state.deadline = now_mono + min(float(saved["timer_deadline"]) - now_wall, duration_s)
+                    except (TypeError, ValueError, OverflowError):
+                        state.deadline = now_mono
+                    state.need_on = saved.get("pulse_need_on") is True
+            if restored_high:
+                # The input may have fallen while the server was down: a level
+                # still taken as high would swallow its next rise.
+                levels = self._trigger_levels_now(graph_id, flow, {node.id for node in restored_high})
+                for node in restored_high:
+                    if levels.get(node.id) is False:
+                        self._set_timer_level(graph_id, node, False)
+
+    def _trigger_levels_now(self, graph_id: str, flow: FlowData, node_ids: set[str]) -> dict[str, bool]:
+        """The trigger level of the timer blocks among *node_ids* as the registry now stands.
+
+        A side-effect-free pass like initialize_graph's. A trigger behind a Read
+        Object without a value, a block excluded from initialization (actions,
+        timers, memory, ...), an edge detector or a "changed" pulse has no
+        level here and is left out.
+        """
+        seeds: dict[str, dict[str, Any]] = {}
+        unknown: set[str] = set()
+        for node in flow.nodes:
+            if node.type in _INIT_EXCLUDED_NODE_TYPES or node.type == "edge_detect":
+                unknown.add(node.id)
+            if node.type != "datapoint_read":
+                continue
+            value_state = None
+            try:
+                value_state = self._registry.get_value(uuid.UUID(node.data.get("datapoint_id") or ""))
+            except (ValueError, TypeError, AttributeError):
+                pass
+            if value_state is not None and value_state.value is not None:
+                seeds[node.id] = {"value": value_state.value, "changed": False}
+            else:
+                unknown.add(node.id)
+        effective = list({(edge.target, edge.targetHandle or "in"): edge for edge in flow.edges}.values())
+        unknown.update(edge.target for edge in effective if edge.sourceHandle == "changed" and edge.target not in node_ids)
+        unknown = _downstream_closure(unknown, effective)
+        sources = {
+            edge.target: (edge.source, edge.sourceHandle or "out")
+            for edge in effective
+            if edge.target in node_ids and (edge.targetHandle or "in") == "trigger" and edge.source not in unknown and edge.sourceHandle != "changed"
+        }
+        if not sources:
+            return {}
+        probe = flow.model_copy(deep=True)
+        for node in probe.nodes:
+            if node.type in _INIT_EXCLUDED_NODE_TYPES:
+                node.type = "missing_node"
+        boundary_ids = {node.id for node in flow.nodes if node.type in TICK_BOUNDARY_NODE_TYPES}
+        probe.edges = [edge for edge in probe.edges if edge.target not in boundary_ids]
+        try:
+            outputs = GraphExecutor(
+                probe,
+                _safe_deepcopy_state(self._hysteresis.get(graph_id, {})),
+                self._app_config,
+                retained_boundary_handles={node.id: {"out"} for node in flow.nodes if node.type in _INIT_EXCLUDED_NODE_TYPES},
+                datapoint_lookup=self._datapoint_value_lookup,
+            ).execute(seeds, commit_memory=False)
+        except Exception:
+            logger.warning("Graph %s: could not evaluate timer triggers", graph_id[:8], exc_info=True)
+            return {}
+        levels: dict[str, bool] = {}
+        for node_id, (source_id, handle) in sources.items():
+            source_out = outputs.get(source_id, {})
+            value = GraphExecutor._get_output_value(source_out, handle)
+            if "__error__" not in source_out and value is not None:
+                levels[node_id] = GraphExecutor._to_bool(value)
+        return levels
+
+    def _timer_states_to_persist(self, graph_id: str, node_ids: set[str] | None) -> dict[str, dict[str, Any]]:
+        """Timer state of a sheet as node state; *node_ids* limits it to persisted nodes."""
+        now_wall, now_mono = datetime.now(UTC).timestamp(), monotonic()
+        persisted: dict[str, dict[str, Any]] = {}
+        for node_id, state in self._timers.get(graph_id, {}).items():
+            if node_ids is not None and node_id not in node_ids:
+                continue
+            saved: dict[str, Any] = {"timer_prev_trigger": state.prev_trigger}
+            if state.deadline is not None:
+                saved["timer_deadline"] = now_wall + (state.deadline - now_mono)
+                saved["pulse_need_on"] = state.need_on
+            persisted[node_id] = saved
+        return persisted
+
+    def _resume_timers(self) -> None:
+        """Prune timer state and run every pending timer without a task (save, restart, reactivation)."""
+        for graph_id, nodes in list(self._timers.items()):
+            entry = self._graphs.get(graph_id)
+            nodes_by_id = {node.id: node for node in entry[2].nodes} if entry is not None else {}
+            types = {node_id: node.type for node_id, node in nodes_by_id.items()}
+            enabled = entry is not None and entry[1]
+            trigger_sigs = {
+                node_id: self._timer_trigger_signature(entry[2], node_id)  # type: ignore[index]
+                for node_id, state in nodes.items()
+                if types.get(node_id) == state.kind
+            }
+            # A save changed what feeds a trigger still taken as high: its level
+            # as the sheet now stands is the baseline.
+            changed_high = {
+                node_id for node_id, sig in trigger_sigs.items() if nodes[node_id].trigger_sig not in (None, sig) and nodes[node_id].prev_trigger
+            }
+            levels = self._trigger_levels_now(graph_id, entry[2], changed_high) if changed_high else {}  # type: ignore[index]
+            for node_id, state in list(nodes.items()):
+                key = (graph_id, node_id)
+                if types.get(node_id) != state.kind:
+                    del nodes[node_id]  # the sheet or the block is gone
+                    self._timer_dirty.add(graph_id)
+                    self._cancel_timer_task(key)
+                    continue
+                trigger_sig = trigger_sigs[node_id]
+                if node_id in changed_high:
+                    level = levels.get(node_id)
+                    # Low now, or rewired to an input without a level here: the
+                    # next rise must count. Still high: no new edge (a changed
+                    # threshold behind a held input must not fire again).
+                    if level is False or (level is None and state.trigger_sig[1] != trigger_sig[1]):  # type: ignore[index]
+                        state.prev_trigger = False
+                        state.level_changes += 1
+                        self._timer_dirty.add(graph_id)
+                state.trigger_sig = trigger_sig
+                if not enabled:
+                    if state.kind == "timer_delay":
+                        self._cancel_timer_task(key)
+                        del nodes[node_id]  # disabling drops a delay — and its level, so reactivation re-arms it
+                        self._timer_dirty.add(graph_id)
+                    continue  # a pulse's task finds the sheet inactive and keeps it for reactivation
+                # A delay re-armed for a retry keeps that pause; any other deadline gets the saved duration.
+                retrying = state.retry_at is not None and state.deadline == state.retry_at
+                cap = monotonic() + max(self._timer_duration(nodes_by_id[node_id]), _TIMER_RETRY_DELAY_S if retrying else 0.0)
+                if state.deadline is not None and state.deadline > cap:
+                    # A save shortened the duration: it applies to a pending timer too.
+                    state.deadline = cap
+                    state.wake.set()
+                    self._timer_dirty.add(graph_id)
+                task = self._timer_tasks.get(key)
+                if state.deadline is None or (task is not None and not task.done()):
+                    continue
+                if state.deadline <= monotonic():
+                    state.need_on = False  # a pulse that ran out meanwhile only ends
+                    self._timer_dirty.add(graph_id)
+                self._spawn_timer(graph_id, node_id, state.kind)
+            if not nodes:
+                del self._timers[graph_id]
+
+    def _release_timer_slot(self, key: tuple[str, str]) -> None:
+        if self._timer_tasks.get(key) is asyncio.current_task():
+            del self._timer_tasks[key]
+
+    async def _run_timer_graph(
+        self,
+        graph_id: str,
+        node_id: str,
+        node_type: str,
+        overrides: dict[str, dict[str, Any]],
+        logic_depth: int,
+        on_cut: Callable[[], None] | None = None,
+    ) -> str:
+        """Run the sheet for a timer block, after any run still in flight for it.
+
+        Returns "ran" (also for a run that raised: it may have acted already);
+        "failed" when a save made it obsolete, so it published nothing; "error"
+        when it failed before publishing anything; "inactive" when the sheet is
+        gone or disabled; "gone" when it no longer has the block. *on_cut* is called if stop() cuts the run short, so its
+        timer stays due.
+        """
+        key = (graph_id, node_id)
+        if logic_depth >= _MAX_LOGIC_CASCADE_DEPTH:
+            # E.g. a save shortened a pending delay below _TIMER_NEW_CASCADE_S.
+            logger.warning("Logic cascade depth limit reached: timer run graph=%s node=%s skipped", graph_id[:8], node_id[:8])
+            # No run persists what its timer changed (e.g. a delay cleared as
+            # done): a restart must not fire it again at depth zero.
+            self._timer_dirty.add(graph_id)
+            if graph_id in self._graphs:
+                await self._persist_node_state(graph_id)
+            return "ran"
+        await self._wait_for_timer_run(key)
+        entry = self._graphs.get(graph_id)
+        if entry is None or not entry[1]:
+            return "inactive"
+        name, _enabled, flow = entry
+        if not any(node.id == node_id and node.type == node_type for node in flow.nodes):
+            return "gone"
+        self._timer_dirty.add(graph_id)  # the run persists what its timer changed before it
+        report: dict[str, Any] = {}
+        run = asyncio.ensure_future(self._execute_graph(graph_id, name, flow, overrides, logic_depth=logic_depth, obsolete_report=report))
+        self._timer_runs[key] = run
+        # A run already started is never cut short: cancelling the timer (a
+        # retrigger, a save) leaves it to finish and publish what it decided;
+        # stop() waits for it. asyncio.wait never cancels it and does not
+        # raise its failure, which the callback logs.
+        run.add_done_callback(partial(self._timer_run_finished, key))
+        abandoned = False
+
+        def settled(done: asyncio.Future) -> None:  # type: ignore[type-arg]
+            self._timer_cut_hooks.pop(done, None)
+            # A run cut short that had not acted yet, or one that failed after
+            # its task was cancelled (nobody is left to retry it), stays due.
+            if on_cut is None:
+                return
+            cut_before_acting = done.cancelled() and not report.get("acted")
+            abandoned_and_failed = abandoned and not done.cancelled() and self._timer_outcome(done, report) in ("failed", "error")
+            if cut_before_acting or abandoned_and_failed:
+                on_cut()
+
+        if on_cut is not None:
+            self._timer_cut_hooks[run] = partial(self._timer_cut_unless_acted, report, on_cut)
+        run.add_done_callback(settled)
+        try:
+            await asyncio.wait({run})
+        except asyncio.CancelledError:
+            abandoned = True
+            if run.done():
+                settled(run)  # already settled while nobody was abandoning it
+            raise
+        return self._timer_outcome(run, report)
+
+    def _timer_cut_unless_acted(self, report: dict[str, Any], on_cut: Callable[[], None]) -> None:
+        """stop() gave up on a run in flight: it stays due unless it acted already."""
+        if report.get("run_tag", _NOT_STARTED) not in self._hems_acted_runs:
+            on_cut()
+
+    @staticmethod
+    def _timer_outcome(run: asyncio.Future, report: dict[str, Any]) -> str:  # type: ignore[type-arg]
+        if run.cancelled() or run.exception() is not None or run.result():
+            return "ran"  # done — or raised, possibly after it acted: not repeated
+        if report.get("obsolete"):
+            return "ran" if report["acted"] else "failed"  # an obsolete run that acted is not repeated either
+        return "error"  # failed before it published anything (logged by _execute_graph_impl)
+
+    @staticmethod
+    def _timer_retry_due(graph_id: str, node_id: str, state: _TimerState, outcome: str) -> bool:
+        """Should a timer run be tried again? Obsolete ones always, failed ones a few times."""
+        if outcome == "failed":
+            return True
+        if outcome != "error":
+            state.errors = 0
+            return False
+        state.errors += 1
+        if state.errors < _TIMER_MAX_ERROR_ATTEMPTS:
+            return True
+        logger.warning("Timer graph=%s node=%s: run failed %d times, giving up", graph_id[:8], node_id[:8], state.errors)
+        state.errors = 0
+        return False
+
+    def _timer_node(self, graph_id: str, node_id: str) -> Any | None:
+        """A timer block as the loaded sheet has it; None while it is unloaded or without it."""
+        entry = self._graphs.get(graph_id)
+        return next((node for node in entry[2].nodes if node.id == node_id), None) if entry is not None else None
+
+    def _timer_run_depth(self, graph_id: str, node_id: str, state: _TimerState) -> int:
+        """Cascade depth of a delay's firing or a pulse's end.
+
+        A block that waited at least _TIMER_NEW_CASCADE_S starts a new cascade,
+        like a cron tick: a timed loop through data points (a blinker, a
+        keep-alive) is no runaway cascade. A shorter one counts as one more step
+        of the run that triggered it — also within one sheet, where no data
+        point event adds one — so _start_timer stops such a loop.
+        """
+        node = self._timer_node(graph_id, node_id)
+        return state.depth + 1 if node is None or self._timer_duration(node) < _TIMER_NEW_CASCADE_S else 0
+
+    def _timer_cut(self, graph_id: str, state: _TimerState, field: str) -> None:
+        """A run stop() cut short did not happen: its delay, pulse start or pulse end stays due."""
+        if not any(timer is state for timer in self._timers.get(graph_id, {}).values()):
+            return  # forgotten meanwhile (the sheet was deleted or reset)
+        if field == "deadline":
+            if state.deadline is None:
+                state.deadline = monotonic()
+        else:
+            state.need_on = True
+        self._timer_dirty.add(graph_id)
+
+    async def _wait_for_timer_run(self, key: tuple[str, str]) -> None:
+        """Wait until no run of this block is in flight.
+
+        The timer tasks wait here before they clear a deadline or start for a
+        run: a cancellation while waiting then leaves the timer pending.
+        """
+        # Re-checked after every wait: another waiter may have started a run meanwhile.
+        while (previous := self._timer_runs.get(key)) is not None and not previous.done():
+            await asyncio.wait({previous})
+
+    def _timer_run_finished(self, key: tuple[str, str], run: asyncio.Future) -> None:  # type: ignore[type-arg]
+        if self._timer_runs.get(key) is run:
+            del self._timer_runs[key]
+        if not run.cancelled() and (exc := run.exception()) is not None:
+            logger.error("Timer run failed", exc_info=exc)
+
+    async def _drop_timer(self, graph_id: str, node_id: str, state: _TimerState) -> None:
+        """Forget a timer whose block is gone; no run persisted that."""
+        nodes = self._timers.get(graph_id, {})
+        if nodes.get(node_id) is state:
+            del nodes[node_id]
+            self._timer_dirty.add(graph_id)
+            await self._persist_node_state(graph_id)
+
+    @staticmethod
+    async def _sleep_until_deadline(state: _TimerState) -> None:
+        while state.deadline is not None and (remaining := state.deadline - monotonic()) > 0:
+            state.wake.clear()
+            try:
+                await asyncio.wait_for(state.wake.wait(), remaining)
+            except TimeoutError:
+                pass
+
+    async def _run_timer_delay(self, graph_id: str, node_id: str) -> None:
+        state = self._timers.get(graph_id, {}).get(node_id)
+        try:
+            while state is not None and state.deadline is not None:
+                await self._sleep_until_deadline(state)
+                await self._wait_for_timer_run((graph_id, node_id))
+                if state.deadline is None or state.deadline > monotonic():
+                    continue  # moved while waiting
+                # Cleared before the run, so the run persists the delay as done.
+                deadline, state.deadline = state.deadline, None
+                outcome = await self._run_timer_graph(
+                    graph_id,
+                    node_id,
+                    "timer_delay",
+                    {node_id: {"_fire": True}},
+                    self._timer_run_depth(graph_id, node_id, state),
+                    on_cut=partial(self._timer_cut, graph_id, state, "deadline"),
+                )
+                if outcome == "inactive":
+                    if state.deadline is None:
+                        state.deadline = deadline  # still pending: reload() resumes or drops it
+                    return
+                elif outcome == "gone":
+                    await self._drop_timer(graph_id, node_id, state)
+                    return
+                elif self._timer_retry_due(graph_id, node_id, state, outcome) and state.deadline is None:
+                    state.deadline = state.retry_at = monotonic() + _TIMER_RETRY_DELAY_S  # pending again (against the saved sheet)
+                # A retrigger during the run set a new deadline: the loop fires for it too.
+        finally:
+            self._release_timer_slot((graph_id, node_id))
+
+    async def _run_timer_pulse(self, graph_id: str, node_id: str) -> None:
+        """Start (if due), hold and end a pulse — again when retriggered during its end run."""
+        state = self._timers.get(graph_id, {}).get(node_id)
+        try:
+            while state is not None and state.deadline is not None:
+                await self._wait_for_timer_run((graph_id, node_id))
+                if state.need_on:
+                    # Cleared before the run, so the run persists the start as done.
+                    state.need_on = False
+                    outcome = await self._run_timer_graph(
+                        graph_id, node_id, "timer_pulse", {node_id: {}}, state.depth + 1, on_cut=partial(self._timer_cut, graph_id, state, "need_on")
+                    )
+                    if outcome == "inactive":
+                        state.need_on = True
+                        return  # resumed on reactivation
+                    if outcome == "gone":
+                        await self._drop_timer(graph_id, node_id, state)
+                        return
+                    if self._timer_retry_due(graph_id, node_id, state, outcome):
+                        try:
+                            await asyncio.sleep(_TIMER_RETRY_DELAY_S)
+                        except asyncio.CancelledError:
+                            state.need_on = True  # still to start: persisted as due
+                            self._timer_dirty.add(graph_id)
+                            raise
+                        # Not started after it ran out meanwhile: only its end is left.
+                        state.need_on = state.deadline is not None and state.deadline > monotonic()
+                        continue
+                    if outcome == "ran" and state.deadline is not None and (node := self._timer_node(graph_id, node_id)) is not None:
+                        # Held for its duration from the start run's writes on: a
+                        # slow action before them must not use the pulse up.
+                        state.deadline = max(state.deadline, monotonic() + self._timer_duration(node))
+                        self._timer_dirty.add(graph_id)
+                await self._sleep_until_deadline(state)
+                await self._wait_for_timer_run((graph_id, node_id))
+                if state.deadline is None or state.deadline > monotonic() or state.need_on:
+                    continue  # moved (or restarted) while waiting
+                deadline, state.deadline = state.deadline, None
+                while True:
+                    outcome = await self._run_timer_graph(
+                        graph_id,
+                        node_id,
+                        "timer_pulse",
+                        {node_id: {}},
+                        self._timer_run_depth(graph_id, node_id, state),
+                        on_cut=partial(self._timer_cut, graph_id, state, "deadline"),
+                    )
+                    if state.deadline is not None or not self._timer_retry_due(graph_id, node_id, state, outcome):
+                        break
+                    # Ended again against the saved sheet; meanwhile the pulse
+                    # stays off, so no other run publishes "on" again.
+                    try:
+                        await asyncio.sleep(_TIMER_RETRY_DELAY_S)
+                        await self._wait_for_timer_run((graph_id, node_id))
+                    except asyncio.CancelledError:
+                        if state.deadline is None:
+                            state.deadline = monotonic()  # still to end: persisted as due
+                            self._timer_dirty.add(graph_id)
+                        raise
+                    if state.deadline is not None:
+                        break
+                if outcome == "inactive":
+                    if state.deadline is None:
+                        state.deadline = deadline  # not ended: it ends on reactivation
+                    return
+                if outcome == "gone":
+                    await self._drop_timer(graph_id, node_id, state)
+                    return
+                # A retrigger during the end run set a new deadline: the loop starts it again.
+        finally:
+            self._release_timer_slot((graph_id, node_id))
+
     async def _load_app_config(self) -> None:
         """Load app-level settings (e.g. timezone) from the database."""
         try:
@@ -1834,7 +2908,7 @@ class LogicManager:
     # ── Cron Scheduler ────────────────────────────────────────────────────
 
     def _start_cron_tasks(self) -> None:
-        """Start asyncio tasks for all timer_cron and ical nodes in enabled graphs."""
+        """Start asyncio tasks for all timer_cron, timer_interval and ical nodes in enabled graphs."""
         _has_croniter = True
         try:
             import croniter as _croniter_check  # noqa: F401
@@ -1886,18 +2960,18 @@ class LogicManager:
                         node.id[:8],
                         refresh_min,
                     )
-                elif node.type == "timer_pulse":
+                elif node.type == "timer_interval":
                     key = (graph_id, node.id)
                     if key in self._cron_tasks and not self._cron_tasks[key].done():
                         continue  # already running
                     interval_s = max(1.0, float(node.data.get("interval_s") or 5.0))
                     task = asyncio.create_task(
-                        self._pulse_loop(graph_id, node.id, interval_s),
-                        name=f"pulse-{graph_id[:8]}-{node.id[:8]}",
+                        self._interval_loop(graph_id, node.id, interval_s),
+                        name=f"interval-{graph_id[:8]}-{node.id[:8]}",
                     )
                     self._cron_tasks[key] = task
                     logger.info(
-                        "Pulse scheduled: graph=%s (%s) node=%s interval=%.0fs",
+                        "Interval scheduled: graph=%s (%s) node=%s interval=%.0fs",
                         graph_id[:8],
                         name,
                         node.id[:8],
@@ -1914,6 +2988,21 @@ class LogicManager:
                     self._cron_tasks[key] = task
                     logger.info(
                         "Sensor watchdog scheduled: graph=%s (%s) node=%s",
+                        graph_id[:8],
+                        name,
+                        node.id[:8],
+                    )
+                elif node.type == "hems_surplus":
+                    key = (graph_id, node.id)
+                    if key in self._cron_tasks and not self._cron_tasks[key].done():
+                        continue  # already running
+                    task = asyncio.create_task(
+                        self._hems_loop(graph_id, node.id),
+                        name=f"hems-{graph_id[:8]}-{node.id[:8]}",
+                    )
+                    self._cron_tasks[key] = task
+                    logger.info(
+                        "HEMS surplus control scheduled: graph=%s (%s) node=%s",
                         graph_id[:8],
                         name,
                         node.id[:8],
@@ -1950,8 +3039,7 @@ class LogicManager:
                 entry = self._graphs.get(graph_id)
                 if entry and entry[1]:  # still exists and enabled
                     g_name, _, flow = entry
-                    overrides = {node_id: {"trigger": True}}
-                    await self._execute_graph(graph_id, g_name, flow, overrides)
+                    await self._execute_graph(graph_id, g_name, flow, _cron_fire_overrides([node_id]))
                     logger.info(
                         "Cron graph %s (%s) fired at %s",
                         graph_id[:8],
@@ -1989,18 +3077,17 @@ class LogicManager:
                 logger.exception("iCal loop error graph=%s node=%s", graph_id[:8], node_id[:8])
                 await asyncio.sleep(60)  # back-off on unexpected errors
 
-    async def _pulse_loop(self, graph_id: str, node_id: str, interval_s: float) -> None:
-        """Fires a timer_pulse graph node every interval_s seconds — runs indefinitely."""
+    async def _interval_loop(self, graph_id: str, node_id: str, interval_s: float) -> None:
+        """Fires a timer_interval graph node every interval_s seconds — runs indefinitely."""
         while True:
             try:
                 await asyncio.sleep(interval_s)
                 entry = self._graphs.get(graph_id)
                 if entry and entry[1]:  # still exists and enabled
                     g_name, _, flow = entry
-                    overrides = {node_id: {"trigger": True}}
-                    await self._execute_graph(graph_id, g_name, flow, overrides)
+                    await self._execute_graph(graph_id, g_name, flow, _cron_fire_overrides([node_id]))
                     logger.debug(
-                        "Pulse graph %s (%s) fired (interval=%.0fs)",
+                        "Interval graph %s (%s) fired (interval=%.0fs)",
                         graph_id[:8],
                         g_name,
                         interval_s,
@@ -2008,7 +3095,7 @@ class LogicManager:
             except asyncio.CancelledError:
                 raise
             except Exception:
-                logger.exception("Pulse loop error graph=%s", graph_id[:8])
+                logger.exception("Interval loop error graph=%s", graph_id[:8])
                 await asyncio.sleep(interval_s)  # back-off using same interval
 
     async def _watchdog_loop(self, graph_id: str, node_id: str) -> None:
@@ -2047,6 +3134,56 @@ class LogicManager:
             except Exception:
                 logger.exception("Sensor watchdog loop error graph=%s node=%s", graph_id[:8], node_id[:8])
                 await asyncio.sleep(60)  # back-off on unexpected errors
+
+    async def _hems_loop(self, graph_id: str, node_id: str) -> None:
+        """Periodically re-evaluates a hems_surplus node so it regulates without any event.
+
+        The block gates its own control cycle by the configured interval (see
+        ``obs.logic.hems_surplus``), so this loop only has to wake the graph at
+        least that often — and earlier when the block reports ``next_wake``: a
+        pending trigger pulse end, which can be shorter than the interval, or
+        the moment a meter value exceeds its maximum age. The interval is re-read every iteration, so an edited value
+        applies without a graph reload.
+        """
+        # A restart by a reload (any graph saved) resumes at the planned wake
+        # instead of re-running the whole sheet at once; a sheet that was itself
+        # saved has no planned wake left (invalidate_cache) and runs straight away.
+        in_flight = self._hems_runs.get((graph_id, node_id))
+        if in_flight is not None and not in_flight.done():
+            # The loop this one replaces was cancelled mid-run. After a reload
+            # for another sheet (its plan is kept) that run counts as this
+            # loop's first; after this sheet was saved (invalidate_cache cleared
+            # the plan) the new configuration runs right after it.
+            replanning = (graph_id, node_id) in self._hems_planned_wake
+            await asyncio.wait({in_flight})
+            if replanning:
+                entry = self._graphs.get(graph_id)
+                node = next((n for n in entry[2].nodes if n.id == node_id), None) if entry else None
+                self._plan_hems_wake(graph_id, node_id, hems_surplus.interval_s(node.data) if node is not None else hems_surplus.DEFAULT_INTERVAL_S)
+        planned = self._hems_planned_wake.get((graph_id, node_id))
+        if planned is not None and planned > hems_clock():
+            await asyncio.sleep(planned - hems_clock())
+        while True:
+            try:
+                entry = self._graphs.get(graph_id)
+                sleep_s = hems_surplus.DEFAULT_INTERVAL_S
+                node = next((n for n in entry[2].nodes if n.id == node_id), None) if entry and entry[1] else None
+                if node is None:  # graph gone or disabled, or the block removed
+                    self._hems_planned_wake.pop((graph_id, node_id), None)  # nothing planned while idle
+                else:
+                    g_name, _, flow = entry
+                    sleep_s = hems_surplus.interval_s(node.data)
+                    await self._hems_run(graph_id, node_id, g_name, flow, waking=False)
+                    sleep_s = self._plan_hems_wake(graph_id, node_id, sleep_s)
+                    logger.debug("HEMS surplus graph %s (%s) node %s evaluated", graph_id[:8], g_name, node_id[:8])
+
+                await asyncio.sleep(sleep_s)
+
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("HEMS surplus loop error graph=%s node=%s", graph_id[:8], node_id[:8])
+                await asyncio.sleep(hems_surplus.MIN_INTERVAL_S)  # back-off, short: the safe state depends on this loop
 
     # ── Event Handler ─────────────────────────────────────────────────────
 
@@ -2237,18 +3374,33 @@ class LogicManager:
         self,
         graph_id: str,
         input_overrides: dict[str, dict[str, Any]] | None = None,
+        fire_triggers: list[str] | None = None,
     ) -> tuple[dict[str, Any], dict[str, dict[str, dict[str, Any]]]]:
-        """Manually run a graph and return its actual final-pass inputs."""
+        """Manually run a graph and return its actual final-pass inputs.
+
+        *fire_triggers* names Trigger (timer_cron) blocks that fire in this
+        run exactly as on their cron schedule (#1276); a debug session then
+        need not wait for the next tick. An id that is no Trigger, or whose
+        trigger level *input_overrides* also sets (it would silently cancel
+        the fire), raises InvalidFireTriggerError before the sheet runs.
+        """
         entry = self._graphs.get(graph_id)
         if not entry:
             raise KeyError(f"Graph {graph_id} not in cache")
         name, _enabled, flow = entry
+        cron_ids = {node.id for node in flow.nodes if node.type == "timer_cron"}
+        unknown = [node_id for node_id in fire_triggers or [] if node_id not in cron_ids]
+        if unknown:
+            raise InvalidFireTriggerError(f"Kein Trigger-Baustein: {', '.join(unknown)}")
+        overridden = [node_id for node_id in fire_triggers or [] if "trigger" in (input_overrides or {}).get(node_id, {})]
+        if overridden:
+            raise InvalidFireTriggerError(f"Trigger gleichzeitig ausgelöst und überschrieben: {', '.join(overridden)}")
         input_capture: dict[str, dict[str, dict[str, Any]]] = {}
         outputs = await self._execute_graph(
             graph_id,
             name,
             flow,
-            {},
+            _cron_fire_overrides(fire_triggers or []),
             debug_overrides=input_overrides or {},
             debug_input_capture=input_capture,
         )
@@ -2455,12 +3607,22 @@ class LogicManager:
             # synchronous node between one of them and a Change Filter would log
             # "Missing upstream output" on every single save.
             init_retained_boundary_handles = {node.id: {"out"} for node in flow.nodes if node.type in ("memory", "edge_detect")}
+            # hems_surplus is excluded as well, so the executor no longer sees it
+            # as one: every handle wired from it is such a boundary.
+            for edge in flow.edges:
+                if node_type_by_id.get(edge.source) == "hems_surplus":
+                    init_retained_boundary_handles.setdefault(edge.source, set()).add(edge.sourceHandle or "out")
             init_flow = flow
             if excluded_ids:
                 init_flow = flow.model_copy(deep=True)
+                boundary_ids = {node.id for node in init_flow.nodes if node.type in TICK_BOUNDARY_NODE_TYPES}
                 for node in init_flow.nodes:
                     if node.type in _INIT_EXCLUDED_NODE_TYPES:
                         node.type = "missing_node"
+                # The placeholder is no tick boundary any more: without the edges
+                # into it (it ignores them anyway), a feedback loop through a
+                # memory, delay or pulse stays no cycle.
+                init_flow.edges = [edge for edge in init_flow.edges if edge.target not in boundary_ids]
 
             # Evaluate until intermediate DataPoints settle: a write target
             # that another Read Object of the same sheet watches feeds its
@@ -2681,11 +3843,37 @@ class LogicManager:
                         and _closed_gate_absorbs_init(_initial_id)
                     ):
                         cf_tainted.discard(_initial_id)
-            _cfq: list[str] = list(cf_tainted)
+            _cfq: list[str] = sorted(cf_tainted)
+            _init_seed_ids = frozenset(cf_tainted)
+            _init_probe = GraphExecutor(flow, {}, self._app_config)
+
+            # One cache for this pass; ``outputs`` does not change during it.
+            _init_probe_cache: dict[Any, bool] = {}
+
+            def _init_handle_independent(edge: Any) -> bool:
+                return _handle_independent_of_volatile_inputs(
+                    _init_probe,
+                    _node_by_id_init,
+                    _effective_edges_init,
+                    {},
+                    edge.source,
+                    edge.sourceHandle or "out",
+                    lambda e: e.source in cf_tainted,
+                    outputs,
+                    _init_probe_cache,
+                    _init_seed_ids,
+                )
+
+            # Edges skipped as handle-independent (see _compute_cf_hold_ids):
+            # re-checked against the final taint once the queue drains.
+            _init_deferred: dict[int, Any] = {}
             while _cfq:
                 _cn = _cfq.pop()
                 for _ce in _effective_edges_init:
                     if _ce.source != _cn or _ce.target in cf_tainted:
+                        continue
+                    if _init_handle_independent(_ce):
+                        _init_deferred[id(_ce)] = _ce
                         continue
                     _ctarget = _node_by_id_init.get(_ce.target)
                     _ctype = _ctarget.type if _ctarget is not None else None
@@ -2733,6 +3921,11 @@ class LogicManager:
                                 continue
                     cf_tainted.add(_ce.target)
                     _cfq.append(_ce.target)
+                if not _cfq:
+                    _init_flipped = [_de for _de in _init_deferred.values() if not _init_handle_independent(_de)]
+                    _init_flipped_ids = {id(edge) for edge in _init_flipped}
+                    _init_deferred = {k: v for k, v in _init_deferred.items() if k not in _init_flipped_ids}
+                    _cfq.extend({_de.source for _de in _init_flipped})
 
             # Commit gate/hysteresis state only for nodes whose switched
             # output was actually published (see
@@ -2857,6 +4050,7 @@ class LogicManager:
         reused node ids must not leak into the restored one.
         """
         self._hysteresis.pop(graph_id, None)
+        self._forget_timers(graph_id)
         self._ical_result_caches.pop(graph_id, None)
         self._ical_cache_generations[graph_id] = object()
         self._node_state.pop(graph_id, None)
@@ -2881,9 +4075,25 @@ class LogicManager:
         logic_depth: int = 0,
         debug_overrides: dict[str, dict[str, Any]] | None = None,
         debug_input_capture: dict[str, dict[str, dict[str, Any]]] | None = None,
+        *,
+        obsolete_report: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """Run a sheet; {} when a save made the run obsolete (or it failed).
+
+        *obsolete_report* learns whether the run was obsolete ("obsolete") and
+        whether it had acted outside the graph before that or before it was
+        cancelled ("acted": an API call, a packet, a notification) — repeating
+        it would repeat that action. While the run is in flight, its "run_tag"
+        is in _hems_acted_runs once it acted.
+        """
+        # A run a save makes obsolete publishes no write; a hems_surplus block
+        # must not keep what it decided in it (a fired trigger would be locked
+        # out without its pulse ever reaching the actuator).
+        run_tag = next(self._hems_run_ids)  # an int: survives the deep copies of replay passes
+        if obsolete_report is not None:
+            obsolete_report["run_tag"] = run_tag
         try:
-            return await self._execute_graph_impl(
+            result = await self._execute_graph_impl(
                 graph_id,
                 name,
                 flow,
@@ -2891,9 +4101,130 @@ class LogicManager:
                 logic_depth,
                 debug_overrides,
                 debug_input_capture,
+                run_tag=run_tag,
             )
         except _ObsoleteGraphExecution:
+            if obsolete_report is not None:
+                obsolete_report.update(obsolete=True, acted=run_tag in self._hems_acted_runs)
+            self._undo_hems_run(graph_id, flow, run_tag)
             return {}
+        except BaseException:
+            # Any later failure or a cancellation: nothing published, so the same rule.
+            if obsolete_report is not None:
+                obsolete_report["acted"] = run_tag in self._hems_acted_runs
+            self._undo_hems_run(graph_id, flow, run_tag)
+            raise
+        finally:
+            self._hems_acted_runs.discard(run_tag)
+            hyst = self._hysteresis.get(graph_id, {})
+            for node in flow.nodes:
+                if node.type == "hems_surplus" and node.id in hyst:
+                    forget_hems_undo(hyst[node.id], run_tag)
+        self._schedule_hems_early_wakes(graph_id, flow, overrides)
+        return result
+
+    def _plan_hems_wake(self, graph_id: str, node_id: str, interval_s: float) -> float:
+        """Plan a loop's next wake after a run: the interval, or the block's earlier ``next_wake``.
+
+        A wake time already past was not refreshed by the run — the node was
+        skipped or failed — so it must not spin the loop. Returns the sleep.
+        """
+        sleep_s = interval_s
+        next_wake = self._hysteresis.get(graph_id, {}).get(node_id, {}).get("next_wake")
+        now_ts = hems_clock()
+        if next_wake is not None and next_wake > now_ts:
+            sleep_s = min(sleep_s, max(0.1, next_wake - now_ts))
+        self._hems_planned_wake[(graph_id, node_id)] = now_ts + sleep_s
+        return sleep_s
+
+    def _undo_hems_run(self, graph_id: str, flow: FlowData, run_tag: object | None) -> None:
+        """Undo a failed or obsolete run's hems_surplus ticks — unless it already acted.
+
+        Such a run wrote nothing, so a trigger it fired would otherwise be locked
+        out without its pulse ever reaching the actuator. Once the run has acted
+        outside the graph (API call, notification, …), its ticks stand: undoing
+        them would re-arm a trigger whose action already ran.
+        """
+        if run_tag is None or run_tag in self._hems_acted_runs:
+            return
+        hyst = self._hysteresis.get(graph_id, {})
+        for node in flow.nodes:
+            if node.type == "hems_surplus" and node.id in hyst:
+                undo_hems_run(hyst[node.id], run_tag)
+
+    def _schedule_hems_early_wakes(self, graph_id: str, flow: FlowData, overrides: dict[str, dict[str, Any]]) -> None:
+        """Wake a hems_surplus node before its loop would, when an event run needs it.
+
+        A control cycle can also run on an event (a meter telegram) and fire a
+        trigger there; its pulse end, or the next due cycle, may then come
+        before the loop's own planned wake.
+        """
+        if self._hems_stopping:
+            return
+        for node in flow.nodes:
+            if node.type != "hems_surplus":
+                continue
+            if overrides == {node.id: {}} and (graph_id, node.id) not in self._hems_waking:
+                continue  # the loop's own run plans itself
+            next_wake = self._hysteresis.get(graph_id, {}).get(node.id, {}).get("next_wake")
+            planned = self._hems_planned_wake.get((graph_id, node.id))
+            now_ts = hems_clock()
+            if next_wake is None or planned is None or not now_ts < next_wake < planned - _HEMS_WAKE_SLACK_S:
+                continue
+            pending = self._hems_wake_at.get((graph_id, node.id))
+            if pending is not None and pending <= next_wake + _HEMS_WAKE_SLACK_S:
+                continue  # a wake at (or before) that time is already pending
+            # Never cancelled or replaced: a superseded later wake only costs one
+            # extra run, and a running one must not be interrupted half-way.
+            self._hems_wake_at[(graph_id, node.id)] = next_wake
+            task = asyncio.create_task(self._hems_wake_once(graph_id, node.id, next_wake), name=f"hems-wake-{graph_id[:8]}-{node.id[:8]}")
+            tasks = self._hems_wake_tasks.setdefault(graph_id, set())
+            tasks.add(task)
+            task.add_done_callback(tasks.discard)
+
+    def _cancel_hems_wakes(self, graph_id: str | None = None) -> None:
+        for gid in [graph_id] if graph_id is not None else list(self._hems_wake_tasks):
+            for task in self._hems_wake_tasks.pop(gid, set()):
+                task.cancel()
+        for key in [k for k in self._hems_wake_at if graph_id is None or k[0] == graph_id]:
+            del self._hems_wake_at[key]
+
+    async def _hems_wake_once(self, graph_id: str, node_id: str, wake_at: float) -> None:
+        await asyncio.sleep(max(0.0, wake_at - hems_clock()))
+        if self._hems_wake_at.get((graph_id, node_id)) == wake_at:
+            del self._hems_wake_at[(graph_id, node_id)]
+        entry = self._graphs.get(graph_id)
+        if entry and entry[1] and any(n.id == node_id for n in entry[2].nodes):
+            await self._hems_run(graph_id, node_id, entry[0], entry[2], waking=True)
+
+    async def _hems_run(self, graph_id: str, node_id: str, name: str, flow: FlowData, *, waking: bool) -> None:
+        """Run the sheet for a hems_surplus node — one run per node at a time, never cut short.
+
+        Shielded: a save (reload/invalidate) cancels the loop or wake that
+        started it, but the run itself must finish — the block records its
+        outputs as sent before the Write Objects publish them. A loop restarted
+        meanwhile waits for it instead of running the sheet a second time in
+        parallel. An early-wake run stays marked (``_hems_waking``) until it
+        has finished, so it schedules its own follow-up wake.
+        """
+        key = (graph_id, node_id)
+        # Re-checked after every wait: another waiter may have started a run meanwhile.
+        while (previous := self._hems_runs.get(key)) is not None and not previous.done():
+            await asyncio.wait({previous})  # its outcome is logged by _hems_run_finished
+        if waking:
+            self._hems_waking.add(key)
+        run = asyncio.ensure_future(self._execute_graph(graph_id, name, flow, {node_id: {}}))
+        self._hems_runs[key] = run
+        run.add_done_callback(lambda done: self._hems_run_finished(key, done, waking))
+        await asyncio.wait({run})  # never cancels the run; a failure is logged once, by the callback
+
+    def _hems_run_finished(self, key: tuple[str, str], run: asyncio.Future, waking: bool) -> None:  # type: ignore[type-arg]
+        if waking:
+            self._hems_waking.discard(key)
+        if self._hems_runs.get(key) is run:
+            del self._hems_runs[key]
+        if not run.cancelled() and (exc := run.exception()) is not None:
+            logger.error("HEMS surplus run error graph=%s node=%s", key[0][:8], key[1][:8], exc_info=exc)
 
     async def _execute_graph_impl(
         self,
@@ -2904,13 +4235,27 @@ class LogicManager:
         logic_depth: int = 0,
         debug_overrides: dict[str, dict[str, Any]] | None = None,
         debug_input_capture: dict[str, dict[str, dict[str, Any]]] | None = None,
+        *,
+        run_tag: object | None = None,
     ) -> dict[str, Any]:
         execute_now = datetime.now(UTC)
         execution_started = perf_counter()
+
+        def _mark_side_effect() -> None:
+            # From here on the run has acted outside the graph: undoing its
+            # hems_surplus ticks (undo_hems_run) would repeat what it started.
+            # (Untagged runs add None, which _undo_hems_run never undoes anyway.)
+            self._hems_acted_runs.add(run_tag)
+
         ical_app_config = dict(self._app_config)
         # One instant for every ###VAR### of this logic run (#1301).
         api_time_snapshot = make_time_snapshot(ical_app_config, execute_now)
         graph_state = self._node_state.setdefault(graph_id, {})
+        # One level per pulse for every pass of this run.
+        active_pulses = self._active_pulses(graph_id)
+        timer_epoch = self._timer_epochs.setdefault(graph_id, object())
+        timer_run_seq = next(self._timer_run_seqs)
+        run_started_at = monotonic()
         ical_generation = self._ical_cache_generations.setdefault(graph_id, object())
         ical_result_cache = self._ical_result_caches.setdefault(graph_id, {})
         # Event-driven executions still evaluate the full graph so unrelated
@@ -3049,6 +4394,8 @@ class LogicManager:
                     datapoint_lookup=self._datapoint_value_lookup,
                 )
 
+            executor.run_tag = run_tag
+            executor.active_pulses = active_pulses
             if not ical_nodes or execution_ical_prepared:
                 return executor
 
@@ -3529,13 +4876,27 @@ class LogicManager:
             node.id
             for node in flow.nodes
             if node.type
-            in {"gate", "hysteresis", "avg_multi", "min_max_tracker", "consumption_counter", "heating_circuit", "datapoint_write", "edge_detect"}
+            in {
+                "gate",
+                "hysteresis",
+                "avg_multi",
+                "min_max_tracker",
+                "consumption_counter",
+                "heating_circuit",
+                "datapoint_write",
+                "edge_detect",
+                "hems_surplus",
+            }
         }
         # Keyed on every pulse origin, not just change_filter: the correction
         # pass for a consumer fed by a non-firing pulse restores state from
         # this snapshot, so without it the placeholder the first pass already
         # committed is simply re-committed.
-        _pulse_origin_ids = {n.id for n in flow.nodes if n.type in _PULSE_ORIGIN_NODE_TYPES}
+        _pulse_origin_ids = {
+            n.id
+            for n in flow.nodes
+            if n.type in _PULSE_ORIGIN_NODE_TYPES and (n.type != "hems_surplus" or hems_surplus.trigger_output_handles(n.data))
+        }
         _needs_cf_pulse_correction_snapshot = any(
             bool(
                 (_downstream_closure({_pid}, _effective_edges) - {_pid})
@@ -3586,6 +4947,7 @@ class LogicManager:
             raise
         except Exception:
             logger.exception("Graph %s (%s) execution error", graph_id, name)
+            self._undo_hems_run(graph_id, flow, run_tag)  # nothing was published
             return {}
 
         for ical_error_id, ical_error in ical_variable_errors.items():
@@ -3685,6 +5047,20 @@ class LogicManager:
         # live source — the executor only ever consumes the live one, so
         # tainting through the shadowed edge too would hold a downstream
         # change_filter hostage to a source nothing actually reads from.
+        _fan_in_probe = GraphExecutor(flow, {}, ical_app_config)
+
+        def _handle_independent(
+            node_id: str,
+            output_handle: str,
+            volatile_edge: Callable[[Any], bool],
+            outs: dict[str, dict[str, Any]],
+            cache: dict[Any, bool],
+            seeds: frozenset[str] = frozenset(),
+        ) -> bool:
+            return _handle_independent_of_volatile_inputs(
+                _fan_in_probe, _node_by_id_early, _effective_edges, debug_overrides, node_id, output_handle, volatile_edge, outs, cache, seeds
+            )
+
         def _compute_cf_hold_ids(seed_ids: set[str], outputs_source: dict[str, dict[str, Any]] | None = None) -> set[str]:
             """Taint-BFS from `seed_ids` (unresolved sources), returning the
             change_filter node ids that must be held this pass. Factored out
@@ -3710,6 +5086,9 @@ class LogicManager:
                 return set()
             _tainted: set[str] = set(seed_ids)
             _src = outputs_source if outputs_source is not None else outputs
+            # The handle probe follows the same rule as _v_src below: an async
+            # node's own output is authoritative only in the outer ``outputs``.
+            _probe_src = {**_src, **{nid: outputs[nid] for nid in async_replay_source_ids if nid in outputs}}
 
             def _gate_taint_absorbed(gate_id: str, gate_type: str) -> bool:
                 decisive = _decisive_gate_value[gate_type]
@@ -3776,7 +5155,15 @@ class LogicManager:
                         return True
                 return False
 
-            _tq: list[str] = list(_tainted)
+            _tq: list[str] = sorted(_tainted)
+            # Sources with an edge skipped as handle-independent. Taint can
+            # still grow after that decision (a longer unresolved path joins
+            # later), so they are re-checked once the queue drains: an edge is
+            # followed iff it is volatile under the FINAL taint, which makes the
+            # result independent of traversal order.
+            _deferred_edges: dict[int, Any] = {}
+            _probe_cache: dict[Any, bool] = {}  # per pass: ``_probe_src`` is fixed while it runs
+            _seed_set = frozenset(seed_ids)
             while _tq:
                 _tn = _tq.pop()
                 for _te in _effective_edges:
@@ -3786,6 +5173,13 @@ class LogicManager:
                         # A debug override replaces this effective edge for
                         # the current execution, so its unresolved source
                         # cannot taint the overridden value or descendants.
+                        continue
+                    if _handle_independent(
+                        _te.source, _te.sourceHandle or "out", lambda e: e.source in _tainted, _probe_src, _probe_cache, _seed_set
+                    ):
+                        # The read output handle is decided by an input that is
+                        # not tainted, whatever the unresolved ones deliver.
+                        _deferred_edges[id(_te)] = _te
                         continue
                     _target_node = _node_by_id_early.get(_te.target)
                     _target_type = _target_node.type if _target_node is not None else None
@@ -3801,8 +5195,9 @@ class LogicManager:
                     # would hold a change_filter fed by memory hostage to an
                     # unrelated, still-unresolved upstream Read Object,
                     # potentially forever if that Read Object never fires
-                    # again this session.
-                    if _target_type == "memory":
+                    # again this session. A delay or pulse is such a boundary
+                    # as well: its output follows its timer, not its input.
+                    if _target_type in TICK_BOUNDARY_NODE_TYPES:
                         continue
                     # A "hysteresis" node whose "value" input reads None this
                     # pass (e.g. fed by a still-unseeded Read Object) returns
@@ -3875,6 +5270,18 @@ class LogicManager:
                         if isinstance(_pre_hold_state, dict) and "value" in _pre_hold_state:
                             continue
                     _tq.append(_te.target)
+                if not _tq:
+                    _flipped = [
+                        _de
+                        for _de in _deferred_edges.values()
+                        if not _handle_independent(
+                            _de.source, _de.sourceHandle or "out", lambda e: e.source in _tainted, _probe_src, _probe_cache, _seed_set
+                        )
+                    ]
+                    # Reprocessing re-adds an edge if it is still skipped.
+                    _flipped_ids = {id(edge) for edge in _flipped}
+                    _deferred_edges = {k: v for k, v in _deferred_edges.items() if k not in _flipped_ids}
+                    _tq.extend({_de.source for _de in _flipped})
             return {n.id for n in flow.nodes if n.type in _HELD_ON_UNRESOLVED_SOURCE and n.id in _tainted}
 
         # Async nodes whose real side effect has actually run this tick (as
@@ -4008,6 +5415,32 @@ class LogicManager:
         # fresh rising edge, so nodes that fire on sustained truthy inputs from
         # cron are not suppressed by the rising-edge deduplication below.
         _node_type_by_id = {n.id: n.type for n in flow.nodes}
+        # Trigger outputs of each hems_surplus node: events (present only on the
+        # run that sent them), unlike its level outputs. Parsed once per run.
+        _hems_trigger_handles = {n.id: hems_surplus.trigger_output_handles(n.data) for n in flow.nodes if n.type == "hems_surplus"}
+        _hems_node_ids = set(_hems_trigger_handles)  # every hems_surplus node, with or without triggers
+        _hems_only_on_change = {n.id for n in flow.nodes if n.type == "hems_surplus" and hems_surplus.only_on_change(n.data)}
+
+        _write_ids_with_trigger = {e.target for e in _effective_edges if (e.targetHandle or "in") == "trigger"}
+
+        def _hems_level_edge(edge: Any) -> bool:
+            """An edge from a hems_surplus output that carries a level — sustained data, never a pulse.
+
+            Every output but a trigger, and a trigger output too where it feeds the
+            value of a Write Object without its own trigger: the executor hands
+            that one the last value (see ``_skip_unchanged``), and it is written
+            only when it differs from the value last written.
+            """
+            if edge.source not in _hems_node_ids:
+                return False
+            if (edge.sourceHandle or "out") not in _hems_trigger_handles[edge.source]:
+                return True
+            return (
+                edge.source in _hems_only_on_change
+                and _node_type_by_id.get(edge.target) == "datapoint_write"
+                and (edge.targetHandle or "in") == "value"
+                and edge.target not in _write_ids_with_trigger
+            )
 
         def _discrete_pulse_handles(node_ids: set[str] | None = None) -> set[tuple[str, str]]:
             """(node id, handle) pairs carrying a discrete event pulse this pass.
@@ -4028,6 +5461,15 @@ class LogicManager:
                 if _pn.type == "change_filter":
                     if GraphExecutor._to_bool(_pout.get("changed")):
                         pulses.add((_pn.id, "changed"))
+                elif _pn.type == "hems_surplus":
+                    # A trigger output exists only on the run that sent it.
+                    for _ph in _hems_trigger_handles[_pn.id]:
+                        if GraphExecutor._to_bool(_pout.get(_ph)):
+                            pulses.add((_pn.id, _ph))
+                elif _pn.type == "timer_delay":
+                    # "trigger" is true only on the run the delay fires.
+                    if GraphExecutor._to_bool(_pout.get("trigger")):
+                        pulses.add((_pn.id, "trigger"))
                 elif _pn.type == "edge_detect":
                     for _ph in ("rising", "falling"):
                         if GraphExecutor._to_bool(_pout.get(_ph)):
@@ -4049,7 +5491,9 @@ class LogicManager:
             on that node fired.
             """
             origin_id, handle = origin if isinstance(origin, tuple) else (origin, None)
-            if _node_type_by_id.get(origin_id) == "edge_detect":
+            if origin_id in _hems_trigger_handles or _node_type_by_id.get(origin_id) in ("edge_detect", "timer_delay"):
+                # hems_surplus: a firing is the run that sent True — the pulse
+                # end's False is no new event (as in _discrete_pulse_handles).
                 pulses = _discrete_pulse_handles({origin_id})
                 return (origin_id, handle) in pulses if handle is not None else bool(pulses)
             return GraphExecutor._to_bool(outputs.get(origin_id, {}).get("changed"))
@@ -4089,6 +5533,14 @@ class LogicManager:
                 and (edge.source, edge.sourceHandle or "out") not in _discrete_pulse_handles({edge.source})
             ):
                 return False
+            if _hems_level_edge(edge):
+                return False
+            if (
+                edge.source in _hems_trigger_handles
+                and require_fired_change_filter
+                and (edge.source, edge.sourceHandle or "out") not in _discrete_pulse_handles({edge.source})
+            ):
+                return False  # only the run that sent True carries a pulse
             if _node_type_by_id.get(edge.source) == "change_filter":
                 if (edge.sourceHandle or "out") != "changed":
                     return False
@@ -4185,7 +5637,12 @@ class LogicManager:
             # trigger handle is taken for a real level by a stateful consumer,
             # and a synchronous node can invert it into a truthy value that
             # fires an action node (issue #1090's machinery, generalized).
-            relay_origins = {node.id: {node.id} for node in flow.nodes if node.type in _PULSE_ORIGIN_NODE_TYPES}
+            # A hems_surplus node is an origin only through its trigger outputs.
+            relay_origins = {
+                node.id: {node.id}
+                for node in flow.nodes
+                if node.type in _PULSE_ORIGIN_NODE_TYPES and (node.type != "hems_surplus" or _hems_trigger_handles[node.id])
+            }
             # Parallel to relay_origins, but keyed by (origin, source handle).
             # relay_origins itself must stay node-keyed: _has_independent_fresh_trigger
             # subtracts it against fresh_origins, which is node-keyed too.
@@ -4208,7 +5665,6 @@ class LogicManager:
                 "xml_extractor",
                 "substring_extractor",
             }
-            _fan_in_probe = GraphExecutor(flow, {}, ical_app_config)
 
             def _has_independent_fresh_trigger(target_id: str, trigger_ports: set[str], missing_origins: set[str]) -> bool:
                 target_fresh_handles = event_fresh.get(target_id, set()) if event_fresh is not None else set()
@@ -4286,16 +5742,36 @@ class LogicManager:
                 except Exception:  # noqa: BLE001 - malformed imported relay config remains provenance-conservative
                     return False
 
+            def _pulse_input_edge(edge: Any) -> bool:
+                # change_filter.out and hems_surplus level outputs are sustained values, not pulses.
+                return (
+                    edge.source in relay_origins
+                    and not (_node_type_by_id.get(edge.source) == "change_filter" and (edge.sourceHandle or "out") != "changed")
+                    and not _hems_level_edge(edge)
+                )
+
             queue = list(relay_origins)
+            # Same fixpoint as in _compute_cf_hold_ids: an edge skipped as
+            # handle-independent is re-checked once the queue drains,
+            # because later pulse inputs can make that handle pulse-dependent.
+            deferred_edges: dict[int, Any] = {}
+            probe_cache: dict[Any, bool] = {}  # per pass: ``outputs`` is fixed while it runs
             while queue:
                 source_id = queue.pop()
                 source_origins = relay_origins[source_id]
                 for pulse_edge in _effective_edges:
                     if pulse_edge.source != source_id:
                         continue
+                    if _node_type_by_id.get(source_id) not in _PULSE_ORIGIN_NODE_TYPES and _handle_independent(
+                        source_id, pulse_edge.sourceHandle or "out", _pulse_input_edge, outputs, probe_cache
+                    ):
+                        deferred_edges[id(pulse_edge)] = pulse_edge
+                        continue
                     if (pulse_edge.targetHandle or "in") in debug_overrides.get(pulse_edge.target, {}):
                         continue
                     if _node_type_by_id.get(source_id) == "change_filter" and (pulse_edge.sourceHandle or "out") != "changed":
+                        continue
+                    if _hems_level_edge(pulse_edge):
                         continue
                     # A handle that can never fire is not a pulse origin. With
                     # both directions set to "off"/"trigger", "out" never
@@ -4356,6 +5832,9 @@ class LogicManager:
                         ("notify_pushover", "image_url"),
                         ("notify_pushover", "url"),
                         ("notify_pushover", "url_title"),
+                        ("notify_message", "image_url"),
+                        ("notify_message", "url"),
+                        ("notify_message", "url_title"),
                         ("message_archive", "title"),
                         ("value_sequence", "condition"),
                     } or (
@@ -4367,6 +5846,10 @@ class LogicManager:
                         # the block relay the placeholder on the next unrelated
                         # event.
                         or (target_type_name == "merge" and _MERGE_INPUT_HANDLE_RE.fullmatch(target_handle) is not None)
+                        # hems_surplus keeps state from every input (held values,
+                        # telegram times, timers): a no-pulse placeholder must not
+                        # reach any of them.
+                        or target_type_name == "hems_surplus"
                     )
                     if stateful_data_handle:
                         stateful_relay_origins.setdefault(pulse_edge.target, {}).setdefault(target_handle, set()).update(handle_origins_out)
@@ -4439,10 +5922,26 @@ class LogicManager:
                         if new_origins:
                             target_origins.update(new_origins)
                             queue.append(pulse_edge.target)
+                if not queue:
+                    flipped = [
+                        e
+                        for e in deferred_edges.values()
+                        if not _handle_independent(e.source, e.sourceHandle or "out", _pulse_input_edge, outputs, probe_cache)
+                    ]
+                    flipped_ids = {id(edge) for edge in flipped}
+                    deferred_edges = {k: v for k, v in deferred_edges.items() if k not in flipped_ids}
+                    queue.extend({e.source for e in flipped})
             return message_origins, trigger_origins, trigger_handle_origins, downstream_filter_origins, stateful_relay_origins
 
         _initial_event_fresh = (
-            _fresh_input_handles({node_id: dict(values) for node_id, values in overrides.items()}, flow.edges) if overrides else None
+            _fresh_input_handles(
+                {node_id: dict(values) for node_id, values in overrides.items()},
+                flow.edges,
+                # A delay or pulse passes an event on only in its own run.
+                {node.id for node in flow.nodes if node.type in TIMER_NODE_TYPES and node.id not in overrides},
+            )
+            if overrides
+            else None
         )
 
         def _event_origin(node_id: str) -> str:
@@ -4623,7 +6122,9 @@ class LogicManager:
                 else:
                     hyst.pop(node_id, None)
 
-        cron_node_ids = {n.id for n in flow.nodes if n.type == "timer_cron"}
+        # A timer_delay or timer_interval gets an override only on the run that
+        # fires it, which is a discrete tick exactly like a cron firing.
+        cron_node_ids = {n.id for n in flow.nodes if n.type in ("timer_cron", "timer_delay", "timer_interval")}
         # A change_filter's "changed" pulse — and an Edge Detection edge — is a
         # discrete event just like a cron tick: consecutive real pulses must
         # each retrigger host_check / wake_on_lan instead of being deduplicated
@@ -4635,6 +6136,12 @@ class LogicManager:
         # source, not every cron/change_filter in the graph.
         fired_crons = overrides.keys() & cron_node_ids
         cron_reachable: set[str] = set(fired_crons)
+
+        def _timer_boundary(node_id: str) -> bool:
+            """A delay or pulse is a tick boundary like memory: a pulse reaching
+            its input says nothing about its output this run — except for the
+            delay that fires in this run, whose output is the pulse."""
+            return _node_type_by_id.get(node_id) in TIMER_NODE_TYPES and node_id not in fired_crons
 
         def _propagate_pulse_reachability(reachable: set[str], frontier: list[str]) -> None:
             """Extend *reachable* in place with every node a pulse travelling
@@ -4651,7 +6158,7 @@ class LogicManager:
                 # effect via the deferred commit_memory_inputs, for the
                 # *next* tick. The pulse must not be treated as having
                 # propagated through to memory's own descendants.
-                if _node_type_by_id.get(current) == "memory":
+                if _node_type_by_id.get(current) == "memory" or _timer_boundary(current):
                     continue
                 for edge in _effective_edges:
                     if edge.source == current and edge.target not in reachable and _edge_carries_pulse(edge):
@@ -4690,6 +6197,78 @@ class LogicManager:
             if _trigger_mode(node.data) != _TRIGGER_MODE_EVENT:
                 return False
             return event_reachable is None or node.id in event_reachable
+
+        def _trigger_input_pulsed(node_id: str) -> bool:
+            """Did a discrete pulse (cron or delay tick, change, edge) reach
+            *node_id*'s "trigger" this pass? Such a pulse fires again even
+            while the trigger is still high from the previous one."""
+            cron_triggered = any(
+                edge.target == node_id
+                and (edge.targetHandle or "in") == "trigger"
+                and edge.source in cron_reachable
+                # A pulse reaching a Memory node (e.g. change_filter.changed
+                # -> memory.reset) puts memory itself in cron_reachable, but
+                # memory is an explicit tick boundary: its "out" this pass is
+                # whatever was already committed at the end of a *previous*
+                # tick, unaffected by the reset/in this pulse just delivered
+                # (that only takes effect via the deferred
+                # commit_memory_inputs, for the *next* tick). Memory being
+                # reachable must not be read as "my trigger input just
+                # pulsed" — only a non-Memory source directly in
+                # cron_reachable genuinely means that.
+                and _node_type_by_id.get(edge.source) != "memory"
+                and not _timer_boundary(edge.source)
+                for edge in _effective_edges
+            )
+            pulse_sources = [node_id]
+            pulse_seen: set[str] = set()
+            change_pulse_triggered = False
+            while pulse_sources:
+                target_id = pulse_sources.pop()
+                if target_id in pulse_seen:
+                    continue
+                pulse_seen.add(target_id)
+                # Memory is an explicit tick boundary — mirrors cron_reachable's
+                # forward traversal above (see its own "memory" comment): its
+                # "out" this pass is whatever was already committed at the end
+                # of a *previous* tick, entirely independent of whatever pulse
+                # just reached its "in"/"reset" this tick — that only takes
+                # effect via the deferred commit_memory_inputs, for the *next*
+                # tick. A change_filter feeding memory.reset must not be
+                # treated as if it drove memory.out itself, so this reverse
+                # trace must not walk past memory to inspect what fed it.
+                if _node_type_by_id.get(target_id) == "memory" or (target_id != node_id and _node_type_by_id.get(target_id) in TIMER_NODE_TYPES):
+                    continue  # the same boundary, for a timer upstream of node_id
+                for edge in _effective_edges:
+                    if edge.target != target_id:
+                        continue
+                    # Same trigger-aware filtering as _edge_carries_pulse: at
+                    # the triggered node itself, only its "trigger" handle
+                    # carries a pulse (a change_filter wired into "condition"
+                    # must not retrigger a separately sustained trigger) — and
+                    # the same applies at every intermediate hop, e.g. a pulse
+                    # entering an api_client's "body" data port must not be
+                    # traced onward as if it drove that node's own trigger.
+                    if not _edge_carries_pulse(edge):
+                        continue
+                    source = _node_by_id_early.get(edge.source)
+                    if source and (
+                        (
+                            source.type in ("datapoint_read", "change_filter")
+                            and (edge.sourceHandle or "out") == "changed"
+                            and GraphExecutor._to_bool(outputs.get(source.id, {}).get("changed"))
+                        )
+                        # Every Edge Detection handle is discrete, so the one
+                        # that fired this pass retriggers a sequence exactly
+                        # like a "changed" pulse does.
+                        or (source.type == "edge_detect" and (edge.source, edge.sourceHandle or "out") in _discrete_pulse_handles({edge.source}))
+                    ):
+                        change_pulse_triggered = True
+                        break
+                    pulse_sources.append(edge.source)
+                if change_pulse_triggered:
+                    break
+            return cron_triggered or change_pulse_triggered
 
         def _register_change_filter_pulses(node_ids: set[str]) -> None:
             # change_filter_pulse_ids/cron_reachable above only see pulses
@@ -4752,6 +6331,7 @@ class LogicManager:
                 target_set.add(node.id)
                 return True
             try:
+                _mark_side_effect()
                 reachable, latency_ms = await _ping_host(host, count, timeout_s)
                 hyst_hc["hc_prev_trigger"] = True
                 hyst_hc["hc_last_reachable"] = reachable
@@ -5012,6 +6592,7 @@ class LogicManager:
                     ipaddress.IPv4Address(broadcast)
                 except ValueError:
                     raise ValueError(f"invalid broadcast IP {broadcast!r}") from None
+                _mark_side_effect()
                 await asyncio.to_thread(_send_wol_packet, mac, broadcast, port)
                 # Record the consumed rising edge only after a successful send so
                 # that a transient failure does not silently suppress the next attempt.
@@ -5223,8 +6804,11 @@ class LogicManager:
                 execution_values_by_datapoint_id[dp_id_str] = node_override["value"]
                 execution_value_priority_by_datapoint_id[dp_id_str] = priority
 
-        def _resolve_node_text(node: Any, text: str) -> ResolvedTemplate:
-            """Expand ###VAR### in a static text field (notification/archive fallbacks)."""
+        def _resolve_node_text(node: Any, text: str, quote: Any = None) -> ResolvedTemplate:
+            """Expand ###VAR### in a static text field (notification/archive fallbacks).
+
+            *quote* encodes each inserted value, e.g. for a URL template.
+            """
             resolver = _make_api_client_variable_resolver(
                 self._registry,
                 node.data.get("variables"),
@@ -5232,7 +6816,7 @@ class LogicManager:
                 api_time_snapshot,
                 subject="Variable",
             )
-            return resolve_template(text, api_time_snapshot, resolver)
+            return resolve_template(text, api_time_snapshot, resolver, quote)
 
         import json as _json
 
@@ -5358,10 +6942,12 @@ class LogicManager:
                     req_kwargs["extensions"] = request_extensions
                 last_transport_error: Exception = ValueError(f"Could not fetch API target after trying {len(request_urls)} address(es)")
                 resp: httpx.Response | Any | None = None
+                resp_body: bytes | None = None
                 async with httpx.AsyncClient(auth=auth, verify=verify_ssl) as client:
                     for request_url in request_urls:
                         try:
-                            resp = await client.request(method, request_url, **req_kwargs)
+                            _mark_side_effect()
+                            resp, resp_body = await _send_api_client_request(client, method, request_url, **req_kwargs)
                             break
                         except httpx.RequestError as req_exc:
                             last_transport_error = req_exc
@@ -5370,23 +6956,7 @@ class LogicManager:
                             continue
                 if resp is None:
                     raise last_transport_error
-                resp_text = resp.text
-                if len(resp_text) > 1_000_000:
-                    resp_text = resp_text[:1_000_000]
-                if resp_type in ("json", "application/json"):
-                    try:
-                        resp_data: Any = resp.json()
-                    except ValueError:
-                        resp_data = resp_text
-                else:
-                    resp_data = resp_text
-                outputs[node.id].update(
-                    {
-                        "response": resp_data,
-                        "status": resp.status_code,
-                        "success": 200 <= resp.status_code < 300,
-                    },
-                )
+                outputs[node.id].update(_api_client_response_output(resp, resp_body, resp_type))
                 logger.info(
                     "Graph %s: API %s %s → %d",
                     graph_id[:8],
@@ -5858,10 +7428,12 @@ class LogicManager:
                         req_kwargs["extensions"] = request_extensions
                     last_transport_error: Exception = ValueError(f"Could not fetch API target after trying {len(request_urls)} address(es)")
                     resp: httpx.Response | Any | None = None
+                    resp_body: bytes | None = None
                     async with httpx.AsyncClient(auth=auth, verify=verify_ssl) as client:
                         for request_url in request_urls:
                             try:
-                                resp = await client.request(method, request_url, **req_kwargs)
+                                _mark_side_effect()
+                                resp, resp_body = await _send_api_client_request(client, method, request_url, **req_kwargs)
                                 break
                             except httpx.RequestError as req_exc:
                                 last_transport_error = req_exc
@@ -5870,23 +7442,7 @@ class LogicManager:
                                 continue
                     if resp is None:
                         raise last_transport_error
-                    resp_text = resp.text
-                    if len(resp_text) > 1_000_000:
-                        resp_text = resp_text[:1_000_000]
-                    if resp_type in ("json", "application/json"):
-                        try:
-                            resp_data: Any = resp.json()
-                        except ValueError:
-                            resp_data = resp_text
-                    else:
-                        resp_data = resp_text
-                    outputs[node.id].update(
-                        {
-                            "response": resp_data,
-                            "status": resp.status_code,
-                            "success": 200 <= resp.status_code < 300,
-                        },
-                    )
+                    outputs[node.id].update(_api_client_response_output(resp, resp_body, resp_type))
                     logger.info(
                         "Graph %s: API %s %s → %d",
                         graph_id[:8],
@@ -6192,6 +7748,7 @@ class LogicManager:
                 }
                 source = f"logic.graph.{graph_id}.node.{node.id}"
                 record_kwargs = {"type": message_type, "severity": severity, "source": source, "title": title, "message": msg, "payload": payload}
+                _mark_side_effect()
                 await get_message_archive_service().record(archive_id, **record_kwargs)
                 outputs[node.id]["stored"] = True
                 target_set.add(node.id)
@@ -6221,7 +7778,16 @@ class LogicManager:
             event_sources = {node_id: dict(values) for node_id, values in overrides.items()}
             for node_id in refreshed_ical_nodes:
                 event_sources.setdefault(node_id, {})
+            # A hems_surplus block that sent something ran a control cycle, which
+            # is an event of its own, whatever started this run; blocked_outputs
+            # below keeps its unsent handles stale.
+            for node_id in _hems_node_ids:
+                if outputs.get(node_id, {}).get("_emitted"):
+                    event_sources.setdefault(node_id, {})
             blocked_sources = {node.id for node in flow.nodes if node.type == "memory"}
+            # A delay or pulse passes an event on only in its own run (it is an
+            # override there): an event reaching its input is no news downstream.
+            blocked_sources.update(node.id for node in flow.nodes if node.type in TIMER_NODE_TYPES and node.id not in overrides)
             blocked_sources.update(api_client_ids - triggered_api_clients)
             blocked_sources.update(host_check_ids - executed_host_check_nodes)
             blocked_sources.update(ical_ids - refreshed_ical_nodes)
@@ -6248,6 +7814,14 @@ class LogicManager:
                 for edge in _effective_edges
                 if edge.source in no_result_mapping_ids and (edge.sourceHandle or "out") in {"out", "result"}
             }
+            # hems_surplus carries every output at its level, but only what it
+            # actually sent this run is news for an action node downstream.
+            blocked_outputs.update(
+                (edge.source, edge.sourceHandle or "out")
+                for edge in _effective_edges
+                if _node_type_by_id.get(edge.source) == "hems_surplus"
+                and (edge.sourceHandle or "out") not in outputs.get(edge.source, {}).get("_emitted", ())
+            )
             while True:
                 cache_key = (frozenset(blocked_sources), frozenset(blocked_outputs))
                 if cache_key not in freshness_cache:
@@ -6321,6 +7895,7 @@ class LogicManager:
                 _freshness_settled_async_ids.add(node.id)
                 return False
 
+            _mark_side_effect()  # a notification is about to be sent
             if node.type == "notify_message":
                 instance_id = str(node.data.get("adapter_instance_id") or "").strip()
                 providers = node.data.get("providers") or []
@@ -6341,28 +7916,87 @@ class LogicManager:
                 fallback_message = _resolve_node_text(node, str(node.data.get("message") or "")) if raw_message is None else None
                 resolved_title = _resolve_node_text(node, str(node.data.get("title") or ""))
                 variable_errors = [*(fallback_message.errors if fallback_message else []), *resolved_title.errors]
+                # Pushover options travel only when a Pushover target is
+                # selected: stale hidden values must never fail or alter the
+                # delivery through other providers.
+                # Unset options are dropped, so an unchanged block sends exactly as before.
+                pushover_options: dict[str, Any] = {}
+                pushover_refs = [ref for ref in providers if isinstance(ref, dict) and ref.get("provider") == "pushover"]
+                # A variable error in a Pushover-only field fails the Pushover
+                # targets only; the other providers still deliver.
+                option_errors: list[str] = []
+                if pushover_refs:
+                    pushover_options = {field: node.data.get(field) for field in ("sound", "format", "ttl", "timestamp", "retry", "expire")}
+                    for field in ("url", "url_title", "image_url"):
+                        connected_value = out.get(f"_{field}")
+                        if connected_value is not None:
+                            pushover_options[field] = _msg_to_str(connected_value)
+                            continue
+                        resolved_option = _resolve_node_text(
+                            node,
+                            str(node.data.get(field) or ""),
+                            None if field == "url_title" else encode_url_value,
+                        )
+                        option_errors.extend(resolved_option.errors)
+                        pushover_options[field] = resolved_option.text
+                    pushover_options = {field: value for field, value in pushover_options.items() if value not in (None, "")}
                 if variable_errors:
                     outputs[node.id]["__error__"] = "; ".join(variable_errors)
                     logger.warning("Graph %s: notification variable error: %s", graph_id[:8], outputs[node.id]["__error__"])
                     target_set.add(node.id)
                     return False
                 message = _msg_to_str(raw_message) if raw_message is not None else fallback_message.text
+                # With HTML formatting the fallback template is the author's HTML;
+                # inserted variable values — and a connected message, which is
+                # data — get escaped (Pushover only).
+                pushover_message = None
+                if str(pushover_options.get("format") or "").strip().lower() == "html":
+                    if raw_message is None:
+                        pushover_message = _resolve_node_text(node, str(node.data.get("message") or ""), html.escape).text
+                    else:
+                        pushover_message = html.escape(message)
                 try:
                     raw_priority = node.data.get("priority")
                     try:
                         priority = int(raw_priority) if raw_priority not in (None, "") else 0
                     except (TypeError, ValueError):
                         priority = 0
-                    priority = max(-2, min(1, priority))
-                    results = await adapter.send_notification(
-                        message=message,
-                        providers=providers,
-                        title=resolved_title.text or None,
-                        priority=priority,
-                    )
+                    priority = max(-2, priority)
+                    if priority > 2 or (priority == 2 and ("retry" not in pushover_options or "expire" not in pushover_options)):
+                        # Before #1328 the block clamped to 1. Existing graphs with
+                        # a stored 2+ and no retry/expire must keep delivering
+                        # (issue: existing logics work unchanged); the panel flags it.
+                        if pushover_refs:
+                            logger.warning(
+                                "Graph %s: notification priority %s without valid emergency settings is sent as priority 1",
+                                graph_id[:8],
+                                priority,
+                            )
+                        priority = 1
+                    if priority != 2:
+                        # retry/expire are hidden below emergency priority; a
+                        # leftover value must neither be sent nor fail validation.
+                        pushover_options.pop("retry", None)
+                        pushover_options.pop("expire", None)
+                    send_providers = providers
+                    skipped = []
+                    if option_errors:
+                        send_providers = [ref for ref in providers if not (isinstance(ref, dict) and ref.get("provider") == "pushover")]
+                        skipped = [f"pushover/{ref.get('target')}: {'; '.join(option_errors)}" for ref in pushover_refs]
+                        pushover_options = {}
+                    results = []
+                    if send_providers:
+                        results = await adapter.send_notification(
+                            message=message,
+                            providers=send_providers,
+                            title=resolved_title.text or None,
+                            priority=priority,
+                            **({"pushover": pushover_options} if pushover_options else {}),
+                            **({"pushover_message": pushover_message} if pushover_message is not None and pushover_options else {}),
+                        )
                     failures = [result for result in results if not result.ok]
-                    if not results or failures:
-                        detail = ", ".join(f"{result.provider}/{result.target}: {result.detail}" for result in failures)
+                    if skipped or not results or failures:
+                        detail = ", ".join([*skipped, *(f"{result.provider}/{result.target}: {result.detail}" for result in failures)])
                         outputs[node.id]["__error__"] = detail or "MESSAGE adapter did not process any targets"
                         logger.warning("Graph %s: notification failed: %s", graph_id[:8], outputs[node.id]["__error__"])
                         target_set.add(node.id)
@@ -6372,7 +8006,11 @@ class LogicManager:
                     return True
                 except Exception as exc:
                     outputs[node.id]["__error__"] = str(exc)
-                    logger.exception("Graph %s: notification failed", graph_id[:8])
+                    if isinstance(exc, ValueError):
+                        # send_notification's validation: secret-free, no traceback needed.
+                        logger.warning("Graph %s: notification rejected: %s", graph_id[:8], exc)
+                    else:
+                        logger.exception("Graph %s: notification failed", graph_id[:8])
                     target_set.add(node.id)
                     return False
 
@@ -6742,13 +8380,60 @@ class LogicManager:
                 blocked_memory_inputs.add((memory_node.id, "in"))
         executor.commit_memory_inputs(outputs, memory_commit_overrides, blocked_memory_inputs)
 
+        timer_ids = {node.id for node in flow.nodes if node.type in TIMER_NODE_TYPES}
+        pulse_ids = {node_id for node_id in timer_ids if _node_type_by_id.get(node_id) == "timer_pulse"}
+        stale_pulse_closure: dict[frozenset[str], set[str]] = {}
+
+        def _follows_stale_pulse(node_id: str) -> bool:
+            """Was *node_id* computed from a pulse level that has changed since?
+
+            Runs of a sheet interleave across awaits; the run that changed the
+            level acts on the current one, which a slower run must not undo.
+            """
+            # A pulse's own start or end run (it is an override there) writes its
+            # level as it stands — also when that run restarts it at once.
+            changed = frozenset((pulse_ids & (active_pulses ^ self._active_pulses(graph_id))) - overrides.keys())
+            if not changed:
+                return False
+            if changed not in stale_pulse_closure:
+                # Not past memory or another timer: their output this run does
+                # not follow the pulse level.
+                reached, frontier = set(changed), list(changed)
+                while frontier:
+                    current = frontier.pop()
+                    if current not in changed and _node_type_by_id.get(current) in TICK_BOUNDARY_NODE_TYPES:
+                        continue
+                    for edge in _effective_edges:
+                        if edge.source == current and edge.target not in reached:
+                            reached.add(edge.target)
+                            frontier.append(edge.target)
+                # A boundary reached is no follower either (only what is behind a pulse is).
+                stale_pulse_closure[changed] = {n for n in reached - changed if _node_type_by_id.get(n) not in TICK_BOUNDARY_NODE_TYPES}
+            return node_id in stale_pulse_closure[changed]
+
+        def _trigger_follows_stale_pulse(node_id: str) -> bool:
+            """Does the block feeding *node_id*'s trigger follow a pulse level that changed since?"""
+            source = input_sources.get((node_id, "trigger"), (None, ""))[0]
+            # (Not for the pulse's own run: it writes its level as it stands.)
+            changed = (active_pulses ^ self._active_pulses(graph_id)) - overrides.keys()
+            return source is not None and (source in changed or _follows_stale_pulse(source))
+
+        def _stale_pulse_write(write_id: str) -> bool:
+            # A Write Object with a wired trigger writes on an event of this
+            # run, which no other run repeats, so it is kept — unless that
+            # trigger itself follows the stale pulse level.
+            if (write_id, "trigger") not in wired_inputs:
+                return _follows_stale_pulse(write_id)
+            return _trigger_follows_stale_pulse(write_id)
+
         # ── Start/cancel value sequences ──────────────────────────────────
         wired_inputs: set[tuple[str, str]] = {(e.target, e.targetHandle or "in") for e in flow.edges}
-        node_by_id = {node.id: node for node in flow.nodes}
         pending_sequence_starts: list[tuple[Any, bool]] = []
         for node in flow.nodes:
             if node.type != "value_sequence":
                 continue
+            if _trigger_follows_stale_pulse(node.id):
+                continue  # its trigger follows a pulse level that changed meanwhile: the run that changed it acts
             output = outputs.get(node.id, {})
             key = (graph_id, node.id)
             condition_origins = _cf_changed_stateful_relay_origins.get(node.id, {}).get("condition", set())
@@ -6782,81 +8467,97 @@ class LogicManager:
                 continue
             was_triggered = state.get("sequence_prev_trigger", False)
             state["sequence_prev_trigger"] = triggered
-            cron_triggered = any(
-                edge.target == node.id
-                and (edge.targetHandle or "in") == "trigger"
-                and edge.source in cron_reachable
-                # A pulse reaching a Memory node (e.g. change_filter.changed
-                # -> memory.reset) puts memory itself in cron_reachable, but
-                # memory is an explicit tick boundary: its "out" this pass is
-                # whatever was already committed at the end of a *previous*
-                # tick, unaffected by the reset/in this pulse just delivered
-                # (that only takes effect via the deferred
-                # commit_memory_inputs, for the *next* tick). Memory being
-                # reachable must not be read as "my trigger input just
-                # pulsed" — only a non-Memory source directly in
-                # cron_reachable genuinely means that.
-                and (node_by_id[edge.source].type != "memory" if edge.source in node_by_id else True)
-                for edge in _effective_edges
-            )
-            pulse_sources = [node.id]
-            pulse_seen: set[str] = set()
-            change_pulse_triggered = False
-            while pulse_sources:
-                target_id = pulse_sources.pop()
-                if target_id in pulse_seen:
-                    continue
-                pulse_seen.add(target_id)
-                # Memory is an explicit tick boundary — mirrors cron_reachable's
-                # forward traversal above (see its own "memory" comment): its
-                # "out" this pass is whatever was already committed at the end
-                # of a *previous* tick, entirely independent of whatever pulse
-                # just reached its "in"/"reset" this tick — that only takes
-                # effect via the deferred commit_memory_inputs, for the *next*
-                # tick. A change_filter feeding memory.reset must not be
-                # treated as if it drove memory.out itself, so this reverse
-                # trace must not walk past memory to inspect what fed it.
-                _target_node = node_by_id.get(target_id)
-                if _target_node is not None and _target_node.type == "memory":
-                    continue
-                for edge in _effective_edges:
-                    if edge.target != target_id:
-                        continue
-                    # Same trigger-aware filtering as _edge_carries_pulse: at
-                    # the sequence node itself, only its "trigger" handle
-                    # carries a pulse (a change_filter wired into "condition"
-                    # must not retrigger a separately sustained trigger) — and
-                    # the same applies at every intermediate hop, e.g. a pulse
-                    # entering an api_client's "body" data port must not be
-                    # traced onward as if it drove that node's own trigger.
-                    if not _edge_carries_pulse(edge):
-                        continue
-                    source = node_by_id.get(edge.source)
-                    if source and (
-                        (
-                            source.type in ("datapoint_read", "change_filter")
-                            and (edge.sourceHandle or "out") == "changed"
-                            and GraphExecutor._to_bool(outputs.get(source.id, {}).get("changed"))
-                        )
-                        # Every Edge Detection handle is discrete, so the one
-                        # that fired this pass retriggers a sequence exactly
-                        # like a "changed" pulse does.
-                        or (source.type == "edge_detect" and (edge.source, edge.sourceHandle or "out") in _discrete_pulse_handles({edge.source}))
-                    ):
-                        change_pulse_triggered = True
-                        break
-                    pulse_sources.append(edge.source)
-                if change_pulse_triggered:
-                    break
-            if triggered and (not was_triggered or cron_triggered or change_pulse_triggered):
+            if triggered and (not was_triggered or _trigger_input_pulsed(node.id)):
                 # Defer creating the task until ordinary datapoint writes have
                 # been published below.  A task created here can otherwise run
                 # at the write loop's first await and invert graph-local order.
                 pending_sequence_starts.append((node, condition))
 
+        # ── Delay / pulse timers: started on a rising trigger or a fresh
+        # discrete pulse. A pulse starts before the writes below, a delay
+        # after them (like value sequences).
+        pending_delays: list[tuple[Any, bool, bool, _TimerState, int]] = []
+        # A manual test run of a disabled sheet neither starts a timer nor
+        # records a level, so reactivation still re-arms a delay. While a save
+        # briefly unloads the sheet it counts as enabled; a sheet deleted or
+        # reset meanwhile gets nothing back from this run.
+        entry = self._graphs.get(graph_id)
+        timers_live = (entry is None or entry[1]) and self._timer_epochs.get(graph_id) is timer_epoch
+        for node in flow.nodes:
+            # A timer behind a pulse whose level changed since this run began
+            # saw the old level: the run that changed it records the new one.
+            if node.type not in TIMER_NODE_TYPES or not timers_live or _trigger_follows_stale_pulse(node.id):
+                continue
+            if self._current_timer_node(graph_id, node) is None:
+                continue  # a save removed the block meanwhile: a level kept for it would greet its re-adding
+            level_seqs = self._timer_level_seqs.setdefault(graph_id, {})
+            if level_seqs.get(node.id, 0) > timer_run_seq:
+                continue  # a newer run that finished first recorded the newer level
+            trigger_sig = self._timer_trigger_signature(flow, node.id)
+            current_entry = self._graphs.get(graph_id)
+            if current_entry is not None and current_entry[2] is not flow and self._timer_trigger_signature(current_entry[2], node.id) != trigger_sig:
+                continue  # a save rewired the trigger meanwhile: this run saw the old input
+            # The level is kept beyond _node_state (and persisted): a trigger
+            # still high after a save or restart is no new rising edge. It is
+            # recorded now, in the order the runs saw it.
+            # Read from its source once the run is complete: a timer is a tick
+            # boundary and may have been evaluated before the block feeding it.
+            trigger_level = _current_input_value(node.id, "trigger")
+            trigger_origins = _cf_changed_trigger_origins.get(node.id, set())
+            if trigger_origins and not any(_origin_pulsed(origin) for origin in trigger_origins):
+                trigger_level = False  # a pulse that did not fire is no level (as for value sequences)
+            outputs.setdefault(node.id, {})["_triggered"] = trigger_level  # for the debug view
+            trigger_source = input_sources.get((node.id, "trigger"), (None, ""))[0]
+            # None is "nothing arrived": a Read Object with no value yet, or a
+            # failed block feeding the trigger.
+            if "__error__" in outputs[node.id] or trigger_level is None:
+                continue  # no level this run: a failed producer or nothing arrived is no falling edge
+            timer = self._timers.get(graph_id, {}).get(node.id)
+            same_input = timer is not None and timer.kind == node.type and timer.trigger_sig in (None, trigger_sig)
+            was_triggered = timer.prev_trigger if same_input else False  # type: ignore[union-attr]
+            triggered = GraphExecutor._to_bool(trigger_level)
+            level_seqs[node.id] = timer_run_seq
+            self._set_timer_level(graph_id, node, triggered, trigger_sig)
+            # A TRUE telegram a Read Object wired straight to the trigger received
+            # in this run counts again, e.g. a motion detector repeating "1"
+            # while someone is there — not every reading behind a condition.
+            # (The level is the value the block received — after the Read
+            # Object's formula or mapping.)
+            fresh_event = (
+                triggered
+                and _node_type_by_id.get(trigger_source) == "datapoint_read"
+                and GraphExecutor._to_bool(overrides.get(trigger_source, {}).get("changed"))
+            )
+            if not (triggered and (not was_triggered or fresh_event or _trigger_input_pulsed(node.id))):
+                continue
+            if node.type == "timer_pulse":
+                # Its level changes now, so this run's writes that follow the
+                # old one are stale (_stale_pulse_write): the start run writes
+                # the new level, and a redundant "off" here cannot use up a
+                # write throttle the "on" needs.
+                # Refused at the cascade limit, the edge is used up: a later run
+                # must not restart a runaway loop.
+                if (current := self._current_timer_node(graph_id, node)) is not None:
+                    self._start_timer(graph_id, current, logic_depth)
+            else:
+                timer = self._timers[graph_id][node.id]  # recorded high just above
+                pending_delays.append((node, was_triggered, triggered, timer, timer.level_changes))
         # ── Process datapoint_write outputs — apply trigger gating + write-side filters,
         # then publish DataValueEvent so registry, ring-buffer, MQTT and WS all get notified.
-        await self._apply_datapoint_write_outputs(graph_id, flow, outputs, graph_state, wired_inputs, execute_now, logic_depth)
+        _mark_side_effect()  # from the writes on, the run has acted (value sequences follow them)
+        try:
+            await self._apply_datapoint_write_outputs(
+                graph_id, flow, outputs, graph_state, wired_inputs, execute_now, logic_depth, skip_if=_stale_pulse_write if pulse_ids else None
+            )
+        except BaseException:
+            # The delays below will not start: take their level back (unless
+            # a later run recorded another), so the edge is seen again.
+            for node, was_triggered, triggered, _timer, _changes in pending_delays:
+                timer = self._timers.get(graph_id, {}).get(node.id)
+                recorded_by_this_run = self._timer_level_seqs.get(graph_id, {}).get(node.id) == timer_run_seq
+                if timer is not None and timer.kind == node.type and timer.prev_trigger == triggered and recorded_by_this_run:
+                    self._set_timer_level(graph_id, node, was_triggered)
+            raise
 
         # Value sequences are intentionally started after synchronous graph
         # writes, so an execution that triggers both has deterministic order.
@@ -6866,6 +8567,15 @@ class LogicManager:
             current_condition = self._sequence_conditions.get((graph_id, node.id), condition)
             if current_condition:
                 self._start_value_sequence(graph_id, node, current_condition, logic_depth, flow.model_dump_json())
+        # Configured as the sheet now stands: a save may have landed during the
+        # writes above.
+        for node, _was_triggered, _triggered, timer, changes in pending_delays:
+            if self._timer_epochs.get(graph_id) is not timer_epoch:
+                continue
+            if self._timers.get(graph_id, {}).get(node.id) is not timer or timer.level_changes != changes:
+                continue  # a newer run that finished first recorded another level (e.g. the fall that followed)
+            if (current := self._current_timer_node(graph_id, node)) is not None:
+                self._start_timer(graph_id, current, logic_depth, triggered_at=run_started_at)
 
         for node in flow.nodes:
             if node.type == "gate":
@@ -6884,6 +8594,18 @@ class LogicManager:
                 for node_id, ports in run_inputs.items():
                     if run_outputs.get(node_id) is outputs.get(node_id):
                         debug_inputs[node_id] = ports
+            for node_id in timer_ids:
+                # A timer ran before the block feeding it (a tick boundary): show
+                # the level the manager read once the run was complete.
+                # "effective" is the level it used (a pulse that did not fire is no level).
+                source_id, source_handle = input_sources.get((node_id, "trigger"), ("", ""))
+                timer_out = outputs.get(node_id, {})
+                debug_inputs.setdefault(node_id, {})["trigger"] = {
+                    "incoming": _snapshot_debug_value(GraphExecutor._get_output_value(outputs.get(source_id, {}), source_handle)),
+                    "effective": _snapshot_debug_value(
+                        timer_out["_triggered"] if "_triggered" in timer_out else _current_input_value(node_id, "trigger")
+                    ),
+                }
             if debug_input_capture is not None:
                 debug_input_capture.clear()
                 debug_input_capture.update(debug_inputs)
@@ -6927,10 +8649,15 @@ class LogicManager:
 
         Nodes with persist_state=False are excluded from the saved snapshot
         so their accumulators reset on server restart (opt-out behaviour).
+        A sheet without hysteresis state is written only when its timer state
+        changed, so an idle timer does not cost a database write on every run.
         """
-        hyst = self._hysteresis.get(graph_id)
-        if not hyst:
+        hyst = self._hysteresis.get(graph_id) or {}
+        timers_dirty = graph_id in self._timer_dirty
+        if not hyst and not timers_dirty:
             return
+        # Taken now, with the snapshot below: a change while the row is written marks it again.
+        self._timer_dirty.discard(graph_id)
         try:
             ical_runtime_keys = {
                 "raw",
@@ -6950,17 +8677,22 @@ class LogicManager:
             if graph_entry:
                 _, _, _flow = graph_entry
                 current_nodes = {node.id: node for node in _flow.nodes}
-                no_persist = {n.id for n in _flow.nodes if n.data.get("persist_state") is False}
+                # hems_surplus never persists: its timers and on/off states must
+                # start from the safe state after a restart.
+                no_persist = {n.id for n in _flow.nodes if n.data.get("persist_state") is False or n.type == "hems_surplus"}
                 state_to_save = {}
                 for node_id, node_state in hyst.items():
                     if node_id not in current_nodes or node_id in no_persist:
                         continue
                     state_to_save[node_id] = _without_ical_runtime(node_state)
+                # Delay/pulse timers keep their state in the manager.
+                state_to_save.update(self._timer_states_to_persist(graph_id, set(current_nodes) - no_persist))
             else:
                 # During a semantic save, invalidate_cache() briefly removes
                 # the graph entry before reload() restores it.  Never let that
                 # cache gap serialize large calendar bodies or attempt metadata.
                 state_to_save = {node_id: _without_ical_runtime(node_state) for node_id, node_state in hyst.items()}
+                state_to_save.update(self._timer_states_to_persist(graph_id, None))
             # _persist_default covers values json can't natively encode
             # (e.g. a change_filter holding a datetime.time/date from a KNX
             # DPT10/11 object, or bytes from an UNKNOWN-type DataPoint) —
@@ -7007,6 +8739,12 @@ class LogicManager:
             )
         except Exception:
             logger.exception("Graph %s: failed to persist node_state", graph_id[:8])
+            if timers_dirty:
+                self._timer_dirty.add(graph_id)  # try again with the next save
+        except BaseException:
+            if timers_dirty:
+                self._timer_dirty.add(graph_id)  # cancelled mid-write: stop() saves it again
+            raise
 
     async def _apply_datapoint_write_outputs(
         self,
@@ -7020,14 +8758,16 @@ class LogicManager:
         *,
         skip_node_ids: set[str] | frozenset[str] = frozenset(),
         initialization: bool = False,
+        skip_if: Callable[[str], bool] | None = None,
     ) -> set[str]:
         """Apply trigger gating + write-side filters to datapoint_write outputs,
         then publish DataValueEvent so registry, ring-buffer, MQTT and WS all get
         notified. skip_node_ids excludes individual write nodes (used by
         initialize_graph for writes descending from unseeded Read Objects);
         initialization marks the events as save-time seeding so notification
-        subscribers do not react to them. Returns the ids of the write nodes
-        whose event was actually published.
+        subscribers do not react to them; skip_if, asked right before each
+        write, drops a write that has become stale meanwhile. Returns the ids
+        of the write nodes whose event was actually published.
         """
         from obs.core.event_bus import DataValueEvent
 
@@ -7050,12 +8790,18 @@ class LogicManager:
             dp_id_str = node.data.get("datapoint_id")
             if not dp_id_str:
                 continue
+            write_val = self._serialize_structured_for_target(dp_id_str, write_val)
 
             ns = graph_state.setdefault(node.id, {})
+            if node_out.get("_skip_unchanged") and "last_write_val" in ns and _same_value(ns["last_write_val"], write_val):
+                continue  # a hems_surplus level this Write Object already wrote
             if not self._write_filters_allow(node.data, ns, write_val, write_now):
+                continue
+            if skip_if is not None and skip_if(node.id):
                 continue
 
             # All filters passed — update state and publish
+            previous_write = (ns.get("last_write_val", _MISSING_STATE), ns.get("last_write_ts", _MISSING_STATE))
             ns["last_write_val"] = write_val
             ns["last_write_ts"] = write_now
             try:
@@ -7073,7 +8819,34 @@ class LogicManager:
                 logger.debug("Graph %s: wrote dp %s = %s", graph_id, dp_id_str, write_val)
             except Exception:
                 logger.exception("Graph %s: failed to write dp %s", graph_id, dp_id_str)
+                if node_out.get("_skip_unchanged"):
+                    # Not written: a hems_surplus level must be tried again, not
+                    # skipped as "already written" while it stays unchanged.
+                    for key, value in zip(("last_write_val", "last_write_ts"), previous_write, strict=True):
+                        if value is _MISSING_STATE:
+                            ns.pop(key, None)
+                        else:
+                            ns[key] = value
         return published
+
+    def _serialize_structured_for_target(self, dp_id_str: Any, value: Any) -> Any:
+        """Return a list/dict written to a STRING object as JSON text (#999).
+
+        Blocks such as the iCalendar filter output a Python list. The WriteRouter
+        only propagates values matching the object's type, so a raw list on a
+        STRING object would be refused as a type mismatch on every refresh.
+        A malformed id (persisted ``node.data`` is not schema-checked) is left to
+        the per-write error handling, so later Write Objects still run.
+        """
+        if not isinstance(value, list | dict):
+            return value
+        try:
+            dp = self._registry.get(uuid.UUID(dp_id_str))
+        except (AttributeError, TypeError, ValueError):
+            return value
+        if dp is None or getattr(dp, "data_type", None) != "STRING":
+            return value
+        return json.dumps(value, ensure_ascii=False, default=str)
 
     @staticmethod
     def _write_filters_allow(d: dict[str, Any], ns: dict[str, Any], write_val: Any, write_now: datetime) -> bool:
@@ -7115,7 +8888,7 @@ class LogicManager:
             try:
                 raw = json.loads(row["flow_data"]) if row["flow_data"] else {}
                 flow = FlowData.model_validate(raw)
-                _migrate_legacy_api_client_field_names(flow)
+                _migrate_legacy_node_data(flow)
                 self._graphs[row["id"]] = (row["name"], bool(row["enabled"]), flow)
 
                 # Restore persisted node state (statistics, hysteresis, …) from DB,
@@ -7239,6 +9012,13 @@ class LogicManager:
                                     _node_state["_recovered_str"] = True
                         else:
                             saved = saved_raw
+                        if isinstance(saved, dict):
+                            # hems_surplus is never restored, whatever a row holds:
+                            # it always starts in the safe state, and its timestamps
+                            # come from a monotonic clock that restarts with the process.
+                            for _hems_node in flow.nodes:
+                                if _hems_node.type == "hems_surplus":
+                                    saved.pop(_hems_node.id, None)
                         if isinstance(saved, dict) and saved:
                             self._hysteresis[row["id"]] = saved
                             logger.debug(
@@ -7262,11 +9042,16 @@ class LogicManager:
         # the in-memory entry is a no-op and will be GC'd naturally.
         self._node_state.pop(graph_id, None)
         self._cancel_sequence_tasks(graph_id)
+        # Delay/pulse timer tasks are left running: each run reads the sheet
+        # anew, and a run this save makes obsolete is retried against it.
         # Cancel cron tasks for this specific graph
         to_remove = [k for k in list(self._cron_tasks) if k[0] == graph_id]
         for k in to_remove:
             self._cron_tasks[k].cancel()
             del self._cron_tasks[k]
+        for k in [k for k in self._hems_planned_wake if k[0] == graph_id]:
+            del self._hems_planned_wake[k]
+        self._cancel_hems_wakes(graph_id)
 
     def _prune_graph_executor_lock(self, graph_id: str) -> None:
         """Release an idle worker lock after its graph has disappeared."""
@@ -7296,6 +9081,8 @@ class LogicManager:
         """Invalidate a deleted graph and release all of its runtime data."""
         self.invalidate_cache(graph_id)
         self._hysteresis.pop(graph_id, None)
+        self._forget_timers(graph_id)
+        self._timer_epochs.pop(graph_id, None)
         self._ical_result_caches.pop(graph_id, None)
         self._ical_cache_generations.pop(graph_id, None)
         for key in [key for key in self._ical_fetch_locks if key[0] == graph_id]:
@@ -7322,7 +9109,7 @@ class LogicManager:
             # migrated cached flow with the legacy one, silently losing the
             # configured headers/bearer-token file until the next full
             # _load_graphs() reload.
-            _migrate_legacy_api_client_field_names(flow)
+            _migrate_legacy_node_data(flow)
             self._graphs[graph_id] = (name, enabled, flow)
             self._sequence_graph_signatures[graph_id] = flow.model_dump_json()
             # A layout-only save leaves execution semantics untouched by

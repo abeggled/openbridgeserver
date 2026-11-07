@@ -274,3 +274,30 @@ async def test_patch_value_404_for_unknown_dp(client, auth_headers):
         headers=auth_headers,
     )
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Non-finite numbers on the write routes (#1153)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("token", ["NaN", "Infinity", "-Infinity"])
+@pytest.mark.parametrize("data_type", ["INTEGER", "FLOAT"])
+@pytest.mark.parametrize("method", ["post_value", "patch"])
+async def test_write_non_finite_number_returns_422_and_is_not_stored(client, auth_headers, method, data_type, token):
+    # Python's json.loads accepts these non-standard literals, so they reach the coercion
+    # helper; INTEGER+Infinity used to be a 500, FLOAT+NaN/Infinity a 204 with invalid JSON on MQTT.
+    dp = await _make_dp(client, auth_headers, data_type=data_type)
+    url = f"/api/v1/datapoints/{dp['id']}/value" if method == "post_value" else f"/api/v1/datapoints/{dp['id']}"
+    send = client.post if method == "post_value" else client.patch
+
+    resp = await send(
+        url,
+        content=f'{{"value": {token}}}'.encode(),
+        headers={**auth_headers, "Content-Type": "application/json"},
+    )
+
+    assert resp.status_code == 422, resp.text
+    assert "is not a finite number" in resp.json()["detail"]
+    val_resp = await client.get(f"/api/v1/datapoints/{dp['id']}/value", headers=auth_headers)
+    assert val_resp.json()["value"] is None

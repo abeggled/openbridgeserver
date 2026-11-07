@@ -344,6 +344,21 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
         audit_effect=AuditEffect.EXTERNAL_MUTATION,
         details=("resource_count", "payload_sha256"),
     ),
+    ("POST", "/api/v1/adapters/instances/{instance_id}/homeassistant/import-preview"): _policy(
+        "adapter_instance",
+        "adapter.homeassistant.import_previewed",
+        result=True,
+        capability="adapter.declared",
+        details=("resource_count", "payload_sha256"),
+    ),
+    ("POST", "/api/v1/adapters/instances/{instance_id}/homeassistant/import"): _policy(
+        "adapter_instance",
+        "adapter.homeassistant.imported",
+        result=True,
+        audit_effect=AuditEffect.EXTERNAL_MUTATION,
+        capability="adapter.create_datapoint+link_binding",
+        details=("resource_count", "payload_sha256", "error_count"),
+    ),
     ("POST", "/api/v1/adapters/instances/{instance_id}/iobroker/import-preview"): _policy(
         "adapter_instance",
         "adapter.iobroker.import_previewed",
@@ -368,10 +383,10 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
         details=("resource_count", "payload_sha256", "error_count"),
     ),
     # Webhook token rotation (issue #1256): a config_mutation like any other
-    # binding operation.  No `capability` is declared, so an API-key principal
-    # can never rotate a device token — WEBHOOK declares no
-    # AdapterDelegationCapability.  No detail fields: the token itself must
-    # never reach the audit log, and the resource id already names the binding.
+    # binding operation.  No `capability` is declared, and the route refuses
+    # every non-user principal, so an API key can never rotate a device token.
+    # No detail fields: the token itself must never reach the audit log, and
+    # the resource id already names the binding.
     ("POST", "/api/v1/adapters/instances/{instance_id}/webhook/bindings/{binding_id}/rotate-token"): _policy(
         "binding",
         "adapter.webhook.token_rotated",
@@ -394,10 +409,16 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
         ),
     ),
     ("POST", "/api/v1/system/history/test"): _admin("history_settings", "system.history.connection_tested", result=True),
+    ("PUT", "/api/v1/system/visu-devices"): _admin("visu_devices", "system.visu_devices.updated"),
+    ("PUT", "/api/v1/system/visu-alarms"): _admin("visu_alarms", "system.visu_alarms.updated"),
     ("POST", "/api/v1/system/nav-links"): _admin("nav_link", "system.nav_link.created"),
     ("PATCH", "/api/v1/system/nav-links/{link_id}"): _admin("nav_link", "system.nav_link.updated"),
     ("DELETE", "/api/v1/system/nav-links/{link_id}"): _admin("nav_link", "system.nav_link.deleted"),
     ("PUT", "/api/v1/system/log-level"): _admin("log_level", "system.log_level.updated", result=True),
+    # Update check (#1370): a manual check is an outbound request to GitHub,
+    # the channel decides which releases count as updates.
+    ("POST", "/api/v1/system/update-status/check"): _admin("update_status", "system.update.checked", result=True),
+    ("PUT", "/api/v1/system/update-channel"): _admin("update_channel", "system.update.channel_updated", result=True, details=("after", "before")),
     ("POST", "/api/v1/support/debug-log"): _admin("debug_log", "support.debug_log.enabled", result=True),
     ("DELETE", "/api/v1/support/debug-log"): _admin("debug_log", "support.debug_log.disabled", result=True),
     ("POST", "/api/v1/ringbuffer/filtersets"): _policy(
@@ -535,13 +556,6 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
         audit_effect=AuditEffect.EXTERNAL_MUTATION,
         details=("resource_count", "payload_sha256"),
     ),
-    ("POST", "/api/v1/knxproj/import-csv"): _admin(
-        "knx_group_addresses",
-        "knx.group_addresses.imported",
-        result=True,
-        audit_effect=AuditEffect.EXTERNAL_MUTATION,
-        details=("resource_count", "payload_sha256"),
-    ),
     ("PUT", "/api/v1/knxproj/devices/{pa}/hierarchy-links"): _admin(
         "knx_device", "knx.device.hierarchy_links_updated", details=("resource_count", "payload_sha256")
     ),
@@ -595,7 +609,7 @@ ROUTE_SECURITY_CONTRACTS: Final[dict[RouteSignature, RouteSecurityContract]] = {
             PolicyCheck(CheckKind.ROLE, "activate", "datapoint", "derived:logic_flow_datapoints"),
             PolicyCheck(CheckKind.CAPABILITY, "activate", "logic_capability", "derived:logic_node_capabilities", "logic.declared"),
         ),
-        details=("control_class", "denied_checks", "output_count", "warning_count"),
+        details=("control_class", "denied_checks", "fire_triggers", "output_count", "warning_count"),
     ),
     ("POST", "/api/v1/logic/graphs/{graph_id}/duplicate"): _policy(
         "logic_graph",

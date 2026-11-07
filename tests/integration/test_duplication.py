@@ -232,6 +232,34 @@ async def test_export_graph_returns_json(client, auth_headers):
         await _delete_graph(client, auth_headers, g["id"])
 
 
+async def test_export_graph_with_em_dash_in_name(client, auth_headers):
+    """A non-Latin-1 graph name must not break the download header (#1284)."""
+    g = await _create_graph(client, auth_headers, "Room — Action")
+    try:
+        resp = await client.get(
+            f"/api/v1/logic/graphs/{g['id']}/export",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["name"] == "Room — Action"
+        assert resp.headers["content-disposition"] == ("attachment; filename=\"Room___Action.json\"; filename*=UTF-8''Room_%E2%80%94_Action.json")
+    finally:
+        await _delete_graph(client, auth_headers, g["id"])
+
+
+async def test_export_graph_ascii_name_keeps_plain_filename(client, auth_headers):
+    g = await _create_graph(client, auth_headers, "Room - Action")
+    try:
+        resp = await client.get(
+            f"/api/v1/logic/graphs/{g['id']}/export",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.headers["content-disposition"] == 'attachment; filename="Room_-_Action.json"'
+    finally:
+        await _delete_graph(client, auth_headers, g["id"])
+
+
 async def test_export_graph_not_found(client, auth_headers):
     resp = await client.get(
         "/api/v1/logic/graphs/nonexistent-id/export",
@@ -476,6 +504,23 @@ async def test_export_visu_node_returns_json(client, auth_headers):
         assert data["version"] == 1
         assert len(data["nodes"]) == 1
         assert data["nodes"][0]["name"] == "Export Seite"
+    finally:
+        await _delete_visu_node(client, auth_headers, node["id"])
+
+
+async def test_export_visu_node_with_em_dash_in_name(client, auth_headers):
+    """Same header bug as the logic export (#1284): the page name ends up in the filename."""
+    node = await _create_visu_node(client, auth_headers, "Küche — EG")
+    try:
+        resp = await client.get(
+            f"/api/v1/visu/nodes/{node['id']}/export",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["nodes"][0]["name"] == "Küche — EG"
+        assert resp.headers["content-disposition"] == (
+            "attachment; filename=\"Kuche___EG_visu.json\"; filename*=UTF-8''K%C3%BCche_%E2%80%94_EG_visu.json"
+        )
     finally:
         await _delete_visu_node(client, auth_headers, node["id"])
 

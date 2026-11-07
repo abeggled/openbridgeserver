@@ -18,6 +18,7 @@ import pytest
 
 from obs.logic.manager import LogicManager, _ping_host
 from obs.logic.models import FlowData
+from tests.unit._api_client_fakes import serve_via_request
 from tests.unit.conftest import edge, make_executor, node
 
 
@@ -78,6 +79,7 @@ def _patch_api_success():
     mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
     mock_client.request = AsyncMock(return_value=_MockResponse(200))
+    serve_via_request(mock_client)
     return patcher
 
 
@@ -747,6 +749,7 @@ class TestHostCheckRisingEdge:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(side_effect=_next_response)
+        serve_via_request(mock_client)
         try:
             with (
                 patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
@@ -892,6 +895,7 @@ class TestHostCheckRisingEdge:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_MockResponse(200, text="OK"))
+        serve_via_request(mock_client)
         try:
             with (
                 patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
@@ -1979,6 +1983,7 @@ class TestHostCheckRisingEdge:
             client_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
             client.request = AsyncMock(return_value=_MockResponse(200))
+            serve_via_request(client)
             asyncio.run(
                 manager._execute_graph(
                     graph_id,
@@ -2023,6 +2028,7 @@ class TestHostCheckRisingEdge:
             client_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
             client.request = AsyncMock(return_value=_MockResponse(200))
+            serve_via_request(client)
             with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
                 asyncio.run(manager._execute_graph(graph_id, "test", flow, {"cf": {"in": 1}, "trigger": {"value": True}}))
                 asyncio.run(manager._execute_graph(graph_id, "test", flow, {"cf": {"in": 1}, "trigger": {"value": False}}))
@@ -2058,6 +2064,7 @@ class TestHostCheckRisingEdge:
             client_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
             client.request = AsyncMock(return_value=_MockResponse(200))
+            serve_via_request(client)
             with patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")):
                 asyncio.run(manager._execute_graph(graph_id, "test", flow, {"cf": {"in": 1}, "trigger": {"value": True}}))
                 repeated = asyncio.run(manager._execute_graph(graph_id, "test", flow, {"cf": {"in": 1}, "trigger": {"value": True}}))
@@ -3385,6 +3392,7 @@ class TestHostCheckRisingEdge:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(side_effect=_record_http)
+        serve_via_request(mock_client)
         try:
             with (
                 patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
@@ -3436,6 +3444,7 @@ class TestHostCheckRisingEdge:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(side_effect=_next_response)
+        serve_via_request(mock_client)
         try:
             with (
                 patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
@@ -3485,6 +3494,7 @@ class TestHostCheckRisingEdge:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_MockResponse(200, text="OK"))
+        serve_via_request(mock_client)
         try:
             with (
                 patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
@@ -3536,6 +3546,7 @@ class TestHostCheckRisingEdge:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(side_effect=_next_response)
+        serve_via_request(mock_client)
         try:
             with (
                 patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
@@ -4019,6 +4030,7 @@ class TestHostCheckReplayState:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_MockResponse(200))
+        serve_via_request(mock_client)
         try:
             with (
                 patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
@@ -4061,6 +4073,7 @@ class TestHostCheckReplayState:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_MockResponse(200))
+        serve_via_request(mock_client)
         try:
             with (
                 patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
@@ -4369,6 +4382,7 @@ class TestHostCheckPostApiExtraPaths:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_MockResponse(200))
+        serve_via_request(mock_client)
         try:
             with (
                 patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
@@ -4434,6 +4448,7 @@ class TestHostCheckPostApiExtraPaths:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_MockResponse(200))
+        serve_via_request(mock_client)
         try:
             with (
                 patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
@@ -4464,6 +4479,7 @@ class TestHostCheckPostApiApiClientPaths:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_MockResponse(200))
+        serve_via_request(mock_client)
         try:
             with (
                 patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
@@ -4488,6 +4504,7 @@ class TestHostCheckPostApiApiClientPaths:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_MockResponse(200))
+        serve_via_request(mock_client)
         try:
             with (
                 patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
@@ -4511,6 +4528,7 @@ class TestHostCheckPostApiApiClientPaths:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_MockResponse(200))
+        serve_via_request(mock_client)
         try:
             with (
                 patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
@@ -4534,6 +4552,7 @@ class TestHostCheckPostApiApiClientPaths:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_MockResponse(200))
+        serve_via_request(mock_client)
         try:
             with (
                 patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
@@ -4565,6 +4584,7 @@ class TestHostCheckPostApiApiClientPaths:
             return _MockResponse(200)
 
         mock_client.request = AsyncMock(side_effect=_selective)
+        serve_via_request(mock_client)
         try:
             with (
                 patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
@@ -4649,6 +4669,7 @@ class TestHostCheckPostApiApiClientPaths:
             return _MockResponse(200)
 
         mock_client.request = AsyncMock(side_effect=_selective)
+        serve_via_request(mock_client)
         try:
             with (
                 patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
@@ -4695,6 +4716,7 @@ class TestHostCheckPostApiApiClientPaths:
             return _MockResponse(200)
 
         mock_client.request = AsyncMock(side_effect=_selective)
+        serve_via_request(mock_client)
         try:
             with (
                 patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
@@ -4878,6 +4900,7 @@ class TestReplayOrderingFixes:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_MockResponse(200))
+        serve_via_request(mock_client)
         try:
             with (
                 patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
@@ -5085,6 +5108,7 @@ class TestReplayOrderingFixes:
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         mock_client.request = AsyncMock(return_value=_MockResponse(200, text="OK"))
+        serve_via_request(mock_client)
         try:
             with (
                 patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
@@ -5715,8 +5739,8 @@ class TestPostApiHcApiEdgePaths:
             mock_client_cls.stop()
         assert outputs["ac2"]["success"] is True
 
-    def test_large_response_truncated(self):
-        """Post-api-hc api_client: response text > 1 MB is truncated to 1 MB (line 2141)."""
+    def test_oversized_response_fails_the_node(self):
+        """Post-api-hc api_client: a response over the 1 MB limit fails the node instead of being stored (#530)."""
 
         class _LargeResponse:
             status_code = 200
@@ -5731,7 +5755,10 @@ class TestPostApiHcApiEdgePaths:
         mock_client = AsyncMock()
         mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-        mock_client.request = AsyncMock(return_value=_LargeResponse())
+        # Only ac2 (the post-host-check api_client) gets the oversized body; ac1 must
+        # succeed, or the host check never triggers ac2.
+        mock_client.request = AsyncMock(side_effect=lambda method, url, **kwargs: _LargeResponse() if url.endswith("/two") else _MockResponse(200))
+        serve_via_request(mock_client)
         try:
             with (
                 patch("obs.api.v1.websocket.get_ws_manager", side_effect=RuntimeError("no ws")),
@@ -5741,7 +5768,9 @@ class TestPostApiHcApiEdgePaths:
         finally:
             patcher.stop()
 
-        assert len(outputs["ac2"]["response"]) == 1_000_000
+        assert outputs["ac1"]["success"] is True
+        assert outputs["ac2"]["success"] is False
+        assert outputs["ac2"]["response"] == "Response exceeds the size limit of 1000000 bytes"
 
 
 # ===========================================================================

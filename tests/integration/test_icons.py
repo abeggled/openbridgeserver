@@ -76,9 +76,15 @@ async def test_list_icons_with_files(client, auth_headers, icons_tmp):
 
 
 @pytest.mark.asyncio
-async def test_list_icons_requires_auth(client, icons_tmp):
+async def test_list_icons_without_login_hides_icons_no_public_page_uses(client, icons_tmp):
+    # Without login only icons used on pages the visitor may view are listed
+    # (tests/integration/test_visu_icon_visibility.py); an unused icon is not.
+    (icons_tmp / "unused.svg").write_bytes(_MINIMAL_SVG)
+
     resp = await client.get("/api/v1/icons/")
-    assert resp.status_code == 401
+
+    assert resp.status_code == 200
+    assert "unused" not in {i["name"] for i in resp.json()["icons"]}
 
 
 # ---------------------------------------------------------------------------

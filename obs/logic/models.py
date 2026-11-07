@@ -63,6 +63,9 @@ class LogicGraphRun(BaseModel):
 
     input_overrides: dict[str, dict[str, Any]] = {}
     debug: bool = False
+    # Trigger (timer_cron) block ids fired in this run exactly like a
+    # scheduled cron tick, so a debug session need not wait for it (#1276).
+    fire_triggers: list[str] = []
 
 
 class LogicGraphDuplicate(BaseModel):

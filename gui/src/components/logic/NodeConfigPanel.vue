@@ -34,7 +34,9 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
           </svg>
         </button>
-        <HelpButton help-id="logic-node-config" />
+        <!-- The block's own help, the same as its palette entry (#1411);
+             the general block-config page only for blocks without one -->
+        <HelpButton :help-id="nodeDef?.help_id || 'logic-node-config'" />
       </div>
     </div>
 
@@ -709,6 +711,11 @@
           </div>
         </div>
       </div>
+    </template>
+
+    <!-- ── hems_surplus: grid measurement + priority-ordered consumer list ── -->
+    <template v-else-if="isHemsSurplusNode">
+      <HemsSurplusConfig :data="localData" :description="nodeDescription(nodeDef)" :outputs="debugOutputs" @update="onHemsSurplusUpdate" />
     </template>
 
     <!-- ── decision / value_mapping ─────────────────────────────────────── -->
@@ -1482,7 +1489,15 @@
         <div class="form-group"><label class="label">{{ $t('logic.nodeConfig.notification.title') }}</label><input v-model="localData.title" class="input text-sm" @change="emitUpdate" /><VariablePathHelper :path="localData.title || ''" :obs-slots="blockObsSlots" @insert="appendVariable('title', $event)" /></div>
         <div class="form-group"><label class="label">{{ $t('logic.nodeConfig.notification.fallback') }}</label><textarea v-model="localData.message" class="input text-sm min-h-24" @change="emitUpdate" /><VariablePathHelper :path="localData.message || ''" :obs-slots="blockObsSlots" @insert="appendVariable('message', $event)" /><p class="text-xs text-slate-500 mt-1">{{ $t('logic.nodeConfig.notification.placeholders') }}</p></div>
         <ObjectVariablesEditor :key="node?.id" v-model="localData.variables" test-id-prefix="notify" :hint="$t('logic.variables.textHint')" @update:model-value="emitUpdate" />
-        <div class="form-group"><label class="label">{{ $t('logic.nodeConfig.notification.priority') }}</label><input v-model.number="localData.priority" type="number" min="-2" max="1" class="input text-sm" @change="emitUpdate" /></div>
+        <PushoverOptionsFields
+          v-if="hasPushoverTarget(localData.providers)"
+          :key="`pushover-${node?.id}`"
+          v-model:priority="localData.priority"
+          :options="localData"
+          url-from-input
+          :hint="$t('logic.nodeConfig.notification.pushoverInputsHint')"
+          @change="emitUpdate"
+        />
       </div>
     </template>
 
@@ -1570,6 +1585,10 @@
       :output-labels="debugOutputLabels"
       :metadata="debugMetadata"
       :has-overrides="hasDebugOverrides"
+      :can-fire="node.type === 'timer_cron'"
+      :fire-disabled="fireDisabled"
+      :fire-disabled-hint="fireDisabledHint"
+      @fire-trigger="emit('fire-trigger', node.id)"
       @set-override="(inputId, text) => emit('set-override', inputId, text)"
       @clear-override="inputId => emit('clear-override', inputId)"
       @clear-all="emit('clear-all')"
@@ -1589,11 +1608,15 @@ import VariablePathHelper from './VariablePathHelper.vue'
 import { normaliseObjectVariables, configuredObsSlots, VARIABLE_BLOCK_TYPES } from '@/utils/logicVariables'
 import IssueList from './IssueList.vue'
 import { EXTRACTOR_MAX_PATHS, collectJsonPaths, extractorOutputLabels, parseExtractorJson } from '@/utils/logicExtractorOutputs'
+import { hemsOutputLabels } from '@/utils/logicHemsOutputs'
 import { isPythonTruthy } from '@/utils/logicBooleans'
 import { coercedValueText } from '@/utils/logicTypedValue'
 import { useResizablePanel } from '@/composables/useResizablePanel'
 import HelpButton from '@/components/ui/HelpButton.vue'
 import DebugInspector from './DebugInspector.vue'
+import PushoverOptionsFields from '@/components/notifications/PushoverOptionsFields.vue'
+import { hasPushoverTarget } from '@/utils/pushoverOptions'
+import HemsSurplusConfig from './HemsSurplusConfig.vue'
 
 const { t, te } = useI18n()
 const auth = useAuthStore()
@@ -1609,9 +1632,11 @@ const props = defineProps({
   debugInputs:       { type: Array,   default: () => [] },
   debugOutputs:      { type: Object,  default: () => ({}) },
   debugMetadata:     { type: Object,  default: null },
+  fireDisabled:      { type: Boolean, default: false },
+  fireDisabledHint:  { type: String,  default: '' },
   hasDebugOverrides: { type: Boolean, default: false },
 })
-const emit = defineEmits(['update', 'close', 'set-override', 'clear-override', 'clear-all'])
+const emit = defineEmits(['update', 'close', 'set-override', 'clear-override', 'clear-all', 'fire-trigger'])
 
 const EXTRACTOR_OUTPUT_BG = 'rgba(30, 41, 59, 0.6)'
 const EXTRACTOR_OUTPUT_FG = getAutoContrastText(EXTRACTOR_OUTPUT_BG)
@@ -1835,6 +1860,7 @@ const isSubstringExtractorNode = computed(() => props.node?.type === 'substring_
 const isStringConcatNode = computed(() => props.node?.type === 'string_concat')
 const isStringReplaceNode = computed(() => props.node?.type === 'string_replace')
 const isSensorWatchdogNode = computed(() => props.node?.type === 'sensor_watchdog')
+const isHemsSurplusNode = computed(() => props.node?.type === 'hems_surplus')
 const isICalNode          = computed(() => props.node?.type === 'ical')
 const isWakeOnLanNode     = computed(() => props.node?.type === 'wake_on_lan')
 const isHostCheckNode     = computed(() => props.node?.type === 'host_check')
@@ -2122,6 +2148,12 @@ function moveReplaceRule(i, delta) {
   _saveReplaceRules(rows)
 }
 
+// ── hems_surplus: the editor component hands back the complete data object ──
+function onHemsSurplusUpdate(next) {
+  localData.value = { ...next }
+  emitUpdate()
+}
+
 // ── sensor_watchdog: per-input timeout/fault-value rows (issue #1218) ─────
 // Own dedicated array field ("inputs"), same JSON-string persistence and
 // row-editing shape as string_replace's "rules" above — kept separate
@@ -2171,7 +2203,7 @@ function removeWatchdogInput(i) {
 const activeExtractorRow = ref(null)
 
 // Debug tab lists extractor outputs under their configured names (issue #1104)
-const debugOutputLabels = computed(() => extractorOutputLabels(props.node, t))
+const debugOutputLabels = computed(() => ({ ...extractorOutputLabels(props.node, t), ...hemsOutputLabels(props.node, t) }))
 
 const extractorPreview = computed(() => {
   if (!props.node) return ''
@@ -2857,15 +2889,18 @@ function onValueMapCustomChange() {
 }
 
 // ── DataPoint picker ───────────────────────────────────────────────────────
+// Read-only system DataPoints (#1370) can be read, never written: no write target.
+function writableDps(items) {
+  return items.filter(dp => !dp.system)
+}
+
 async function searchDps() {
   try {
-    if (dpSearch.value.length < 1) {
-      const { data } = await dpApi.list(0, 50)
-      dpResults.value = data.items || data
-    } else {
-      const { data } = await searchApi.search({ q: dpSearch.value, size: 50 })
-      dpResults.value = data.items || data
-    }
+    const { data } = dpSearch.value.length < 1
+      ? await dpApi.list(0, 50)
+      : await searchApi.search({ q: dpSearch.value, size: 50 })
+    const items = data.items || data
+    dpResults.value = isWrite.value ? writableDps(items) : items
   } catch { dpResults.value = [] }
 }
 
@@ -2885,7 +2920,7 @@ function removeSequenceStep(index) { const steps = [...sequenceSteps.value]; ste
 function duplicateSequenceStep(index) { const steps = [...sequenceSteps.value]; steps.splice(index + 1, 0, { ...steps[index] }); localData.value.steps = steps; syncSequencePickerState(); emitUpdate() }
 function moveSequenceStep(index, delta) { const target = index + delta; if (target < 0 || target >= sequenceSteps.value.length) return; const steps = [...sequenceSteps.value]; [steps[index], steps[target]] = [steps[target], steps[index]]; localData.value.steps = steps; syncSequencePickerState(); emitUpdate() }
 function applySequencePreset() { localData.value.steps = [{ datapoint_id: '', datapoint_name: '', value: true, delay_ms: 500 }, { datapoint_id: '', datapoint_name: '', value: false, delay_ms: 500 }]; syncSequencePickerState(); emitUpdate() }
-async function searchSequenceDps(index, query) { try { const { data } = (query || '').length < 1 ? await dpApi.list(0, 50) : await searchApi.search({ q: query, size: 50 }); const next = sequenceDpResults.value.slice(); next[index] = data.items || data; sequenceDpResults.value = next } catch { sequenceDpResults.value = [] } }
+async function searchSequenceDps(index, query) { try { const { data } = (query || '').length < 1 ? await dpApi.list(0, 50) : await searchApi.search({ q: query, size: 50 }); const next = sequenceDpResults.value.slice(); next[index] = writableDps(data.items || data); sequenceDpResults.value = next } catch { sequenceDpResults.value = [] } }
 function selectSequenceDp(index, dp) { const steps = [...sequenceSteps.value]; steps[index] = { ...steps[index], datapoint_id: dp.id, datapoint_name: dp.name }; localData.value.steps = steps; sequenceSearchDrafts.value[index] = ''; sequenceSearches.value[index] = dp.name; const next = sequenceDpResults.value.slice(); next[index] = []; sequenceDpResults.value = next; emitUpdate() }
 
 function normaliseUrlTargetInput(value) {

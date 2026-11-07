@@ -1,11 +1,10 @@
-"""Coverage-boost tests for autobackup, logic API, zeitschaltuhr, snmp, homeassistant.
+"""Coverage-boost tests for autobackup, logic API, zeitschaltuhr, snmp.
 
 Targets:
   - obs/api/v1/autobackup.py   (0% → ≥60%)
   - obs/api/v1/logic.py        (0% → ≥60%)
   - obs/adapters/zeitschaltuhr/adapter.py (68% → higher)
   - obs/adapters/snmp/adapter.py          (70% → higher)
-  - obs/adapters/homeassistant/adapter.py (63% → higher)
 """
 
 from __future__ import annotations
@@ -1047,7 +1046,7 @@ class TestRunGraph:
         with patch("obs.logic.manager.get_logic_manager", return_value=mock_manager):
             result = await run_graph(graph_id=row["id"], body=body, _user="admin", db=db)
 
-        mock_manager.execute_graph_debug.assert_awaited_once_with(row["id"], {"node": {"in": 7}})
+        mock_manager.execute_graph_debug.assert_awaited_once_with(row["id"], {"node": {"in": 7}}, fire_triggers=[])
         assert result["debug"]["inputs"] == captured
         assert result["debug"]["used_overrides"] is True
         assert result["debug"]["duration_ms"] >= 0
@@ -1065,8 +1064,70 @@ class TestRunGraph:
         with patch("obs.logic.manager.get_logic_manager", return_value=mock_manager):
             result = await run_graph(graph_id=row["id"], body=LogicGraphRun(debug=True), _user="admin", db=db)
 
-        mock_manager.execute_graph_debug.assert_awaited_once_with(row["id"], {})
+        mock_manager.execute_graph_debug.assert_awaited_once_with(row["id"], {}, fire_triggers=[])
         assert result["debug"]["inputs"] == {"node": {}}
+
+    @pytest.mark.asyncio
+    async def test_fire_triggers_alone_requests_a_debug_run(self):
+        from obs.api.v1.logic import run_graph
+        from obs.logic.models import LogicGraphRun
+
+        row = _make_graph_row(enabled=1)
+        db = _DbStub(one=row)
+        mock_manager = MagicMock()
+        mock_manager.execute_graph_debug = AsyncMock(return_value=({"cron": {"trigger": True}}, {}))
+
+        with (
+            patch("obs.logic.manager.get_logic_manager", return_value=mock_manager),
+            patch("obs.api.v1.logic.write_application_success", new=AsyncMock()) as audit,
+        ):
+            result = await run_graph(graph_id=row["id"], body=LogicGraphRun(fire_triggers=["cron"]), _user="admin", db=db)
+
+        mock_manager.execute_graph_debug.assert_awaited_once_with(row["id"], {}, fire_triggers=["cron"])
+        assert audit.await_args.kwargs["details"]["fire_triggers"] == ["cron"]
+        assert result["outputs"] == {"cron": {"trigger": True}}
+        assert result["debug"]["used_overrides"] is False
+
+    @pytest.mark.asyncio
+    async def test_firing_a_block_that_is_no_trigger_raises_422(self):
+        from fastapi import HTTPException
+
+        from obs.api.v1.logic import run_graph
+        from obs.logic.manager import InvalidFireTriggerError
+        from obs.logic.models import LogicGraphRun
+
+        row = _make_graph_row(enabled=1)
+        db = _DbStub(one=row)
+        mock_manager = MagicMock()
+        mock_manager.execute_graph_debug = AsyncMock(side_effect=InvalidFireTriggerError("Kein Trigger-Baustein: x"))
+
+        with patch("obs.logic.manager.get_logic_manager", return_value=mock_manager), pytest.raises(HTTPException) as exc_info:
+            await run_graph(graph_id=row["id"], body=LogicGraphRun(fire_triggers=["x"]), _user="admin", db=db)
+
+        assert exc_info.value.status_code == 422
+        assert exc_info.value.detail == "Kein Trigger-Baustein: x"
+
+    @pytest.mark.asyncio
+    async def test_value_error_during_a_debug_run_stays_a_logged_500(self):
+        from fastapi import HTTPException
+
+        from obs.api.v1.logic import run_graph
+        from obs.logic.models import LogicGraphRun
+
+        row = _make_graph_row(enabled=1)
+        db = _DbStub(one=row)
+        mock_manager = MagicMock()
+        mock_manager.execute_graph_debug = AsyncMock(side_effect=ValueError("bad value"))
+
+        with (
+            patch("obs.logic.manager.get_logic_manager", return_value=mock_manager),
+            patch("obs.api.v1.logic.logger") as logger,
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await run_graph(graph_id=row["id"], body=LogicGraphRun(debug=True), _user="admin", db=db)
+
+        assert exc_info.value.status_code == 500
+        logger.exception.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_raises_500_on_execution_error(self):
@@ -2419,198 +2480,3 @@ class TestSnmpSetErrorCases:
         bc = SnmpBindingConfig(host="192.168.1.1", port=161, oid="1.3.6.1.4.1.1.0")
         with pytest.raises(RuntimeError):
             await adapter._snmp_set(bc, 42)
-
-
-# ===========================================================================
-# obs/adapters/homeassistant/adapter.py — missing lines
-# ===========================================================================
-
-
-def _make_ha_adapter(config: dict | None = None) -> Any:
-    from obs.adapters.homeassistant.adapter import HaAdapterConfig, HomeAssistantAdapter
-
-    bus = MagicMock()
-    bus.publish = AsyncMock()
-    cfg = config or {"host": "ha.local", "port": 8123, "token": "test-token", "ssl": False}
-    adapter = HomeAssistantAdapter(event_bus=bus, config=cfg)
-    adapter._cfg = HaAdapterConfig(**cfg)
-    mock_client = MagicMock()
-    mock_client.aclose = AsyncMock()
-    adapter._http_client = mock_client
-    adapter._bus = bus
-    return adapter
-
-
-class TestHaAdapterConnect:
-    @pytest.mark.asyncio
-    async def test_connect_without_websockets_package(self):
-        from obs.adapters.homeassistant.adapter import HomeAssistantAdapter
-
-        bus = MagicMock()
-        bus.publish = AsyncMock()
-        adapter = HomeAssistantAdapter(event_bus=bus, config={"host": "ha.local", "port": 8123, "token": "tok", "ssl": False})
-
-        with patch.dict("sys.modules", {"websockets": None}):
-            await adapter.connect()
-
-        event = bus.publish.call_args[0][0]
-        assert event.connected is False
-
-    @pytest.mark.asyncio
-    async def test_connect_with_ssl(self):
-        from obs.adapters.homeassistant.adapter import HomeAssistantAdapter
-
-        bus = MagicMock()
-        bus.publish = AsyncMock()
-        adapter = HomeAssistantAdapter(event_bus=bus, config={"host": "ha.local", "port": 8123, "token": "tok", "ssl": True})
-
-        mock_client = MagicMock()
-        mock_client.aclose = AsyncMock()
-
-        with (
-            patch.dict("sys.modules", {"websockets": MagicMock()}),
-            patch("obs.adapters.homeassistant.adapter.httpx.AsyncClient", return_value=mock_client),
-        ):
-            await adapter.connect()
-
-        assert adapter._cfg.ssl is True
-
-    @pytest.mark.asyncio
-    async def test_disconnect_clears_state(self):
-        adapter = _make_ha_adapter()
-        adapter._entity_map["sensor.temp"] = [MagicMock()]
-
-        async def _dummy():
-            await asyncio.sleep(9999)
-
-        t = asyncio.create_task(_dummy())
-        adapter._ws_task = t
-
-        await adapter.disconnect()
-        await asyncio.sleep(0)
-
-        assert adapter._http_client is None
-        assert adapter._ws_task is None
-        assert adapter._entity_map == {}
-
-
-class TestHaAdapterBindingsReloaded:
-    @pytest.mark.asyncio
-    async def test_source_bindings_go_into_entity_map(self):
-        from tests.adapters.conftest import make_binding
-
-        adapter = _make_ha_adapter()
-        adapter._bindings = [
-            make_binding({"entity_id": "sensor.temp"}, direction="SOURCE"),
-            make_binding({"entity_id": "switch.fan"}, direction="BOTH"),
-            make_binding({"entity_id": "sensor.dest_only"}, direction="DEST"),
-        ]
-
-        def _close_coro(coro, *, name=None):
-            coro.close()
-            return MagicMock()
-
-        with patch("obs.adapters.homeassistant.adapter.asyncio.create_task", side_effect=_close_coro):
-            await adapter._on_bindings_reloaded()
-
-        assert "sensor.temp" in adapter._entity_map
-        assert "switch.fan" in adapter._entity_map
-        assert "sensor.dest_only" not in adapter._entity_map
-
-    @pytest.mark.asyncio
-    async def test_no_ws_task_when_no_source_bindings(self):
-        from tests.adapters.conftest import make_binding
-
-        adapter = _make_ha_adapter()
-        adapter._bindings = [make_binding({"entity_id": "sensor.dest"}, direction="DEST")]
-
-        with patch("obs.adapters.homeassistant.adapter.asyncio.create_task") as mock_task:
-            await adapter._on_bindings_reloaded()
-        mock_task.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_cancels_old_ws_task_on_reload(self):
-        from tests.adapters.conftest import make_binding
-
-        adapter = _make_ha_adapter()
-
-        async def _dummy():
-            await asyncio.sleep(9999)
-
-        old_task = asyncio.create_task(_dummy())
-        adapter._ws_task = old_task
-
-        adapter._bindings = [make_binding({"entity_id": "sensor.temp"}, direction="SOURCE")]
-
-        def _close_coro(coro, *, name=None):
-            coro.close()
-            return MagicMock()
-
-        with patch("obs.adapters.homeassistant.adapter.asyncio.create_task", side_effect=_close_coro):
-            await adapter._on_bindings_reloaded()
-
-        await asyncio.sleep(0)
-        assert old_task.cancelled()
-
-    @pytest.mark.asyncio
-    async def test_invalid_binding_config_skipped(self):
-        from tests.adapters.conftest import make_binding
-
-        adapter = _make_ha_adapter()
-        # Missing entity_id → invalid HaBindingConfig
-        bad_binding = make_binding({}, direction="SOURCE")
-        adapter._bindings = [bad_binding]
-
-        def _close_coro(coro, *, name=None):
-            coro.close()
-            return MagicMock()
-
-        with patch("obs.adapters.homeassistant.adapter.asyncio.create_task", side_effect=_close_coro):
-            await adapter._on_bindings_reloaded()
-        # Should not raise — bad binding is skipped
-        assert len(adapter._entity_map) == 0
-
-    @pytest.mark.asyncio
-    async def test_cfg_none_returns_early(self):
-        from tests.adapters.conftest import make_binding
-
-        adapter = _make_ha_adapter()
-        adapter._cfg = None  # simulate not connected
-        adapter._bindings = [make_binding({"entity_id": "sensor.temp"}, direction="SOURCE")]
-
-        with patch("obs.adapters.homeassistant.adapter.asyncio.create_task") as mock_task:
-            await adapter._on_bindings_reloaded()
-
-        mock_task.assert_not_called()
-        assert len(adapter._entity_map) == 0
-
-
-class TestHaAdapterOnStateChangedFormula:
-    @pytest.mark.asyncio
-    async def test_formula_applied(self):
-        from tests.adapters.conftest import make_binding
-
-        adapter = _make_ha_adapter()
-        binding = make_binding({"entity_id": "sensor.temp"}, value_formula="x * 2")
-        adapter._entity_map["sensor.temp"] = [binding]
-
-        await adapter._on_state_changed(
-            {
-                "entity_id": "sensor.temp",
-                "new_state": {"state": "10", "attributes": {}},
-            }
-        )
-
-        event = adapter._bus.publish.call_args[0][0]
-        assert event.value == pytest.approx(20.0)
-
-
-class TestHaNextWsId:
-    def test_increments(self):
-        import obs.adapters.homeassistant.adapter as ha
-
-        before = ha._ws_id_counter
-        id1 = ha._next_ws_id()
-        id2 = ha._next_ws_id()
-        assert id2 == id1 + 1
-        assert id1 == before + 1

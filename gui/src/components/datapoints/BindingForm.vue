@@ -39,12 +39,15 @@
             :disabled="selectedAdapterType === 'ZEITSCHALTUHR'"
             data-testid="select-direction"
           >
-            <option value="SOURCE">{{ $t('adapters.bindingForm.directionRead') }}</option>
+            <option v-if="!props.dpSystem" value="SOURCE">{{ $t('adapters.bindingForm.directionRead') }}</option>
             <option v-if="selectedAdapterType !== 'ZEITSCHALTUHR'" value="DEST">{{ $t('adapters.bindingForm.directionWrite') }}</option>
-            <option v-if="selectedAdapterType !== 'ZEITSCHALTUHR'" value="BOTH">{{ $t('adapters.bindingForm.directionReadWrite') }}</option>
+            <option v-if="selectedAdapterType !== 'ZEITSCHALTUHR' && !props.dpSystem" value="BOTH">{{ $t('adapters.bindingForm.directionReadWrite') }}</option>
           </select>
           <p v-if="selectedAdapterType === 'ZEITSCHALTUHR'" class="hint">
             {{ $t('adapters.bindingForm.timerReadOnlyHint') }}
+          </p>
+          <p v-if="props.dpSystem" class="hint" data-testid="system-dest-only-hint">
+            {{ $t('adapters.bindingForm.systemDestOnlyHint') }}
           </p>
         </div>
       </div>
@@ -56,7 +59,9 @@
           :form="form"
           :grouped-dpts="groupedDpts"
           :dp-persist-value="props.dpPersistValue"
+          :ga-invalid="gaRejected"
           @ga-select="onGaSelect"
+          @dpt-change="dptAnchor = cfg.dpt_id"
         />
 
       <!-- Modbus -->
@@ -108,6 +113,9 @@
       <BindingFormHomeAssistant
         v-if="selectedAdapterType === 'HOME_ASSISTANT'"
           :cfg="cfg"
+          :selected-instance-id="selectedInstanceId"
+          :dp-data-type="dpDataType"
+          @advanced-validity="valid => (haAdvancedValid = valid)"
         />
 
       <!-- ioBroker -->
@@ -332,6 +340,7 @@ import BindingFormModbus from '@/components/datapoints/binding-form/BindingFormM
 import BindingFormMqtt from '@/components/datapoints/binding-form/BindingFormMqtt.vue'
 import BindingFormOnewire from '@/components/datapoints/binding-form/BindingFormOnewire.vue'
 import BindingFormHomeAssistant from '@/components/datapoints/binding-form/BindingFormHomeAssistant.vue'
+import { HA_MAPPING_KEYS } from '@/utils/haMapping'
 import BindingFormIoBroker from '@/components/datapoints/binding-form/BindingFormIoBroker.vue'
 import BindingFormTimer from '@/components/datapoints/binding-form/BindingFormTimer.vue'
 import BindingFormPresenceSimulation from '@/components/datapoints/binding-form/BindingFormPresenceSimulation.vue'
@@ -340,6 +349,10 @@ import BindingFormMessage from '@/components/datapoints/binding-form/BindingForm
 import BindingFormWebhook from '@/components/datapoints/binding-form/BindingFormWebhook.vue'
 import { timerValueDefault, validateTimerValue } from '@/utils/timerValue'
 import { normalizeEntries } from '@/utils/ipAllowlist'
+import { hasPushoverTarget, normalizePriority, normalizePushoverOptions, pushoverOptionErrors, sendsNotification } from '@/utils/pushoverOptions'
+import { useKnxProjectStore } from '@/stores/knxProject'
+import { formatGa } from '@/utils/groupAddress'
+import { keepsStoredSubtype } from '@/utils/dpt'
 
 const props = defineProps({
   dpId:           { type: String,  required: true },
@@ -347,9 +360,27 @@ const props = defineProps({
   dpPersistValue: { type: Boolean, default: false },
   dpDataType:     { type: String,  default: 'UNKNOWN' },  // DataPoint.data_type for compat check
   dpUnit:         { type: String,  default: '' },         // DataPoint.unit, shown next to typed value inputs
+  dpSystem:       { type: Boolean, default: false },      // read-only system DataPoint (#1370): DEST or MESSAGE only
 })
 const emit = defineEmits(['save', 'cancel'])
 const { t } = useI18n()
+const knxProject = useKnxProjectStore()
+
+// A rejected group address comes as { code, field, value } (#1296): explain it with an
+// example in the project's style. Other errors keep their text; anything else is generic.
+const GA_ERROR_CODES = ['knxGroupAddressMissing', 'knxGroupAddressInvalid']
+// The command address the backend rejected; the field stays marked until it is changed.
+const rejectedGa = ref(null)
+const gaRejected = computed(() => rejectedGa.value !== null && rejectedGa.value === cfg.group_address)
+function saveErrorText(detail) {
+  rejectedGa.value = GA_ERROR_CODES.includes(detail?.code) && detail.field === 'group_address' ? cfg.group_address : null
+  if (GA_ERROR_CODES.includes(detail?.code)) {
+    const field = t(detail.field === 'state_group_address' ? 'adapters.bindingForm.errors.knxFieldStateGroupAddress' : 'adapters.bindingForm.errors.knxFieldGroupAddress')
+    const example = formatGa('1/2/3', knxProject.groupAddressStyle)
+    return t(`adapters.bindingForm.errors.${detail.code}`, { value: String(detail.value ?? ''), field, example })
+  }
+  return typeof detail === 'string' && detail ? detail : t('common.saveError')
+}
 
 const saving       = ref(false)
 const error        = ref(null)
@@ -371,7 +402,7 @@ const DIRECTION_LOCKED_TYPES = ['ANWESENHEITSSIMULATION', 'MESSAGE', 'WEBHOOK']
 
 const form = reactive({
   adapter_instance_id:  '',
-  direction:            'SOURCE',
+  direction:            props.dpSystem ? 'DEST' : 'SOURCE',
   enabled:              true,
   value_formula:        '',
   formula_preset:       '',
@@ -395,8 +426,14 @@ const VALUE_MAP_PRESETS = [
   { key: 'custom',      label: t('adapters.bindingForm.customValueMapping'),         map: null },
 ]
 
+// The anchor is the DPT chosen for this binding: the one stored with it, replaced by every
+// pick in the DPT select. The form default is no choice. Picking a group address whose
+// catalog entry names only the anchor's main type brings the anchor's subtype back, also
+// after a detour over another address (#1260).
+const dptAnchor = ref(null)
+
 const cfg = reactive({
-  group_address: '', dpt_id: 'DPT9.001', state_group_address: '', respond_to_read: false,
+  group_address: '', dpt_id: 'DPT9.001', state_group_address: '', respond_to_read: false, read_interval_s: null,
   address: 0, register_type: 'holding', data_format: 'uint16',
   unit_id: 1, count: 1, scale_factor: 1.0, poll_interval: 1.0,
   byte_order: 'big', word_order: 'big',
@@ -405,6 +442,7 @@ const cfg = reactive({
   sensor_id: '', property: 'temperature',
   // HOME_ASSISTANT
   entity_id: '', attribute: '', service_domain: '', service_name: '', service_data_key: '',
+  profile: '', read_as: '', action: null, write_actions: null, state_map: null, transitional_states: [], fault_states: [], ha_uid: '',
   // IOBROKER
   state_id: '', command_state_id: '', ack: false,
   // ANWESENHEITSSIMULATION
@@ -425,6 +463,7 @@ const cfg = reactive({
   title: '',
   providers: [],
   priority: null,
+  pushover: {},
   cooldown_seconds: 0,
   send_on_change: true,
   archive_id: '',
@@ -498,6 +537,7 @@ const mqttBrowseLoading = ref(false)
 const mqttBrowseError  = ref(null)
 
 // ioBroker state browser state
+const haAdvancedValid = ref(true)
 const iobrokerStates = ref([])
 const iobrokerBrowseLoading = ref(false)
 const iobrokerBrowseError = ref(null)
@@ -631,6 +671,9 @@ const groupedDpts = computed(() => {
 const groupedInstances = computed(() => {
   const groups = {}
   for (const inst of allInstances.value) {
+    // A read-only system DataPoint (#1370) only goes to adapters that pass its
+    // value on or watch it; the backend decides which (system_bindable).
+    if (props.dpSystem && inst.system_bindable === false) continue
     if (!groups[inst.adapter_type]) groups[inst.adapter_type] = []
     groups[inst.adapter_type].push(inst)
   }
@@ -661,9 +704,12 @@ watch(() => props.initial, val => {
   form.direction           = val.direction
   form.enabled             = val.enabled
   Object.assign(cfg, val.config ?? {})
+  dptAnchor.value = val.config?.dpt_id || null
   if (cfg.state_group_address == null) cfg.state_group_address = ''
   if (cfg.publish_topic       == null) cfg.publish_topic = ''
   if (cfg.respond_to_read     == null) cfg.respond_to_read = false
+  // Object.assign keeps a previous binding's interval when this config has none
+  cfg.read_interval_s = val.config?.read_interval_s ?? null
   if (cfg.payload_template    == null) cfg.payload_template = ''
   if (cfg.source_data_type   == null) cfg.source_data_type = ''
   if (cfg.json_key           == null) cfg.json_key = ''
@@ -674,6 +720,8 @@ watch(() => props.initial, val => {
   if (cfg.service_domain   == null) cfg.service_domain   = ''
   if (cfg.service_name     == null) cfg.service_name     = ''
   if (cfg.service_data_key == null) cfg.service_data_key = ''
+  if (cfg.profile          == null) cfg.profile          = ''
+  if (cfg.read_as          == null) cfg.read_as          = ''
   // IOBROKER defaults when loading
   if (cfg.state_id         == null) cfg.state_id = ''
   if (cfg.command_state_id == null) cfg.command_state_id = ''
@@ -730,6 +778,13 @@ watch(() => props.initial, val => {
   if (cfg.title == null) cfg.title = ''
   if (cfg.providers == null) cfg.providers = []
   if (cfg.priority === undefined) cfg.priority = null
+  if (!cfg.pushover || typeof cfg.pushover !== 'object') cfg.pushover = {}
+  else cfg.pushover = { ...cfg.pushover }
+  // The form edits the top-level priority. A priority stored inside the
+  // Pushover options (API-created bindings) is the effective one on the
+  // backend, so it is shown — and saved back — as the top-level value.
+  if (normalizePriority(cfg.pushover.priority) != null) cfg.priority = normalizePriority(cfg.pushover.priority)
+  delete cfg.pushover.priority
   if (cfg.cooldown_seconds == null) cfg.cooldown_seconds = 0
   if (cfg.send_on_change == null) cfg.send_on_change = true
   if (cfg.archive_id == null) cfg.archive_id = ''
@@ -856,6 +911,12 @@ async function browseIoBrokerStates() {
 }
 
 function selectIoBrokerState(state) {
+  // A system DataPoint can only send (#1370): a state ioBroker marks read-only
+  // is no target for it, and switching to SOURCE would be refused on save.
+  if (props.dpSystem && !state.write) {
+    iobrokerBrowseError.value = t('adapters.bindingForm.errors.ioBrokerStateNotWritable')
+    return
+  }
   cfg.state_id = state.id
   if (state.type && !cfg.source_data_type) {
     const t = String(state.type).toLowerCase()
@@ -1037,6 +1098,7 @@ watch(() => cfg.source_data_type, sdt => {
 // Force direction to SOURCE for adapters that observe values instead of writing.
 watch(selectedAdapterType, type => {
   if (type === 'ZEITSCHALTUHR' || type === 'MESSAGE' || type === 'WEBHOOK') form.direction = 'SOURCE'
+  else if (props.dpSystem) form.direction = 'DEST'
   if (type === 'IOBROKER') {
     activeTab.value = 'conn'
     showAdvancedTabs.value = false
@@ -1283,7 +1345,7 @@ function onMqttJsonSampleInput() {
 }
 
 function onGaSelect(item) {
-  if (item.dpt && item.dpt !== cfg.dpt_id) cfg.dpt_id = item.dpt
+  if (item.dpt) cfg.dpt_id = keepsStoredSubtype(item.dpt, dptAnchor.value) ? dptAnchor.value : item.dpt
 }
 
 function onPresetSelect(e) {
@@ -1303,6 +1365,9 @@ function buildConfig() {
     const c = { group_address: cfg.group_address, dpt_id: cfg.dpt_id || 'DPT9.001' }
     if (cfg.state_group_address?.trim()) c.state_group_address = cfg.state_group_address.trim()
     if (cfg.respond_to_read) c.respond_to_read = true
+    // Only SOURCE/BOTH poll; a value hidden by switching to DEST is not saved (#1402)
+    const readInterval = Math.round(Number(cfg.read_interval_s))
+    if (form.direction !== 'DEST' && readInterval > 0) c.read_interval_s = readInterval
     return c
   }
   if (type === 'MODBUS_TCP' || type === 'MODBUS_RTU') {
@@ -1330,11 +1395,22 @@ function buildConfig() {
     return { sensor_id: cfg.sensor_id, property: cfg.property || 'temperature' }
   }
   if (type === 'HOME_ASSISTANT') {
-    const c = { entity_id: cfg.entity_id }
+    const c = { entity_id: cfg.entity_id.trim() }
     if (cfg.attribute?.trim())        c.attribute        = cfg.attribute.trim()
     if (cfg.service_domain?.trim())   c.service_domain   = cfg.service_domain.trim()
     if (cfg.service_name?.trim())     c.service_name     = cfg.service_name.trim()
     if (cfg.service_data_key?.trim()) c.service_data_key = cfg.service_data_key.trim()
+    if (cfg.profile)                  c.profile          = cfg.profile
+    if (cfg.read_as)                  c.read_as          = cfg.read_as
+    // Declarative mapping (#1392) and the import identity survive an edit unchanged.
+    for (const key of HA_MAPPING_KEYS) {
+      const v = cfg[key]
+      if (v != null && !(Array.isArray(v) && v.length === 0)) c[key] = v
+    }
+    // The import identity belongs to the imported entity: editing the entity drops it.
+    // HA entity ids are case-insensitive: only a different entity counts as edited.
+    const initialEntity = String(props.initial?.config?.entity_id ?? '').trim().toLowerCase()
+    if (cfg.ha_uid && c.entity_id.toLowerCase() === initialEntity) c.ha_uid = cfg.ha_uid
     return c
   }
   if (type === 'IOBROKER') {
@@ -1441,7 +1517,15 @@ function buildConfig() {
       c.archive_id = cfg.archive_id.trim().toLowerCase()
     }
     if (cfg.title?.trim()) c.title = cfg.title.trim()
-    if (cfg.priority != null) c.priority = cfg.priority
+    const priority = normalizePriority(cfg.priority)
+    // The Pushover section (priority included) is hidden unless the binding
+    // sends to a Pushover target; hidden values must neither be saved nor
+    // block the save.
+    if (sendsNotification(strategy) && hasPushoverTarget(c.providers)) {
+      if (priority != null) c.priority = priority
+      const pushover = normalizePushoverOptions(cfg.pushover, priority)
+      if (Object.keys(pushover).length) c.pushover = pushover
+    }
     return c
   }
   return {}
@@ -1449,9 +1533,17 @@ function buildConfig() {
 
 async function submit() {
   error.value  = null
+  if (selectedAdapterType.value === 'HOME_ASSISTANT' && !haAdvancedValid.value) {
+    error.value = t('adapters.bindingForm.haAdvancedInvalid')  // never save the previous mapping silently
+    return
+  }
   saving.value = true
   try {
     const config     = buildConfig()
+    if (selectedAdapterType.value === 'MESSAGE' && form.enabled && sendsNotification(config.archive_strategy)
+      && hasPushoverTarget(config.providers) && Object.keys(pushoverOptionErrors(cfg.pushover, cfg.priority)).length) {
+      error.value = t('adapters.pushoverOptions.errors.invalid'); saving.value = false; return
+    }
     // Zeitschaltuhr: Schaltwert muss zum Objekttyp passen (Issue #1008) —
     // sonst antwortet die API mit 422.
     if (selectedAdapterType.value === 'ZEITSCHALTUHR' && config.timer_type !== 'meta') {
@@ -1496,7 +1588,7 @@ async function submit() {
     }
     emit('save')
   } catch (e) {
-    error.value = e.response?.data?.detail ?? t('common.saveError')
+    error.value = saveErrorText(e.response?.data?.detail)
   } finally {
     saving.value = false
   }

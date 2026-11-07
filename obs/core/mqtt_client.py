@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import math
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -36,11 +37,26 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+def _finite_or_none(value: Any) -> Any:
+    """Replace non-finite floats with None, also inside lists and dicts.
+
+    json.dumps would emit the bare tokens NaN/Infinity, which are not valid JSON
+    and break spec-compliant subscribers (#1153).
+    """
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, (list, tuple)):
+        return [_finite_or_none(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _finite_or_none(item) for key, item in value.items()}
+    return value
+
+
 def build_payload(value: Any, unit: str | None, quality: str, ts: datetime | None = None) -> str:
     """Serialize a DataPoint value to the standard MQTT JSON payload."""
     return json_dumps(
         {
-            "v": value,
+            "v": _finite_or_none(value),
             "u": unit,
             "t": (ts or datetime.now(UTC)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
             "q": quality,

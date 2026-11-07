@@ -171,8 +171,13 @@ def coerce_value_for_type(value: Any, data_type: str) -> Any:
     """Coerce an already-typed *value* to the Python type declared for *data_type*.
 
     Raises ValueError when the value is incompatible so callers can return 422.
-    UNKNOWN datapoints accept any value unchanged.
+    UNKNOWN datapoints accept any value unchanged, except non-finite floats.
     """
+    # json.loads accepts NaN/Infinity, but they are not valid JSON and would put an
+    # unparsable payload on the MQTT value topic; int(inf) would also raise
+    # OverflowError instead of ValueError (#1153).
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"Value {value!r} is not a finite number and cannot be stored as '{data_type}'")
     defn = DataTypeRegistry.get(data_type)
     if defn.name == "UNKNOWN":
         return value

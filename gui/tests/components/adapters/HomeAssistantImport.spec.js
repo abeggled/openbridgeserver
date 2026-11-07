@@ -1,0 +1,403 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { mount, flushPromises } from '@vue/test-utils'
+
+const api = vi.hoisted(() => ({
+  haEntities: vi.fn(),
+  haImportPreview: vi.fn(),
+  haImport: vi.fn(),
+}))
+vi.mock('@/api/client', () => ({ adapterApi: api }))
+
+import HomeAssistantImport from '@/components/adapters/HomeAssistantImport.vue'
+
+const LOCK = {
+  entity_id: 'lock.shed', name: 'Shed', domain: 'lock', state: 'locked', unit: null, available: true,
+  attributes: { friendly_name: 'Shed', supported_features: 1, battery: 80 }, area: 'Garden', device: 'Nuki', platform: 'nuki', device_class: null,
+  profiles: [{ id: 'lock.boolean_locked', supported: true, reason: null }, { id: 'lock.open', supported: false, reason: 'featureMissing' }],
+  default_profile: 'lock.boolean_locked',
+}
+const CLIMATE = {
+  entity_id: 'climate.living', name: 'Living', domain: 'climate', state: 'heat', unit: '°C', available: false,
+  attributes: {}, area: null, device: null, platform: null, device_class: null, profiles: [], default_profile: null,
+}
+
+function page(items = [LOCK, CLIMATE], extra = {}) {
+  return { data: { total: items.length, items, facets: { domain: ['climate', 'lock'], area: ['Garden'], platform: ['nuki'], device: ['Nuki'] }, metadata_available: true, ...extra } }
+}
+
+const NEW_LOCK = {
+  entity_id: 'lock.shed', attribute: null, profile: 'lock.boolean_locked', name: 'Shed', data_type: 'BOOLEAN', unit: null,
+  direction: 'BOTH', tags: ['homeassistant', 'lock'], config: {}, convention: 'trueLocked', status: 'new', reason: null,
+  mapping: {
+    mode: 'profile',
+    write_kind: 'map',
+    read: { attribute: null, state_map: { locked: true }, transitional_states: [], fault_states: [] },
+    write: { true: { domain: 'lock', name: 'lock' }, false: { domain: 'lock', name: 'unlock' } },
+  },
+}
+const ATTR = {
+  ...NEW_LOCK, attribute: 'battery', profile: null, name: 'Shed (battery)', data_type: 'INTEGER', unit: '%', direction: 'SOURCE', convention: null,
+  mapping: { mode: 'default', write_kind: 'none', read: { attribute: 'battery', state_map: null, transitional_states: [], fault_states: [] }, write: { mode: 'default' } },
+}
+const UNSUPPORTED = { ...ATTR, entity_id: 'climate.living', status: 'unsupported', reason: 'writeNeedsProfile', mapping: null, tags: [] }
+
+async function mk() {
+  const w = mount(HomeAssistantImport, { props: { instance: { id: 'ha-1', name: 'HA' } } })
+  await flushPromises()
+  return w
+}
+
+async function loaded(items) {
+  api.haEntities.mockResolvedValue(page(items))
+  const w = await mk()
+  await w.find('[data-testid="ha-load"]').trigger('click')
+  await flushPromises()
+  return w
+}
+
+beforeEach(() => {
+  for (const fn of Object.values(api)) fn.mockReset()
+})
+
+describe('HomeAssistantImport', () => {
+  it('loads entities with filters and shows hits', async () => {
+    const w = await loaded()
+    expect(api.haEntities).toHaveBeenCalledWith('ha-1', { q: '', domain: '', area: '', platform: '', device: '', availability: '', offset: 0, limit: 50 })
+    expect(w.find('[data-testid="ha-hits"]').exists()).toBe(true)
+    expect(w.find('[data-testid="ha-no-metadata"]').exists()).toBe(false)
+    expect(w.find('[data-testid="ha-entity-lock.shed"]').text()).toContain('Garden · Nuki · nuki')
+    await w.find('[data-testid="ha-filter-domain"]').setValue('lock')
+    await flushPromises()
+    expect(api.haEntities).toHaveBeenLastCalledWith('ha-1', expect.objectContaining({ domain: 'lock', offset: 0 }))
+    await w.find('[data-testid="ha-filter-availability"]').setValue('available')
+    await w.find('[data-testid="ha-filter-q"]').setValue('shed')
+    await w.find('[data-testid="ha-filter-q"]').trigger('keyup.enter')
+    await flushPromises()
+    expect(api.haEntities).toHaveBeenLastCalledWith('ha-1', expect.objectContaining({ q: 'shed', availability: 'available' }))
+  })
+
+  it('reports a missing registry and an empty result', async () => {
+    api.haEntities.mockResolvedValue(page([], { metadata_available: false }))
+    const w = await mk()
+    await w.find('[data-testid="ha-load"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="ha-no-metadata"]').exists()).toBe(true)
+    expect(w.find('[data-testid="ha-empty"]').exists()).toBe(true)
+  })
+
+  it.each([
+    [{ response: { data: { detail: 'Home-Assistant-Instanz ist nicht verbunden' } } }, 'nicht verbunden'],
+    [new Error('net'), 'Entities konnten nicht geladen werden'],
+  ])('shows load errors', async (error, text) => {
+    api.haEntities.mockRejectedValue(error)
+    const w = await mk()
+    await w.find('[data-testid="ha-load"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="ha-error"]').text()).toContain(text)
+    expect(w.find('[data-testid="ha-empty"]').exists()).toBe(false)
+  })
+
+  it('pages through results', async () => {
+    const many = Array.from({ length: 50 }, (_, i) => ({ ...CLIMATE, entity_id: `sensor.s${i}` }))
+    api.haEntities.mockResolvedValue({ data: { ...page(many).data, total: 120 } })
+    const w = await mk()
+    await w.find('[data-testid="ha-load"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="ha-prev"]').attributes('disabled')).toBeDefined()
+    await w.find('[data-testid="ha-next"]').trigger('click')
+    await flushPromises()
+    expect(api.haEntities).toHaveBeenLastCalledWith('ha-1', expect.objectContaining({ offset: 50 }))
+    await w.find('[data-testid="ha-prev"]').trigger('click')
+    await flushPromises()
+    expect(api.haEntities).toHaveBeenLastCalledWith('ha-1', expect.objectContaining({ offset: 0 }))
+  })
+
+  it('selects default, plain state, profiles and attributes, then previews and imports', async () => {
+    const w = await loaded()
+    expect(w.find('[data-testid="ha-preview"]').attributes('disabled')).toBeDefined()
+    await w.find('[data-testid="ha-select-lock.shed"]').setValue(true)
+    await w.find('[data-testid="ha-select-climate.living"]').setValue(true)
+    await w.find('[data-testid="ha-expand-lock.shed"]').trigger('click')
+    expect(w.find('[data-testid="ha-profile-lock.shed-lock.open"]').attributes('disabled')).toBeDefined()
+    expect(w.find('[data-testid="ha-entity-lock.shed"]').text()).toContain('Entity unterstützt diese Funktion nicht')
+    expect(w.find('[data-testid="ha-attr-lock.shed-supported_features"]').exists()).toBe(false)
+    await w.find('[data-testid="ha-attr-lock.shed-battery"]').setValue(true)
+    await w.find('[data-testid="ha-plain-lock.shed"]').setValue(true)
+    await w.find('[data-testid="ha-plain-lock.shed"]').setValue(false)
+    expect(w.find('[data-testid="ha-profile-lock.shed-lock.boolean_locked"]').element.checked).toBe(true)
+    await w.find('[data-testid="ha-expand-lock.shed"]').trigger('click')
+    expect(w.find('[data-testid="ha-attr-lock.shed-battery"]').exists()).toBe(false)
+
+    await w.find('[data-testid="ha-tags"]').setValue(' garden, ,ha ')
+    api.haImportPreview.mockResolvedValue({ data: { preview: [NEW_LOCK, ATTR, UNSUPPORTED] } })
+    await w.find('[data-testid="ha-preview"]').trigger('click')
+    await flushPromises()
+    expect(api.haImportPreview).toHaveBeenCalledWith('ha-1', {
+      selections: [
+        { entity_id: 'lock.shed', attribute: null, profile: 'lock.boolean_locked' },
+        { entity_id: 'climate.living', attribute: null, profile: null },
+        { entity_id: 'lock.shed', attribute: 'battery', profile: 'auto' },
+      ],
+      tags: ['garden', 'ha'],
+      persist_value: true,
+      record_history: true,
+    })
+    const plan = w.find('[data-testid="ha-plan"]').text()
+    expect(plan).toContain('lock.lock')
+    expect(plan).toContain('true = verriegelt')
+    expect(plan).toContain('Schreiben benötigt ein Profil')
+    expect(w.find('[data-testid="ha-plan-1"]').text()).toContain('battery')
+
+    api.haImport.mockResolvedValue({ data: { created_datapoints: 2, created_bindings: 2, skipped_existing: 0, skipped_conflicts: 0, skipped_unsupported: 1, errors: ['x: boom'], preview: [] } })
+    api.haImportPreview.mockResolvedValue({ data: { preview: [{ ...NEW_LOCK, status: 'exists', reason: 'bindingExists' }] } })
+    await w.find('[data-testid="ha-import-btn"]').trigger('click')
+    await flushPromises()
+    expect(api.haImport).toHaveBeenCalledTimes(1)
+    expect(w.find('[data-testid="ha-result"]').text()).toContain('x: boom')
+    expect(w.find('[data-testid="ha-import-btn"]').attributes('disabled')).toBeDefined()
+
+    // changing the selection invalidates the plan
+    await w.find('[data-testid="ha-select-climate.living"]').setValue(false)
+    expect(w.find('[data-testid="ha-plan"]').exists()).toBe(false)
+  })
+
+  it.each([
+    ['haImportPreview', 'ha-preview', 'Vorschau konnte nicht erstellt werden'],
+    ['haImport', 'ha-import-btn', 'Import fehlgeschlagen'],
+  ])('shows %s failures', async (fn, button, key) => {
+    const w = await loaded()
+    await w.find('[data-testid="ha-select-lock.shed"]').setValue(true)
+    api.haImportPreview.mockResolvedValue({ data: { preview: [NEW_LOCK] } })
+    await w.find('[data-testid="ha-preview"]').trigger('click')
+    await flushPromises()
+    api[fn].mockRejectedValue(new Error('x'))
+    await w.find(`[data-testid="${button}"]`).trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="ha-error"]').text()).toContain(key)
+  })
+
+  it('covers profile toggles, options, single actions and informational reasons', async () => {
+    const bare = { ...CLIMATE, entity_id: 'scene.x', attributes: undefined, profiles: [{ id: 'scene.activate', supported: true, reason: null }], default_profile: 'scene.activate' }
+    const w = await loaded([LOCK, bare])
+    await w.find('[data-testid="ha-expand-scene.x"]').trigger('click')
+    expect(w.find('[data-testid="ha-entity-scene.x"]').text()).not.toContain('Attribute')
+    await w.find('[data-testid="ha-expand-lock.shed"]').trigger('click')
+    const profile = w.find('[data-testid="ha-profile-lock.shed-lock.boolean_locked"]')
+    await profile.setValue(true)
+    await profile.setValue(false)
+    expect(w.find('[data-testid="ha-select-lock.shed"]').element.checked).toBe(false)
+    await profile.setValue(true)
+    const [persist, history] = w.findAll('input[type="checkbox"]').slice(-2)
+    await persist.setValue(false)
+    await history.setValue(false)
+    const position = {
+      ...NEW_LOCK, reason: 'ambiguousReadOnly',
+      mapping: { mode: 'profile', write_kind: 'single', read: { attribute: 'current_position', state_map: null, transitional_states: [], fault_states: [] }, write: { domain: 'cover', name: 'set_cover_position', value_path: 'position' } },
+    }
+    api.haImportPreview.mockResolvedValue({ data: { preview: [position] } })
+    await w.find('[data-testid="ha-preview"]').trigger('click')
+    await flushPromises()
+    expect(api.haImportPreview.mock.calls[0][1]).toMatchObject({ persist_value: false, record_history: false })
+    const row = w.find('[data-testid="ha-plan-0"]').text()
+    expect(row).toContain('cover.set_cover_position')
+    expect(row).toContain('position')
+    expect(row).toContain('Mehrdeutige Domain')
+    // the plan was made with these options: changing one invalidates it
+    await history.setValue(true)
+    expect(w.find('[data-testid="ha-plan"]').exists()).toBe(false)
+  })
+
+  it('loads on open and searches live while typing', async () => {
+    api.haEntities.mockResolvedValue(page())
+    const w = await mk()
+    expect(api.haEntities).toHaveBeenCalledTimes(1)
+    vi.useFakeTimers()
+    try {
+      const q = w.find('[data-testid="ha-filter-q"]')
+      await q.setValue('sh')
+      await q.setValue('shed')
+      vi.advanceTimersByTime(299)
+      expect(api.haEntities).toHaveBeenCalledTimes(1)
+      vi.advanceTimersByTime(1)
+      expect(api.haEntities).toHaveBeenCalledTimes(2)
+      expect(api.haEntities).toHaveBeenLastCalledWith('ha-1', expect.objectContaining({ q: 'shed' }))
+      await q.setValue('x')
+      w.unmount()
+      vi.advanceTimersByTime(500)
+      expect(api.haEntities).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('ignores responses and errors of superseded searches', async () => {
+    let resolveOld
+    let rejectOld
+    api.haEntities.mockResolvedValueOnce(page())  // initial load
+    const w = await mk()
+    api.haEntities
+      .mockImplementationOnce(() => new Promise(r => { resolveOld = r }))
+      .mockImplementationOnce(() => new Promise((_, reject) => { rejectOld = reject }))
+      .mockResolvedValueOnce(page([CLIMATE]))
+    w.vm.load(0)
+    w.vm.load(0)
+    await w.vm.load(0)
+    await flushPromises()
+    resolveOld(page([LOCK]))
+    rejectOld(new Error('late'))
+    await flushPromises()
+    expect(w.find('[data-testid="ha-entity-climate.living"]').exists()).toBe(true)
+    expect(w.find('[data-testid="ha-entity-lock.shed"]').exists()).toBe(false)
+    expect(w.find('[data-testid="ha-error"]').exists()).toBe(false)
+    expect(w.find('[data-testid="ha-load"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('drops a preview reply that arrives after the selection changed', async () => {
+    const w = await loaded()
+    await w.find('[data-testid="ha-select-lock.shed"]').setValue(true)
+    let reply
+    api.haImportPreview.mockReturnValueOnce(new Promise(resolve => { reply = resolve }))
+    await w.find('[data-testid="ha-preview"]').trigger('click')
+    await w.find('[data-testid="ha-select-climate.living"]').setValue(true)
+    reply({ data: { preview: [NEW_LOCK] } })
+    await flushPromises()
+    expect(w.find('[data-testid="ha-plan"]').exists()).toBe(false)
+    expect(w.find('[data-testid="ha-preview"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('drops a refresh after import that arrives after the options changed', async () => {
+    const w = await loaded()
+    await w.find('[data-testid="ha-select-lock.shed"]').setValue(true)
+    api.haImportPreview.mockResolvedValueOnce({ data: { preview: [NEW_LOCK] } })
+    await w.find('[data-testid="ha-preview"]').trigger('click')
+    await flushPromises()
+    api.haImport.mockResolvedValue({ data: { created_datapoints: 1, created_bindings: 1, skipped_existing: 0, skipped_conflicts: 0, skipped_unsupported: 0, errors: [], preview: [] } })
+    let reply
+    api.haImportPreview.mockReturnValueOnce(new Promise(resolve => { reply = resolve }))
+    await w.find('[data-testid="ha-import-btn"]').trigger('click')
+    await flushPromises()
+    const [persist] = w.findAll('input[type="checkbox"]').slice(-2)
+    await persist.setValue(false)
+    reply({ data: { preview: [{ ...NEW_LOCK, status: 'exists', reason: 'bindingExists' }] } })
+    await flushPromises()
+    expect(w.find('[data-testid="ha-plan"]').exists()).toBe(false)
+    expect(w.find('[data-testid="ha-result"]').exists()).toBe(true)
+  })
+
+  it('keeps a successful import successful when the refresh fails', async () => {
+    const w = await loaded()
+    await w.find('[data-testid="ha-select-lock.shed"]').setValue(true)
+    api.haImportPreview.mockResolvedValueOnce({ data: { preview: [NEW_LOCK] } })
+    await w.find('[data-testid="ha-preview"]').trigger('click')
+    await flushPromises()
+    api.haImport.mockResolvedValue({ data: { created_datapoints: 1, created_bindings: 1, skipped_existing: 0, skipped_conflicts: 0, skipped_unsupported: 0, errors: [], preview: [] } })
+    api.haImportPreview.mockRejectedValueOnce({ response: { status: 503, data: { detail: 'offline' } } })
+    await w.find('[data-testid="ha-import-btn"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="ha-result"]').exists()).toBe(true)
+    expect(w.find('[data-testid="ha-refresh-failed"]').exists()).toBe(true)
+    expect(w.find('[data-testid="ha-error"]').exists()).toBe(false)
+    expect(w.find('[data-testid="ha-plan"]').exists()).toBe(false)
+    expect(w.find('[data-testid="ha-import-btn"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('keeps the import blocked while a search runs alongside it', async () => {
+    const w = await loaded()
+    await w.find('[data-testid="ha-select-lock.shed"]').setValue(true)
+    api.haImportPreview.mockResolvedValue({ data: { preview: [NEW_LOCK] } })
+    await w.find('[data-testid="ha-preview"]').trigger('click')
+    await flushPromises()
+    let finishImport
+    api.haImport.mockImplementationOnce(() => new Promise(r => { finishImport = r }))
+    await w.find('[data-testid="ha-import-btn"]').trigger('click')
+    api.haEntities.mockResolvedValue(page([LOCK]))
+    await w.vm.load(0)
+    await flushPromises()
+    expect(w.find('[data-testid="ha-load"]').attributes('disabled')).toBeUndefined()
+    expect(w.find('[data-testid="ha-import-btn"]').attributes('disabled')).toBeDefined()
+    expect(w.find('[data-testid="ha-preview"]').attributes('disabled')).toBeDefined()
+    finishImport({ data: { created_datapoints: 1, created_bindings: 1, skipped_existing: 0, skipped_conflicts: 0, skipped_unsupported: 0, errors: [], preview: [] } })
+    await flushPromises()
+    expect(api.haImport).toHaveBeenCalledTimes(1)
+    expect(w.find('[data-testid="ha-preview"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it.each([
+    [[{ loc: ['body', 'selections'], msg: 'List should have at most 500 items' }, { msg: 'second' }], 'List should have at most 500 items; second'],
+    [['plain'], 'plain'],
+    [[], 'Vorschau konnte nicht erstellt werden'],
+    [{ code: 'forbidden' }, 'Vorschau konnte nicht erstellt werden'],
+    ['', 'Vorschau konnte nicht erstellt werden'],
+  ])('renders validation error lists readably (%#)', async (detail, text) => {
+    const w = await loaded()
+    await w.find('[data-testid="ha-select-lock.shed"]').setValue(true)
+    api.haImportPreview.mockRejectedValueOnce({ response: { status: 422, data: { detail } } })
+    await w.find('[data-testid="ha-preview"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="ha-error"]').text()).toBe(text)
+  })
+
+  it('exposes load for the parent', async () => {
+    api.haEntities.mockResolvedValue(page())
+    const w = await mk()
+    await w.vm.load(0)
+    expect(api.haEntities).toHaveBeenCalled()
+  })
+})
+
+describe('HomeAssistantImport — editing names in the preview', () => {
+  const OTHER = { ...NEW_LOCK, entity_id: 'climate.living', name: 'Living', proposed_name: 'Living', selection: 1 }
+
+  async function previewed() {
+    const w = await loaded()
+    await w.find('[data-testid="ha-select-lock.shed"]').setValue(true)
+    await w.find('[data-testid="ha-select-climate.living"]').setValue(true)
+    api.haImportPreview.mockResolvedValue({
+      data: { preview: [{ ...NEW_LOCK, proposed_name: 'Shed', selection: 0 }, OTHER, { ...UNSUPPORTED, selection: 1 }] },
+    })
+    await w.find('[data-testid="ha-preview"]').trigger('click')
+    await flushPromises()
+    return w
+  }
+
+  it('sends an edited name with its selection only', async () => {
+    const w = await previewed()
+    expect(w.find('[data-testid="ha-name-2"]').exists()).toBe(false)  // not new: plain text
+    await w.find('[data-testid="ha-name-0"]').setValue('  Gartenhaus ')
+    api.haImport.mockResolvedValue({ data: { created_datapoints: 2, created_bindings: 2, skipped_existing: 0, skipped_conflicts: 0, skipped_unsupported: 0, errors: [], preview: [] } })
+    await w.find('[data-testid="ha-import-btn"]').trigger('click')
+    await flushPromises()
+    const sent = api.haImport.mock.calls[0][1].selections
+    expect(sent[0]).toEqual({ entity_id: 'lock.shed', attribute: null, profile: 'lock.boolean_locked', name: 'Gartenhaus' })
+    expect(sent[1]).toEqual({ entity_id: 'climate.living', attribute: null, profile: null })
+  })
+
+  it('resets to the proposal, also via an empty field', async () => {
+    const w = await previewed()
+    const input = w.find('[data-testid="ha-name-0"]')
+    await input.setValue('Anders')
+    await w.find('[data-testid="ha-name-reset-0"]').trigger('click')
+    expect(input.element.value).toBe('Shed')
+    expect(w.find('[data-testid="ha-name-reset-0"]').exists()).toBe(false)
+    await input.setValue('')
+    await input.trigger('blur')
+    expect(input.element.value).toBe('Shed')
+    await input.setValue('Shed2')
+    await input.trigger('blur')
+    expect(input.element.value).toBe('Shed2')
+    await input.setValue('Shed')  // the proposal again: no override
+    api.haImportPreview.mockClear()
+    await w.find('[data-testid="ha-preview"]').trigger('click')
+    expect(api.haImportPreview.mock.calls[0][1].selections[0].name).toBeUndefined()
+  })
+
+  it('forgets the name of a deselected entry', async () => {
+    const w = await previewed()
+    await w.find('[data-testid="ha-name-0"]').setValue('Gartenhaus')
+    await w.find('[data-testid="ha-select-lock.shed"]').setValue(false)
+    await w.find('[data-testid="ha-select-lock.shed"]').setValue(true)
+    api.haImportPreview.mockClear()
+    await w.find('[data-testid="ha-preview"]').trigger('click')
+    expect(api.haImportPreview.mock.calls[0][1].selections.find(s => s.entity_id === 'lock.shed').name).toBeUndefined()
+  })
+})

@@ -19,11 +19,11 @@
         <NodeTitleEditor
           :value="customLabel"
           :fallback="def.label"
-          :editable="auth.isAdmin"
+          :editable="auth.isAdmin && canvasEditable"
           :title-class="['gn-title', customLabel && 'gn-title--custom']"
           @rename="renameNode"
         />
-        <button class="gn-del nodrag" :style="{ visibility: hovered ? 'visible' : 'hidden' }" @click.stop="remove">✕</button>
+        <button v-if="canvasEditable" class="gn-del nodrag" :style="{ visibility: hovered ? 'visible' : 'hidden' }" @click.stop="remove">✕</button>
       </div>
 
       <div class="gn-body">
@@ -38,7 +38,7 @@
           >
             <!-- Input label — clickable negation toggle for gate nodes -->
             <button
-              v-if="isGateNode && def.inputs[r]"
+              v-if="(isGateNode || isBinaryStatsNode) && def.inputs[r]"
               class="gn-port-negate nodrag"
               :class="{ 'gn-port-negate--active': !!data[`negate_${def.inputs[r].id}`] }"
               :title="$t('logic.negatePort', { id: def.inputs[r].id })"
@@ -79,10 +79,16 @@ import { Handle, Position, useVueFlow } from '@vue-flow/core'
 import { useI18n } from 'vue-i18n'
 import { useLogicStore } from '@/stores/logic'
 import { nodeTint } from '@/utils/logicNodeSurface'
+import { binaryStatsInputCount } from '@/utils/binaryStatsInputCount'
+import { HEMS_DIAGNOSTICS, hemsConsumerName, hemsConsumers, hemsInputPorts } from '@/utils/logicHemsOutputs'
 import NodeTitleEditor from '@/components/logic/NodeTitleEditor.vue'
 import { useAuthStore } from '@/stores/auth'
+import { useCanvasEditable } from '@/components/logic/nodes/canvasEditable'
 
 const { updateNodeData } = useVueFlow()
+// Card edits (delete, title, and per card negation/resize) pause while the
+// editor holds the canvas read-only (a sheet is loading or being swapped).
+const canvasEditable = useCanvasEditable()
 const { t, te } = useI18n()
 const logicStore = useLogicStore()
 
@@ -114,6 +120,7 @@ const NODE_DEFS = computed(() => ({
   or:           { label: 'OR',          color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})}],         outputs: [{id:'out',        label:t('logic.ports.out')}]         },
   not:          { label: 'NOT',         color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})}],                                                      outputs: [{id:'out',        label:t('logic.ports.out')}]         },
   xor:          { label: 'XOR',         color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})}],         outputs: [{id:'out',        label:t('logic.ports.out')}]         },
+  binary_stats: { label: t('logic.nodeTypes.binary_stats'), color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})}], outputs: [{id:'count_true',label:t('logic.portLabels.countTrue')},{id:'count_false',label:t('logic.portLabels.countFalse')},{id:'majority_true',label:t('logic.portLabels.majorityTrue')},{id:'total',label:t('logic.portLabels.total')},{id:'percent_true',label:t('logic.portLabels.percentTrue')},{id:'tie',label:t('logic.portLabels.tie')},{id:'threshold_reached',label:t('logic.portLabels.thresholdReached')}] },
   merge:        { label: 'Klemme',      color: '#1d4ed8', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})}],         outputs: [{id:'out',        label:t('logic.ports.out')}]         },
   gate:         { label: 'TOR',         color: '#1d4ed8', inputs: [{id:'in',label:t('logic.ports.input')},{id:'enable',label:t('logic.ports.enable')}],                 outputs: [{id:'out',        label:t('logic.ports.output')}]      },
   memory:       { label: 'Speicher',    color: '#1d4ed8', inputs: [{id:'in',label:t('logic.ports.input')},{id:'reset',label:t('logic.ports.reset')}],                  outputs: [{id:'out',        label:t('logic.ports.output')}]      },
@@ -126,7 +133,8 @@ const NODE_DEFS = computed(() => ({
   math_formula: { label: 'Formel',      color: '#7c3aed', inputs: [{id:'in1',label:t('logic.ports.in_n',{n:1})},{id:'in2',label:t('logic.ports.in_n',{n:2})}],          outputs: [{id:'result',     label:t('logic.portLabels.resultShort')}] },
   math_map:     { label: 'Skalieren',   color: '#7c3aed', inputs: [{id:'value',label:t('logic.ports.value')}],                                                         outputs: [{id:'result',     label:t('logic.portLabels.resultShort')}] },
   timer_delay:  { label: 'Verzögerung', color: '#b45309', inputs: [{id:'trigger',label:t('logic.ports.trigger')}],                                                     outputs: [{id:'trigger',    label:t('logic.ports.trigger')}]     },
-  timer_pulse:  { label: 'Takt',        color: '#b45309', inputs: [],                                                                                                  outputs: [{id:'trigger',    label:t('logic.ports.trigger')}]     },
+  timer_pulse:  { label: 'Impuls',      color: '#b45309', inputs: [{id:'trigger',label:t('logic.ports.trigger')}],                                                     outputs: [{id:'out',        label:t('logic.ports.out')}]         },
+  timer_interval: { label: 'Takt',      color: '#b45309', inputs: [],                                                                                                  outputs: [{id:'trigger',    label:t('logic.ports.trigger')}]     },
   value_sequence: { label: t('logic.nodeTypes.value_sequence'), color: '#b45309', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'condition',label:t('logic.ports.condition')}], outputs: [] },
   timer_cron:   { label: 'Trigger',     color: '#b45309', inputs: [],                                                                                                  outputs: [{id:'trigger',    label:t('logic.ports.trigger')}]     },
   datetime:     { label: t('logic.nodeTypes.datetime'), color: '#b45309', inputs: [], outputs: [{id:'date',label:t('logic.ports.date')},{id:'time',label:t('logic.ports.time')},{id:'custom',label:t('logic.ports.custom')}] },
@@ -156,8 +164,14 @@ const NODE_DEFS = computed(() => ({
       {id:'fault_trigger',label:t('logic.portLabels.faultTrigger')},
     ]
   },
+  // HEMS — hems_surplus: ports are generated from the grid mode and the consumer
+  // list (see the `def` computed below); this entry is the pre-config-load fallback.
+  hems_surplus:       { label: t('logic.nodeTypes.hems_surplus'), color: '#0d9488',
+    inputs: [{id:'grid',label:t('logic.portLabels.hems.grid')}],
+    outputs: [{id:'status',label:t('logic.portLabels.hems.status')}]
+  },
   // Notification
-  notify_message:     { label: 'Benachrichtigung', color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')}], outputs: [{id:'sent',label:t('logic.ports.sent')}] },
+  notify_message:     { label: 'Benachrichtigung', color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')},{id:'url',label:t('logic.portLabels.url')},{id:'url_title',label:t('logic.portLabels.urlTitle')},{id:'image_url',label:t('logic.portLabels.imageUrl')}], outputs: [{id:'sent',label:t('logic.ports.sent')}] },
   notify_pushover:    { label: 'Pushover',       color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')},{id:'url',label:'URL'},{id:'url_title',label:t('logic.portLabels.urlTitle')},{id:'image_url',label:t('logic.portLabels.imageUrl')}], outputs: [{id:'sent',label:t('logic.ports.sent')}] },
   notify_sms:         { label: 'SMS (seven.io)', color: '#e11d48', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')}], outputs: [{id:'sent',     label:t('logic.ports.sent')}]        },
   message_archive:    { label: t('logic.nodeTypes.message_archive'), color: '#2563eb', inputs: [{id:'trigger',label:t('logic.ports.trigger')},{id:'message',label:t('logic.ports.message')},{id:'title',label:t('logic.portLabels.title')}], outputs: [{id:'stored', label:t('logic.ports.stored')}] },
@@ -197,6 +211,9 @@ const isGateNode = computed(() =>
 // are plain values (not booleans) — kept separate from isGateNode so the
 // per-port negation toggles (boolean-only) never render for it.
 const isMergeNode = computed(() => props.type === 'merge')
+// binary_stats takes the gates' dynamic in1..inN inputs and per-input negation,
+// but has its own output ports and no output negation.
+const isBinaryStatsNode = computed(() => props.type === 'binary_stats')
 
 // ── Computed def — expands gate + string_concat inputs dynamically
 const def = computed(() => {
@@ -206,12 +223,15 @@ const def = computed(() => {
   const base = NODE_DEFS.value[props.type]
     ?? (apiDef ? { label: apiDef.label, color: apiDef.color ?? '#6366f1', inputs: apiDef.inputs ?? [], outputs: apiDef.outputs ?? [] } : { label: props.type, color: '#475569', inputs: [], outputs: [] })
   const label = te(`logic.nodeTypes.${props.type}`) ? t(`logic.nodeTypes.${props.type}`) : base.label
-  if (isGateNode.value || isMergeNode.value) {
-    const count = Math.max(2, Math.min(30, Number(props.data?.input_count) || 2))
+  if (isGateNode.value || isMergeNode.value || isBinaryStatsNode.value) {
+    const count = isBinaryStatsNode.value
+      ? binaryStatsInputCount(props.data?.input_count)
+      : Math.max(2, Math.min(30, Number(props.data?.input_count) || 2))
     const inputs = Array.from({ length: count }, (_, i) => ({
       id:    `in${i + 1}`,
       label: t('logic.ports.in_n', { n: i + 1 }),
     }))
+    if (isBinaryStatsNode.value) return { ...base, label, inputs }
     return { ...base, label, inputs, outputs: [{ id: 'out', label: t('logic.ports.out') }] }
   }
   if (props.type === 'string_concat') {
@@ -245,6 +265,22 @@ const def = computed(() => {
       { id: 'fault_text',    label: t('logic.portLabels.faultText') },
       { id: 'fault_trigger', label: t('logic.portLabels.faultTrigger') },
     )
+    return { ...base, label, inputs, outputs }
+  }
+  if (props.type === 'hems_surplus') {
+    const d = props.data
+    const inputs = hemsInputPorts(d, t)
+    const outputs = []
+    hemsConsumers(d.consumers).forEach((c, i) => {
+      const name = hemsConsumerName(c, i, t)
+      outputs.push(
+        { id: `c_${c.id}`, label: name },
+        { id: `c_${c.id}_status`, label: `${name}: ${t('logic.portLabels.hems.status')}` },
+      )
+    })
+    for (const k of HEMS_DIAGNOSTICS) {
+      outputs.push({ id: k, label: t(`logic.portLabels.hems.${k}`) })
+    }
     return { ...base, label, inputs, outputs }
   }
   if (props.type === 'ical') {
@@ -336,8 +372,9 @@ function renameNode(label) { updateNodeData(props.id, { label }) }
 // viewer would silently discard whatever they typed.
 const auth = useAuthStore()
 
-// ── Inline negation toggle (AND / OR / XOR) ────────────────────────────────
+// ── Inline negation toggle (AND / OR / XOR / binary_stats) ─────
 function toggleNegate(portId) {
+  if (!canvasEditable.value) return
   const key = `negate_${portId}`
   updateNodeData(props.id, { [key]: !props.data[key] })
 }
@@ -392,7 +429,8 @@ const summary = computed(() => {
   if (props.type === 'math_formula') return d.formula || 'a + b'
   if (props.type === 'math_map')     return `[${d.in_min ?? 0}‒${d.in_max ?? 100}] → [${d.out_min ?? 0}‒${d.out_max ?? 1}]`
   if (props.type === 'timer_delay')  return `${d.delay_s ?? 1} s`
-  if (props.type === 'timer_pulse')  return `${d.interval_s ?? 5} s`
+  if (props.type === 'timer_pulse')  return `${d.duration_s ?? 1} s`
+  if (props.type === 'timer_interval') return `${d.interval_s ?? 5} s`
   if (props.type === 'value_sequence') {
     const mode = d.run_mode || 'once'
     const key = `logic.nodeConfig.value_sequence.modes.${mode}`
@@ -417,6 +455,9 @@ const summary = computed(() => {
   if (props.type === 'sensor_watchdog') {
     const rows = parseRowList(d.inputs)
     return t('logic.summary.inputs', { n: Math.max(1, Math.min(10, rows.length || 1)) })
+  }
+  if (props.type === 'hems_surplus') {
+    return t('logic.summary.consumers', { n: hemsConsumers(d.consumers).length })
   }
   if (props.type === 'string_replace') {
     const rules = parseRowList(d.rules)
@@ -465,8 +506,10 @@ const summary = computed(() => {
     const behavior = d.closed_behavior === 'default_value' ? `→ ${d.default_value ?? 0}` : t('logic.summary.hold')
     return d.negate_enable ? `${t('logic.summary.negateEnable')}  ${behavior}` : behavior
   }
-  if (props.type === 'and' || props.type === 'or' || props.type === 'xor' || props.type === 'merge') {
-    const count = Math.max(2, Math.min(30, Number(props.data?.input_count) || 2))
+  if (props.type === 'and' || props.type === 'or' || props.type === 'xor' || props.type === 'merge' || props.type === 'binary_stats') {
+    const count = props.type === 'binary_stats'
+      ? binaryStatsInputCount(props.data?.input_count)
+      : Math.max(2, Math.min(30, Number(props.data?.input_count) || 2))
     return count > 2 ? t('logic.summary.inputs', { n: count }) : null
   }
   return null

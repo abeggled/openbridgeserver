@@ -100,4 +100,24 @@ describe('NodeConfigPanel notification', () => {
 
     expect(wrapper.findAll('select:not([data-testid="variable-insert-select"]) option')).toHaveLength(1)
   })
+
+  it('shows Pushover options for Pushover targets and emits them as block data', async () => {
+    const wrapper = await mountPanel('notify_message', { adapter_instance_id: 'message-1', providers: [], priority: 0 })
+    expect(wrapper.find('[data-testid="pushover-options"]').exists()).toBe(false)
+
+    await wrapper.find('input[type="checkbox"]').setValue(true)
+    expect(wrapper.find('[data-testid="pushover-options"]').exists()).toBe(true)
+
+    await wrapper.find('[data-testid="pushover-image-url"]').setValue('http://192.168.1.50/snapshot.jpg')
+    await wrapper.find('[data-testid="pushover-priority"]').setValue('2')
+    await wrapper.find('[data-testid="pushover-retry"]').setValue('60')
+
+    expect(wrapper.emitted('update').at(-1)[0]).toMatchObject({
+      providers: [{ provider: 'pushover', target: 'default' }],
+      image_url: 'http://192.168.1.50/snapshot.jpg',
+      priority: 2,
+      retry: 60,
+    })
+  })
 })
+

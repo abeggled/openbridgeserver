@@ -8,7 +8,35 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from obs.adapters.knx.group_address import try_normalize_ga
 from obs.db.database import Database
+
+
+def _knx_address_order_by_sql(column: str, separator: str) -> str:
+    """ORDER BY terms that sort a KNX address stored as TEXT numerically per part.
+
+    A plain ``ORDER BY`` would put ``1.0.10`` before ``1.0.2``. Up to three parts are compared as
+    integers; addresses with fewer parts sort by their last part (``1/234`` as 1, 0, 234 and a
+    free-level ``234`` as 0, 0, 234), which keeps every addressing style of one project in order.
+    The raw column is appended as a final tie-breaker for malformed values.
+    """
+    rest = f"substr({column}, instr({column}, '{separator}') + 1)"
+    return (
+        f"CAST(substr({column}, 1, instr({column}, '{separator}') - 1) AS INTEGER), "
+        f"CAST(substr({rest}, 1, instr({rest}, '{separator}') - 1) AS INTEGER), "
+        f"CAST(substr({rest}, instr({rest}, '{separator}') + 1) AS INTEGER), "
+        f"{column}"
+    )
+
+
+def pa_order_by_sql(column: str) -> str:
+    """ORDER BY terms for a KNX individual address (``area.line.device``)."""
+    return _knx_address_order_by_sql(column, ".")
+
+
+def ga_order_by_sql(column: str) -> str:
+    """ORDER BY terms for a KNX group address (``main/middle/sub``, ``main/sub`` or free-level)."""
+    return _knx_address_order_by_sql(column, "/")
 
 
 class KnxTraceCommObjectOut(BaseModel):
@@ -196,7 +224,7 @@ async def _devices_by_group_address(group_addresses: list[str], db: Database) ->
              JOIN knx_comm_objects co ON co.device_id = d.id
              JOIN knx_co_ga_links l ON l.comm_object_id = co.id
             WHERE l.ga_address IN ({placeholders})
-            ORDER BY l.ga_address, d.individual_address, CAST(co.number AS INTEGER), co.id""",
+            ORDER BY l.ga_address, {pa_order_by_sql("d.individual_address")}, CAST(co.number AS INTEGER), co.id""",
         normalized,
     )
 
@@ -234,9 +262,10 @@ async def _devices_by_group_address(group_addresses: list[str], db: Database) ->
 
 
 def _extract_knx_ga_roles(config: dict[str, Any]) -> list[tuple[str, str]]:
+    # Binding configs are compared with imported (normalized) addresses — #1296.
     pairs = [
-        ("group_address", str(config.get("group_address") or "").strip()),
-        ("state_group_address", str(config.get("state_group_address") or "").strip()),
+        ("group_address", try_normalize_ga(config.get("group_address"))),
+        ("state_group_address", try_normalize_ga(config.get("state_group_address"))),
     ]
     out: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
@@ -360,7 +389,7 @@ async def build_device_datapoints_context(pa: str, db: Database) -> KnxDeviceDat
         return KnxDeviceDatapointsContextOut(pa=pa)
 
     co_rows = await db.fetchall(
-        """SELECT
+        f"""SELECT
                co.id,
                co.number,
                co.name,
@@ -369,7 +398,7 @@ async def build_device_datapoints_context(pa: str, db: Database) -> KnxDeviceDat
            FROM knx_comm_objects co
            LEFT JOIN knx_co_ga_links l ON l.comm_object_id = co.id
            WHERE co.device_id = ?
-           ORDER BY CAST(co.number AS INTEGER), co.id, l.ga_address""",
+           ORDER BY CAST(co.number AS INTEGER), co.id, {ga_order_by_sql("l.ga_address")}""",
         (device_row["id"],),
     )
 

@@ -78,7 +78,7 @@ const emit = defineEmits(['drag-start', 'toggle'])
 
 const { t } = useI18n()
 
-const CATEGORY_IDS = ['logic', 'datapoint', 'math', 'string', 'timer', 'astro', 'notification', 'integration', 'script', 'ai']
+const CATEGORY_IDS = ['logic', 'datapoint', 'math', 'string', 'timer', 'astro', 'notification', 'integration', 'hems', 'script', 'ai']
 
 const categories = computed(() =>
   CATEGORY_IDS

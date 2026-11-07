@@ -137,6 +137,11 @@ export const adapterApi = {
   onewireSetAlias:      (id, romId, label) => api.patch(`/adapters/instances/${id}/onewire/aliases`, { rom_id: romId, label }),
   iobrokerImportPreview: (id, data) => api.post(`/adapters/instances/${id}/iobroker/import-preview`, data),
   iobrokerImport:        (id, data) => api.post(`/adapters/instances/${id}/iobroker/import`, data),
+  haProfiles:            ()         => api.get('/adapters/homeassistant/profiles'),
+  haEntities:            (id, params = {}) => api.get(`/adapters/instances/${id}/homeassistant/entities`, { params }),
+  haServices:            (id)       => api.get(`/adapters/instances/${id}/homeassistant/services`),
+  haImportPreview:       (id, data) => api.post(`/adapters/instances/${id}/homeassistant/import-preview`, data),
+  haImport:              (id, data) => api.post(`/adapters/instances/${id}/homeassistant/import`, data),
   getZsuHolidays:        (id, year = 0) => api.get(`/adapters/instances/${id}/holidays`, { params: year ? { year } : {} }),
   anwesenheitDatapoints:  (id)          => api.get(`/adapters/instances/${id}/anwesenheit/datapoints`),
   anwesenheitSyncBindings:(id, dpIds)  => api.post(`/adapters/instances/${id}/anwesenheit/sync-bindings`, { datapoint_ids: dpIds }),
@@ -223,6 +228,28 @@ export const settingsApi = {
   get:    ()     => api.get('/system/settings'),
   update: (data) => api.put('/system/settings', data),
   displaySettings: () => api.get('/system/display-settings'),
+}
+
+// ── Visu device profiles ───────────────────────────────────────────────────
+export const visuDevicesApi = {
+  list:   ()        => api.get('/system/visu-devices'),
+  update: (devices) => api.put('/system/visu-devices', { devices }),
+  // Visu pages for the start-page selector; an admin sees the whole tree.
+  pages:  ()        => api.get('/visu/tree'),
+}
+
+// ── Visu alarms ────────────────────────────────────────────────────────────
+export const visuAlarmsApi = {
+  list:   ()       => api.get('/system/visu-alarms'),
+  update: (alarms) => api.put('/system/visu-alarms', { alarms }),
+}
+
+// ── Update Check (#1370) ──────────────────────────────────────────────────
+export const updatesApi = {
+  status:       ()        => api.get('/system/update-status'),
+  releaseNotes: ()        => api.get('/system/update-status/release-notes'),
+  check:        ()        => api.post('/system/update-status/check'),
+  setChannel:   (channel) => api.put('/system/update-channel', { channel }),
 }
 
 // ── History Settings ───────────────────────────────────────────────────────

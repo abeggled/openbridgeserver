@@ -23,6 +23,7 @@ from obs.api.audit import contract_audit, set_contract_audit_resource_id
 from obs.api.auth import Principal, get_current_principal
 from obs.api.authz import AuthzAction, AuthzTarget, authorize
 from obs.api.authz_service import (
+    adapter_delegates,
     authorize_adapter_instance,
     filter_authorized_datapoints,
     load_role_grants,
@@ -30,6 +31,7 @@ from obs.api.authz_service import (
 )
 from obs.api.v1.redaction import REDACTED
 from obs.core.registry import get_registry
+from obs.core.system_datapoints import is_system_datapoint
 from obs.db.database import Database, get_db
 from obs.models.binding import (
     AdapterBindingCreate,
@@ -39,6 +41,24 @@ from obs.models.binding import (
 router = APIRouter(tags=["bindings"])
 
 WEBHOOK_ADAPTER_TYPE = "WEBHOOK"
+
+
+async def _resend_system_value(dp_id: uuid.UUID, binding_id: uuid.UUID | str) -> None:
+    """Feed a binding just attached to a system DataPoint (#1370) its current value.
+
+    The update service only re-sends values that change, and the version or the
+    channel never change at runtime — a new DEST binding would otherwise wait
+    for the next restart. Only that binding is written: a new value event would
+    also re-fire every Logic graph, MESSAGE notification and other binding of
+    the DataPoint.
+    """
+    # Checked here too: a binding on a user DataPoint must not depend on the
+    # WriteRouter being initialized at all — its value arrives by value event.
+    if not is_system_datapoint(dp_id):
+        return
+    from obs.core.write_router import get_write_router
+
+    await get_write_router().resend_system_value(dp_id, uuid.UUID(str(binding_id)))
 
 
 async def _clear_stale_external_write_enabled(dp_id: uuid.UUID, *, adapter_type: str, enabled: bool) -> None:
@@ -170,18 +190,10 @@ async def _ensure_binding_mutation_scope(db: Database, principal: Principal, dp_
 
 
 def _ensure_adapter_delegates_binding(principal: Principal, adapter_type: str) -> None:
-    if _is_admin_principal(principal):
-        return
-    # A webhook binding is managed by a human with operator rights on both the
-    # DataPoint and the instance; only a non-user principal (an API key) is
-    # kept out, since the empty capability set below exists for exactly that.
-    if adapter_type == WEBHOOK_ADAPTER_TYPE and principal.type == "user":
-        return
-
+    """Binding changes are delegated to user principals of LINK_BINDING adapters only."""
     from obs.adapters.base import AdapterDelegationCapability
-    from obs.adapters.registry import supports_delegation
 
-    if not supports_delegation(adapter_type, AdapterDelegationCapability.LINK_BINDING):
+    if not adapter_delegates(principal, adapter_type, AdapterDelegationCapability.LINK_BINDING):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Adapter-Typ erlaubt keine delegierte Binding-Änderung")
 
 
@@ -241,6 +253,49 @@ async def _reload_adapter_instance(instance_id: str, db: Database) -> None:
     await adapter_registry.reload_instance_bindings(instance_id, db)
 
 
+def system_datapoint_bindable(adapter_type: str) -> bool:
+    """Whether an adapter type may bind a read-only system DataPoint at all (#1370).
+
+    MESSAGE only watches the value. Every other adapter needs a DEST binding
+    that passes it on, which the timer, the presence simulation and the webhook
+    never do — they only write into their DataPoint. The Admin GUI offers
+    instances by the same answer (AdapterInstanceOut.system_bindable).
+    """
+    if adapter_type == "MESSAGE":
+        return True
+    from obs.adapters import registry as adapter_registry
+
+    cls = adapter_registry.get_class(adapter_type)
+    # An adapter type that is not loaded is judged by the direction alone.
+    return cls is None or cls.writes_values
+
+
+def _ensure_system_datapoint_binding_allowed(dp_id: uuid.UUID | str, adapter_type: str, direction: str) -> None:
+    """A read-only system DataPoint (#1370) may feed bindings, never be fed by one.
+
+    DEST bindings pass its value on to a device, and MESSAGE bindings only watch
+    it; any other SOURCE/BOTH binding would write adapter values into it.
+    """
+    if not is_system_datapoint(dp_id):
+        return
+    if adapter_type != "MESSAGE" and direction != "DEST":
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "System DataPoints are read-only: only DEST bindings are allowed",
+        )
+    if not system_datapoint_bindable(adapter_type):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"System DataPoints are read-only: {adapter_type} bindings cannot use them",
+        )
+
+
+def _has_direction_check(adapter_type: str) -> bool:
+    from obs.adapters.registry import get_class
+
+    return getattr(get_class(adapter_type), "validate_binding_direction", None) is not None
+
+
 def _validate_adapter_binding(
     adapter_type: str,
     direction: str,
@@ -272,6 +327,9 @@ def _validate_adapter_binding(
             binding_config = cls.binding_config_schema(**schema_config)
             if adapter_type == "MESSAGE" and enabled and instance_config is not None:
                 _validate_message_target_refs(binding_config, instance_config)
+            direction_check = getattr(cls, "validate_binding_direction", None)
+            if direction_check is not None:
+                direction_check(binding_config, direction)
         except Exception as exc:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -334,6 +392,49 @@ def _webhook_config_with_token(config: dict[str, Any], *, stored_token: str | No
 
     parsed = WebhookBindingConfig(**{**config, "token": stored_token or generate_token()})
     return parsed.model_dump()
+
+
+class GroupAddressInputError(HTTPException):
+    """422 for a KNX group address that cannot be stored (#1296).
+
+    ``detail`` is structured — ``code`` (``knxGroupAddressMissing`` or
+    ``knxGroupAddressInvalid``), ``field``, ``value`` and a ``message`` — so the
+    GUI can explain it in the user's language with an example in the project's
+    style instead of showing a validator dump.
+    """
+
+    def __init__(self, code: str, field: str, value: Any, message: str) -> None:
+        self.message = message
+        super().__init__(status.HTTP_422_UNPROCESSABLE_CONTENT, {"code": code, "field": field, "value": value, "message": message})
+
+    def __str__(self) -> str:
+        return f"{self.status_code}: {self.message}"
+
+
+def _normalize_knx_group_addresses(adapter_type: str, config: dict[str, Any]) -> dict[str, Any]:
+    """KNX: store group addresses only in the internal notation (#1296).
+
+    Runs before the schema validation, so a missing or invalid address is
+    reported as :class:`GroupAddressInputError`, including a broken feedback
+    address, which the binding model itself tolerates as absent for stored data.
+    """
+    if adapter_type != "KNX":
+        return config
+    from obs.adapters.knx.group_address import InvalidGroupAddress, normalize_ga
+
+    command = config.get("group_address")
+    if not str(command or "").strip():
+        raise GroupAddressInputError("knxGroupAddressMissing", "group_address", command, "Gruppenadresse fehlt")
+    normalized = dict(config)
+    for key in ("group_address", "state_group_address"):
+        value = config.get(key)
+        if not str(value or "").strip():
+            continue
+        try:
+            normalized[key] = normalize_ga(value)
+        except InvalidGroupAddress as exc:
+            raise GroupAddressInputError("knxGroupAddressInvalid", key, value, str(exc)) from exc
+    return normalized
 
 
 def _validate_timer_output_value(adapter_type: str, config: dict[str, Any], dp_id: uuid.UUID) -> None:
@@ -492,19 +593,21 @@ async def create_binding(
         adapter_type,
     )
 
+    config = _normalize_knx_group_addresses(adapter_type, body.config)
     _validate_adapter_binding(
         adapter_type,
         body.direction,
-        body.config,
+        config,
         enabled=body.enabled,
         instance_config=_json_config(instance_row["config"]) if adapter_type == "MESSAGE" else None,
     )
-    _validate_timer_output_value(adapter_type, body.config, dp_id)
+    _ensure_system_datapoint_binding_allowed(dp_id, adapter_type, body.direction)
+    _validate_timer_output_value(adapter_type, config, dp_id)
 
-    effective_config = body.config
+    effective_config = config
     if adapter_type == WEBHOOK_ADAPTER_TYPE:
         _ensure_webhook_target_allowed(dp_id)
-        effective_config = _webhook_config_with_token(body.config, stored_token=None)
+        effective_config = _webhook_config_with_token(config, stored_token=None)
 
     # Formel validieren
     if body.value_formula:
@@ -556,6 +659,7 @@ async def create_binding(
         )
         await _clear_stale_external_write_enabled(dp_id, adapter_type=adapter_type, enabled=body.enabled)
     await _reload_adapter_instance(str(body.adapter_instance_id), db)
+    await _resend_system_value(dp_id, binding_id)
 
     row = await db.fetchone("SELECT * FROM adapter_bindings WHERE id=?", (binding_id,))
     name_map = await _get_instance_name_map(db)
@@ -594,7 +698,8 @@ async def update_binding(
 
     direction = updates.get("direction", row["direction"])
     config = updates.get("config", _json_config(row["config"]))
-    config_val = json.dumps(config)
+    if "config" in updates:
+        config = _normalize_knx_group_addresses(row["adapter_type"], config)
     enabled = int(updates.get("enabled", bool(row["enabled"])))
     throttle_ms = updates.get("send_throttle_ms", row["send_throttle_ms"])
     on_change = int(updates.get("send_on_change", bool(row["send_on_change"])))
@@ -614,12 +719,17 @@ async def update_binding(
         row["adapter_type"],
         direction,
         config,
-        validate_schema="config" in updates or (row["adapter_type"] == "MESSAGE" and "enabled" in updates),
+        validate_schema="config" in updates
+        or (row["adapter_type"] == "MESSAGE" and "enabled" in updates)
+        # a direction change must still fit the binding's config (e.g. a read-only HA profile)
+        or ("direction" in updates and _has_direction_check(row["adapter_type"])),
         enabled=bool(enabled),
         instance_config=instance_config,
     )
+    _ensure_system_datapoint_binding_allowed(dp_id, row["adapter_type"], direction)
     if "config" in updates:
         _validate_timer_output_value(row["adapter_type"], config, dp_id)
+    config_val = json.dumps(config)
 
     if row["adapter_type"] == WEBHOOK_ADAPTER_TYPE:
         # A binding on a since-reclassified DataPoint can still be switched off;
@@ -680,6 +790,7 @@ async def update_binding(
     instance_id = row["adapter_instance_id"]
     if instance_id:
         await _reload_adapter_instance(instance_id, db)
+    await _resend_system_value(dp_id, binding_id)
 
     updated = await db.fetchone("SELECT * FROM adapter_bindings WHERE id=?", (str(binding_id),))
     name_map = await _get_instance_name_map(db)
