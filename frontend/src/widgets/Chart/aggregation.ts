@@ -18,6 +18,11 @@ const AGGREGATE_INTERVAL_MS: Record<string, number> = {
   '1d': 24 * 3_600_000,
 }
 
+/** Bucket length of an aggregate interval in ms, or NaN for an unknown interval. */
+export function aggregateIntervalMs(interval: string): number {
+  return AGGREGATE_INTERVAL_MS[interval] ?? Number.NaN
+}
+
 /** Parse history timestamps as UTC when a backend omits the timezone suffix. */
 function timestampMs(timestamp: string): number {
   const hasTimezone = /(?:Z|[+-]\d{2}:\d{2})$/i.test(timestamp)
@@ -64,7 +69,7 @@ export function aggregateBucketEndTimestamp(
   toMs: number,
 ): number {
   const bucketStartMs = timestampMs(bucketTimestamp)
-  const intervalMs = AGGREGATE_INTERVAL_MS[interval]
+  const intervalMs = aggregateIntervalMs(interval)
 
   if (!Number.isFinite(bucketStartMs) || !Number.isFinite(intervalMs)) return bucketStartMs
 
