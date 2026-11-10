@@ -93,24 +93,37 @@ def test_register_empty_type_name_raises():
         register_node_type(NoName)
 
 
-def test_register_overwrite_warns(dummy_plugin, caplog):
-    import logging
-
-    class DummyBlock2(LogicNodePlugin):
-        type_name = PLUGIN_TYPE
-
+def _block(type_name: str, label: str) -> type[LogicNodePlugin]:
+    class Block(LogicNodePlugin):
         @classmethod
         def node_type_def(cls) -> NodeTypeDef:
-            return NodeTypeDef(type=PLUGIN_TYPE, label="Dummy2", category="logic")
+            return NodeTypeDef(type=type_name, label=label, category="logic")
 
         @classmethod
         def evaluate(cls, node_id, inputs, config, state):
             return {}, state
 
-    with caplog.at_level(logging.WARNING):
-        register_node_type(DummyBlock2)
-    assert "already registered" in caplog.text
-    assert get_node_type(PLUGIN_TYPE).label == "Dummy2"
+    Block.type_name = type_name
+    return Block
+
+
+def test_register_duplicate_keeps_the_first_plugin(dummy_plugin, caplog):
+    import logging
+
+    with caplog.at_level(logging.ERROR):
+        register_node_type(_block(PLUGIN_TYPE, "Dummy2"))
+    assert "already provided by" in caplog.text
+    assert get_node_type(PLUGIN_TYPE).label != "Dummy2"
+
+
+def test_register_builtin_type_name_is_ignored(caplog):
+    import logging
+
+    with caplog.at_level(logging.ERROR):
+        register_node_type(_block("and", "Fake AND"))
+    assert "clashes with a built-in block" in caplog.text
+    assert plugin_registry.get_plugin_node_type("and") is None
+    assert get_node_type("and").label != "Fake AND"
 
 
 def test_unregister_missing_returns_false():

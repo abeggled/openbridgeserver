@@ -20,8 +20,26 @@ def _register(cls: type[Any]) -> type[Any]:
     type_name: str | None = getattr(cls, "type_name", None)
     if not type_name:
         raise ValueError(f"LogicNodePlugin subclass {cls.__name__} must define a non-empty type_name")
+    # A type name belongs to whoever registered it first. Overwriting would let
+    # one plugin silently replace another, and the hot-reload bookkeeping would
+    # then unregister the type when the wrong file goes away. A plugin's own
+    # reload unregisters its old types first, so it never hits this check.
+    from obs.logic.registry import NODE_TYPE_REGISTRY
+
+    if type_name in NODE_TYPE_REGISTRY:
+        logger.error("Plugin node type %r (%s) clashes with a built-in block — ignored", type_name, cls.__name__)
+        return cls
     if type_name in _registry:
-        logger.warning("Plugin node type %r already registered — overwriting with %s", type_name, cls.__name__)
+        owner = _registry[type_name]
+        logger.error(
+            "Plugin node type %r (%s.%s) is already provided by %s.%s — ignored",
+            type_name,
+            cls.__module__,
+            cls.__name__,
+            owner.__module__,
+            owner.__name__,
+        )
+        return cls
     _registry[type_name] = cls
     logger.debug("Registered plugin node type: %r (%s)", type_name, cls.__name__)
     return cls

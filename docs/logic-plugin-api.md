@@ -59,7 +59,14 @@ Or via environment variable:
 OBS_PLUGINS_DIR=/opt/obs/plugins
 ```
 
-Any `*.py` file in that directory (not starting with `_`) is imported at startup. Files are processed in alphabetical order. When `plugins_dir` is configured, OBS also starts a background file-watcher so changes are picked up **without a restart** — see [Hot-reload](#hot-reload) below.
+Any `*.py` file in that directory (not starting with `_`) is imported at startup. Files are processed in alphabetical order.
+
+Each file is one plugin, loaded as its own module and tracked separately, so any number of plugins can live side by side: reloading or deleting one file only touches the node types that file registered. Two rules keep them apart:
+
+- **Unique file names.** Name each file after its block, e.g. `obs_plugin_shadow_control.py` — not a generic `plugin.py`, which a second plugin could not sit next to.
+- **Unique `type_name`s** across all plugins and built-in blocks (see [`type_name`](#type_name)).
+
+A plugin file cannot import helper modules from the same directory (the directory is not on `sys.path`, and `_`-prefixed files are skipped); keep a directory plugin in one file, or ship it as a pip package. When `plugins_dir` is configured, OBS also starts a background file-watcher so changes are picked up **without a restart** — see [Hot-reload](#hot-reload) below.
 
 ---
 
@@ -92,6 +99,8 @@ Traceback ...
 Fix the file and save — the watcher fires again immediately.
 
 > **Note:** Hot-reload applies only to the `plugins/` directory. Pip-installed entry-point plugins require a full OBS restart to pick up changes.
+
+> **Docker:** bind-mount the plugins **directory** (`./plugins:/plugins:ro`), not a single file. A single-file mount raises no change event inside the container, and an editor that saves by writing a new file and renaming it (JetBrains “safe write”, vim, `git checkout`) leaves the container on the old file for good. On Docker Desktop (macOS/Windows), where file events do not cross into the VM, also set `WATCHFILES_FORCE_POLLING=true` on the OBS container.
 
 ---
 
@@ -131,7 +140,7 @@ class LogicNodePlugin(ABC):
 
 #### `type_name`
 
-Must be globally unique across all built-in and plugin node types. Use a descriptive snake_case string, e.g. `shadow_control`, `moving_colors`, `pid_controller`. Clashes with built-in names or other plugins are logged as a warning; the last-registered plugin wins.
+Must be globally unique across all built-in and plugin node types. Use a descriptive snake_case string, e.g. `shadow_control`, `moving_colors`, `pid_controller`. A plugin that reuses a built-in name or a name another plugin already registered is **ignored** and logged as an error — the first registration keeps the name, and unloading the ignored file never removes it.
 
 #### `node_type_def() -> NodeTypeDef`
 
