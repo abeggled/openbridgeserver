@@ -7,6 +7,7 @@ import {
   maxTicksForWidth,
   zonedParts,
   zonedToUtc,
+  zonedToUtcAll,
   type CalendarTick,
   type TimeTickStep,
 } from './timeAxisTicks'
@@ -85,6 +86,24 @@ describe('zonedToUtc', () => {
 
   it('falls back to the browser zone for an unusable timezone', () => {
     expect(zonedParts(0, 'Not/AZone')).toEqual(zonedParts(0, null))
+  })
+})
+
+describe('zonedToUtcAll', () => {
+  it('returns one instant for an ordinary time', () => {
+    expect(zonedToUtcAll(2026, 11, 2, 7 * 60, ZURICH)).toEqual([Date.UTC(2026, 10, 2, 6)])
+  })
+
+  it('returns both instants of a time repeated by fall-back', () => {
+    expect(zonedToUtcAll(2026, 10, 25, 2 * 60 + 15, ZURICH)).toEqual([
+      Date.UTC(2026, 9, 25, 0, 15), Date.UTC(2026, 9, 25, 1, 15),
+    ])
+    // zonedToUtc picks the first one
+    expect(zonedToUtc(2026, 10, 25, 2 * 60 + 15, ZURICH)).toBe(Date.UTC(2026, 9, 25, 0, 15))
+  })
+
+  it('returns the instant after the gap for a time skipped by spring-forward', () => {
+    expect(zonedToUtcAll(2026, 3, 29, 2 * 60 + 30, ZURICH)).toEqual([Date.UTC(2026, 2, 29, 1, 30)])
   })
 })
 
@@ -186,6 +205,35 @@ describe('calendarTicks', () => {
     ])
     expect(ticks.map(t => t.kind)).toEqual(['month', 'month', 'month', 'month', 'month'])
     expect(ticks.map(t => t.major)).toEqual([false, false, true, false, false])
+  })
+
+  it('keeps ticks in the first pass of the repeated autumn hour (#1431)', () => {
+    // 2026-10-25 00:15Z–00:30Z = 02:15–02:30 CEST, before the clock falls back to 02:00 CET
+    const from = Date.UTC(2026, 9, 25, 0, 15)
+    const ticks = calendarTicks(from, from + 15 * 60_000, step('minute', 5), ZURICH)
+
+    expect(ticks.map(t => t.value)).toEqual([0, 5, 10, 15].map(m => from + m * 60_000))
+    expect(localTimes(ticks, ZURICH)).toEqual([
+      '2026-10-25 02:15', '2026-10-25 02:20', '2026-10-25 02:25', '2026-10-25 02:30',
+    ])
+  })
+
+  it('ticks the repeated autumn hour twice, in time order', () => {
+    const from = Date.UTC(2026, 9, 24, 23) // 01:00 CEST
+    const ticks = calendarTicks(from, from + 4 * HOUR, step('hour', 1), ZURICH)
+
+    expect(ticks.map(t => t.value)).toEqual([0, 1, 2, 3, 4].map(h => from + h * HOUR))
+    expect(localTimes(ticks, ZURICH)).toEqual([
+      '2026-10-25 01:00', '2026-10-25 02:00', '2026-10-25 02:00', '2026-10-25 03:00', '2026-10-25 04:00',
+    ])
+  })
+
+  it('finds second-pass ticks when the range starts late in the first pass', () => {
+    // 02:50 CEST → 02:20 CET: only the second-pass 02:00 and 02:15 lie inside
+    const from = Date.UTC(2026, 9, 25, 0, 50)
+    const ticks = calendarTicks(from, Date.UTC(2026, 9, 25, 1, 20), step('minute', 15), ZURICH)
+
+    expect(ticks.map(t => t.value)).toEqual([Date.UTC(2026, 9, 25, 1), Date.UTC(2026, 9, 25, 1, 15)])
   })
 
   it('returns no ticks for an invalid or reversed range', () => {

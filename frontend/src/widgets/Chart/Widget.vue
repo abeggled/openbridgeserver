@@ -323,7 +323,8 @@ async function loadData() {
     if (requestPlan.mode === 'aggregate') {
       const bucketTimestamps = sortedUniqueTimestamps(results)
       const intervalMs = aggregateIntervalMs(requestPlan.interval)
-      barBuckets = bucketTimestamps.map((start, i) => ({ start, end: bucketTimestamps[i + 1] ?? start + intervalMs }))
+      // Backends omit empty buckets — a gap must not stretch a bucket up to the next one.
+      barBuckets = bucketTimestamps.map(start => ({ start, end: start + intervalMs }))
       chart.data.labels = bucketTimestamps.map(fmtMs)
       chart.data.datasets = defs.map((s, i) => ({
         yAxisID:         s.axis,

@@ -483,6 +483,24 @@ describe('Chart Widget.vue — calendar-aligned time axis (#1430)', () => {
     expect(x.ticks.callback(5)).toBe('')
   })
 
+  it('keeps an aggregated bar bucket at its interval length across a data gap (#1431)', async () => {
+    // Zwei 1-h-Buckets 10:00–11:00 CET an aufeinanderfolgenden Tagen; der Tag dazwischen fehlt
+    vi.mocked(history.aggregate).mockResolvedValue([
+      { bucket: '2026-11-02T09:00:00Z', v: 1, n: 1 },
+      { bucket: '2026-11-03T09:00:00Z', v: 2, n: 1 },
+    ] as never)
+    const config = await mountChart({ label: 'Verlauf', chart_type: 'bar', time_range: 'last_7d' })
+    await flushPromises()
+    const x = config.options.scales.x
+    const scale = { ...fakeScale(0, 0), width: 400 }
+
+    x.afterBuildTicks(scale)
+
+    // 6-h-Ticks (12:00, 18:00, …) liegen in der Lücke, nicht im ersten Bucket
+    expect(scale.ticks).toEqual([])
+    expect(x.ticks.callback(0)).toBe('')
+  })
+
   it('labels raw bar buckets on calendar boundaries', async () => {
     const config = await mountChart({ label: 'Verlauf', chart_type: 'bar', time_range: 'last_24h' })
     await flushPromises()

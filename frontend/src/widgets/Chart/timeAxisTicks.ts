@@ -123,9 +123,34 @@ function offsetAt(ms: number, timeZone: string | null): number {
 }
 
 /**
- * Instant of the local wall-clock time (*year*, *month*, *day*, *minuteOfDay*)
- * in *timeZone*. A time skipped by a DST change resolves to the instant right
- * after the gap (02:30 on a spring-forward day becomes 03:30).
+ * Every instant of the local wall-clock time (*year*, *month*, *day*,
+ * *minuteOfDay*) in *timeZone*, in ascending order:
+ * - usually one instant
+ * - two for a time repeated by a fall-back change (02:15 on the autumn day)
+ * - for a time skipped by a spring-forward change, the instant right after the
+ *   gap (02:30 becomes 03:30)
+ */
+export function zonedToUtcAll(
+  year: number,
+  month: number,
+  day: number,
+  minuteOfDay: number,
+  timeZone: string | null,
+): number[] {
+  const wall = Date.UTC(year, month - 1, day, 0, minuteOfDay)
+  // UTC offsets never exceed ±14 h, so the offsets a day before and after
+  // cover both sides of any DST change that can affect this wall time.
+  const offsets = [...new Set([-DAY_MS, 0, DAY_MS].map(delta => offsetAt(wall + delta, timeZone)))]
+  const instants = offsets
+    .map(offset => wall - offset)
+    .filter(ms => wall - offsetAt(ms, timeZone) === ms)
+  if (instants.length === 0) return [wall - Math.min(...offsets)]
+  return [...new Set(instants)].sort((a, b) => a - b)
+}
+
+/**
+ * First instant of a local wall-clock time in *timeZone*; see `zonedToUtcAll`
+ * for repeated and skipped times.
  */
 export function zonedToUtc(
   year: number,
@@ -134,14 +159,7 @@ export function zonedToUtc(
   minuteOfDay: number,
   timeZone: string | null,
 ): number {
-  const wall = Date.UTC(year, month - 1, day, 0, minuteOfDay)
-  const firstOffset = offsetAt(wall, timeZone)
-  const guess = wall - firstOffset
-  const secondOffset = offsetAt(guess, timeZone)
-  if (secondOffset === firstOffset) return guess
-  const retry = wall - secondOffset
-  if (offsetAt(retry, timeZone) === secondOffset) return retry
-  return wall - Math.min(firstOffset, secondOffset)
+  return zonedToUtcAll(year, month, day, minuteOfDay, timeZone)[0]
 }
 
 /** Calendar date arithmetic independent of any timezone. */
@@ -160,6 +178,7 @@ function weekdayOf(year: number, month: number, day: number): number {
 
 // Upper bound on candidates, so a degenerate range can never spin.
 const MAX_CANDIDATES = 5000
+const LEAD_MS = 3 * HOUR_MS
 
 /**
  * Ticks for [*fromMs*, *toMs*] on the wall-clock boundaries of *step* in
@@ -176,7 +195,7 @@ export function calendarTicks(
   const ticks: CalendarTick[] = []
   const push = (ms: number, year: number, month: number, day: number, kind: CalendarTickKind, major: boolean) => {
     // A skipped DST hour can resolve onto the next candidate — keep ticks strictly increasing.
-    // Candidates past the end never get here: every loop stops at the first one.
+    // Candidates past the end never get here: the loops stop or filter before.
     if (ms < fromMs) return
     if (ticks.length && ms <= ticks[ticks.length - 1].value) return
     ticks.push({ value: ms, major, kind, year, month, weekday: weekdayOf(year, month, day) })
@@ -187,17 +206,32 @@ export function calendarTicks(
 
   if (step.unit === 'minute' || step.unit === 'hour') {
     const stepMinutes = step.count * (step.unit === 'hour' ? 60 : 1)
-    let minuteOfDay = Math.floor((start.hour * 60 + start.minute) / stepMinutes) * stepMinutes
+    // Start a few hours early: when the range starts late in the first pass of a
+    // repeated autumn hour, the second pass shows earlier wall times that also
+    // lie in the range. A DST change never shifts the clock by more than 2 h.
+    const lead = zonedParts(fromMs - LEAD_MS, timeZone)
+    ;[year, month, day] = [lead.year, lead.month, lead.day]
+    let minuteOfDay = Math.floor((lead.hour * 60 + lead.minute) / stepMinutes) * stepMinutes
+    // A repeated hour yields each wall time twice, interleaved out of order
+    // (02:00, 02:15, …, then 02:00 again) — collect first, then sort.
+    const candidates: { ms: number; year: number; month: number; day: number; minuteOfDay: number }[] = []
     for (let i = 0; i < MAX_CANDIDATES; i++) {
-      const ms = zonedToUtc(year, month, day, minuteOfDay, timeZone)
-      if (ms > toMs) break
-      const midnight = minuteOfDay === 0
-      push(ms, year, month, day, midnight ? 'day' : 'time', midnight)
+      const instants = zonedToUtcAll(year, month, day, minuteOfDay, timeZone)
+      if (instants[0] > toMs) break
+      // The second pass of a repeated hour can lie past the end even when the first does not.
+      for (const ms of instants) {
+        if (ms <= toMs) candidates.push({ ms, year, month, day, minuteOfDay })
+      }
       minuteOfDay += stepMinutes
       if (minuteOfDay >= MINUTES_PER_DAY) {
         minuteOfDay = 0;
         [year, month, day] = addDays(year, month, day, 1)
       }
+    }
+    candidates.sort((a, b) => a.ms - b.ms)
+    for (const c of candidates) {
+      const midnight = c.minuteOfDay === 0
+      push(c.ms, c.year, c.month, c.day, midnight ? 'day' : 'time', midnight)
     }
     return ticks
   }
