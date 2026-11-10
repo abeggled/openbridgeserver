@@ -22,6 +22,26 @@ individually, same as the AND block.
 Output is **true** when EXACTLY ONE input is true (with more than two inputs: an odd number of
 true inputs). Inputs (2–30) and the output can be negated individually.
 
+## Binary statistics {#logic-block-binary-stats}
+
+Counts how many binary inputs are TRUE and FALSE — for example "how many windows are open?" or
+"at least 2 of 3 smoke detectors". The number of inputs (2–30) and per-input negation work like
+AND/OR; negation is applied **before** counting. The block is purely combinational, keeps no
+state and sends all outputs on every run.
+
+- **Count TRUE / Count FALSE** — number of inputs that are TRUE or FALSE.
+- **Majority TRUE** — true when more inputs are TRUE than FALSE (strictly greater).
+- **Total** — number of inputs that were evaluated.
+- **TRUE %** — share of TRUE inputs in percent (one decimal place, rounded half up).
+- **Tie** — true when TRUE and FALSE counts are equal (only when Total > 0).
+- **Threshold reached** — true when Count TRUE ≥ "Threshold". With threshold 0 the feature is off
+  and the output is always false.
+
+**Unwired inputs** are controlled by the setting of the same name. With *Ignore* (default) only
+inputs that are actually wired are counted; with *Count as FALSE* the AND/OR behaviour applies
+(unwired = FALSE). A wired input that delivers no value in this run always counts as FALSE. With
+no input wired, all counts and the percentage are 0 and all boolean outputs are false.
+
 ## NOT {#logic-block-not}
 
 Inverts the input — a single input and output, no further configuration.
@@ -39,8 +59,9 @@ Signal gate: lets the input through as long as "Enable" is true, blocks it other
 ## Memory {#logic-block-memory}
 
 Outputs the value stored during the previous logic run and stores the current input value for the
-next run. This block is the **explicit tick boundary** for controlled feedback loops — without
-it, a graph with feedback would loop infinitely within a single run. The **reset** input resets
+next run. This block is an **explicit tick boundary** for controlled feedback loops (as are
+**Delay** and **Pulse**) — without such a boundary, a graph with feedback would loop infinitely
+within a single run. The **reset** input resets
 the stored value to the configured initial value. "Restore state after restart" determines whether
 the stored value survives a server restart.
 
@@ -50,6 +71,27 @@ Outputs the input value unchanged, but only sets the **Changed** trigger output 
 from the last value received — repeated identical values don't trigger again (matches Edomi's
 "SendByChange"). Useful for not re-triggering downstream actions (e.g. notifications) on every
 identical update.
+
+## Edge Detection {#logic-block-edge-detect}
+
+Evaluates the input as a boolean and reacts only to a **change** of level, not to the value
+itself. A rising edge (false → true) pulses **Trigger rising**, a falling one (true → false)
+**Trigger falling**. Without an edge nothing is sent on **Output** — the last value is not
+repeated.
+
+Per direction, "Rising edge"/"Falling edge" decides what should happen:
+
+- **Trigger + value** — the trigger pulses and that direction's configured value goes to
+  **Output**. "Data type" determines how the two values are entered (Boolean, Number, Text).
+- **Trigger only** — the trigger pulses, **Output** stays silent.
+- **Off** — that direction stays completely silent. The level is still tracked, so the next edge
+  in the opposite direction is still recognised.
+
+The **first** value after a start or reset deliberately produces no edge: it only establishes the
+baseline level. The **Reset** input discards the remembered level — the next value re-establishes
+it, again without an edge. If a reset and a value arrive in the same run, the reset wins.
+"Restore state on restart" determines whether the remembered level survives a server restart;
+without it, the block starts again with no baseline level after a restart.
 
 ## Compare {#logic-block-compare}
 

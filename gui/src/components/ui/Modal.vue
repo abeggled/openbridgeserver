@@ -32,11 +32,14 @@
             <!-- Header -->
             <div v-if="title" class="card-header shrink-0">
               <h3 class="text-base font-semibold text-slate-800 dark:text-slate-100">{{ title }}</h3>
-              <button :disabled="!dismissible" @click="dismiss" class="btn-icon">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-                </svg>
-              </button>
+              <div class="flex items-center gap-2">
+                <slot name="header-actions" />
+                <button :disabled="!dismissible" @click="dismiss" class="btn-icon">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                  </svg>
+                </button>
+              </div>
             </div>
 
             <!-- Body -->
@@ -75,7 +78,15 @@ const props = defineProps({
   softBackdrop: { type: Boolean, default: false },
 })
 const emit = defineEmits(['update:modelValue'])
-const maxWidths = { sm: 'max-w-sm', md: 'max-w-md', lg: 'max-w-lg', xl: 'max-w-xl', '2xl': 'max-w-2xl' }
+const maxWidths = {
+  sm: 'max-w-sm',
+  md: 'max-w-md',
+  lg: 'max-w-lg',
+  xl: 'max-w-xl',
+  '2xl': 'max-w-2xl',
+  '3xl': 'max-w-3xl',
+  '6xl': 'max-w-6xl',
+}
 const maxWidthClass = computed(() => maxWidths[props.maxWidth] ?? maxWidths.lg)
 
 function onBackdropClick() {

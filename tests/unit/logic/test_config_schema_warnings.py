@@ -1,0 +1,292 @@
+"""Unit tests for ``config_schema_warnings`` — see obs/logic/graph_analysis.py."""
+
+from __future__ import annotations
+
+from obs.logic import executor as executor_module
+from obs.logic.graph_analysis import (
+    _COMPARE_OPERATOR_ALIASES,
+    _CONDITION_OPERATOR_ALIASES,
+    config_schema_warnings,
+)
+from obs.logic.models import FlowData, LogicNode
+from obs.logic.registry import BUILTIN_NODE_TYPES
+
+
+def _flow(node_type: str, data: dict | None = None, node_id: str = "n1") -> FlowData:
+    return FlowData(nodes=[LogicNode(id=node_id, type=node_type, position={"x": 0, "y": 0}, data=data or {})])
+
+
+def _codes(flow: FlowData) -> list[str]:
+    return [w["code"] for w in config_schema_warnings(flow)]
+
+
+def test_unknown_node_type_is_flagged():
+    warnings = config_schema_warnings(_flow("totally_made_up"))
+
+    assert [w["code"] for w in warnings] == ["unknown_node_type"]
+    assert warnings[0]["node_id"] == "n1"
+
+
+def test_missing_node_placeholder_is_reported_with_its_original_type():
+    warnings = config_schema_warnings(_flow("missing_node", {"original_type": " legacy_block ", "label": "Mein Block", "foo": 1}))
+
+    # Exactly one warning: the placeholder's own data is not schema-checked (no unknown_node_type
+    # for "missing_node" itself, no unknown_config_field for its leftover keys).
+    assert len(warnings) == 1
+    assert warnings[0]["code"] == "missing_node_type"
+    assert warnings[0]["node_id"] == "n1"
+    assert "'legacy_block'" in warnings[0]["message"]
+
+
+def test_missing_node_placeholder_falls_back_to_the_type_carried_in_label():
+    # Same resolution as the read path (_normalize_missing_node_placeholders): an older or
+    # hand-edited placeholder carries its type in `label` alone (review finding F4 on PR #1405).
+    warnings = config_schema_warnings(_flow("missing_node", {"label": "legacy_block"}))
+
+    assert [w["code"] for w in warnings] == ["missing_node_type"]
+    assert "'legacy_block'" in warnings[0]["message"]
+
+
+def test_missing_node_placeholder_without_original_type_is_still_reported():
+    for data in ({}, {"original_type": "   "}, {"original_type": 42}, {"label": "  "}):
+        warnings = config_schema_warnings(_flow("missing_node", data))
+
+        assert [w["code"] for w in warnings] == ["missing_node_type"], data
+        assert "an unknown node type" in warnings[0]["message"]
+
+
+def test_absent_key_is_never_flagged():
+    # decision's "conditions" has a rich schema but isn't set here at all.
+    assert config_schema_warnings(_flow("decision", {})) == []
+
+
+def test_enum_valid_and_invalid():
+    assert _codes(_flow("compare", {"operator": ">"})) == []
+    assert _codes(_flow("compare", {"operator": "greater_than"})) == ["config_schema_enum_invalid"]
+
+
+def test_enum_accepts_genuine_executor_aliases_not_just_the_canonical_spelling():
+    # "gt" is a real GraphExecutor._COMPARE_OPS alias for ">", not a typo — must not be flagged
+    # (review finding on PR #1216: flagging it would contradict a graph that runs correctly).
+    assert _codes(_flow("compare", {"operator": "gt"})) == []
+    # Same story for decision/value_mapping's shared operator vocabulary: "between" is a real
+    # _RANGE_OPS alias for "range".
+    assert _codes(_flow("decision", {"conditions": [{"handle": "out_1", "operator": "between"}]})) == []
+
+
+def test_enum_check_is_case_and_whitespace_insensitive():
+    # GraphExecutor normalizes compare.operator/conditions[].operator via .strip().lower(), and
+    # api_client.method via .upper() — either direction must compare equal here.
+    assert _codes(_flow("compare", {"operator": " GT "})) == []
+    assert _codes(_flow("api_client", {"method": "get"})) == []
+
+
+def test_enum_check_rejects_a_non_string_value_outright():
+    # A non-string can never match case/whitespace-normalized or aliased, so it short-circuits
+    # to "invalid" without attempting to .strip()/.lower() it.
+    assert _codes(_flow("compare", {"operator": 5})) == ["config_schema_enum_invalid"]
+
+
+def test_enum_check_rejects_a_value_not_covered_by_any_alias_or_canonical_spelling():
+    # "method" has no registered alias superset — falls back to case-insensitive comparison
+    # against its own canonical enum, and still correctly rejects a genuinely wrong value.
+    assert _codes(_flow("api_client", {"method": "FETCH"})) == ["config_schema_enum_invalid"]
+
+
+def test_compare_operator_alias_superset_matches_executors_actual_compare_ops():
+    assert _COMPARE_OPERATOR_ALIASES == frozenset(executor_module._COMPARE_OPS)
+
+
+def test_condition_operator_alias_superset_matches_executors_actual_op_sets():
+    expected = (
+        frozenset(executor_module._RANGE_OPS)
+        | frozenset(executor_module._REGEX_OPS)
+        | frozenset(executor_module._CONTAINS_OPS)
+        | frozenset(executor_module._STARTS_WITH_OPS)
+        | frozenset(executor_module._ENDS_WITH_OPS)
+        | frozenset(executor_module._TEXT_COMPARE_OPS)
+        | frozenset(executor_module._COMPARE_OPS)
+        | {"=", "==", "eq", "!=", "ne"}
+    )
+
+    assert _CONDITION_OPERATOR_ALIASES == expected
+
+
+def test_numeric_field_accepts_real_numbers_bool_numeric_strings_and_the_empty_string_sentinel():
+    for value in (5, 5.5, True, "5.5", ""):
+        assert _codes(_flow("compare", {"operand": value})) == [], value
+
+
+def test_numeric_field_rejects_non_numeric_content():
+    assert _codes(_flow("compare", {"operand": "abc"})) == ["config_schema_type_mismatch"]
+    # Neither a number, a bool, nor a string — the final `_is_numeric` fallback.
+    assert _codes(_flow("compare", {"operand": [1, 2]})) == ["config_schema_type_mismatch"]
+
+
+def test_none_is_always_skipped_regardless_of_declared_type():
+    assert _codes(_flow("compare", {"operand": None})) == []
+    assert _codes(_flow("compare", {"operator": None})) == []
+
+
+def test_string_field_type_mismatch():
+    assert _codes(_flow("datapoint_read", {"datapoint_name": 123})) == ["config_schema_type_mismatch"]
+    assert _codes(_flow("datapoint_read", {"datapoint_name": "living_room_temp"})) == []
+
+
+def test_boolean_field_is_never_flagged():
+    # GraphExecutor._to_bool coerces any value, so nothing here is "invalid".
+    assert _codes(_flow("datapoint_read", {"trigger_on_change": "not-a-bool"})) == []
+    assert _codes(_flow("datapoint_read", {"trigger_on_change": 42})) == []
+
+
+def test_array_field_malformed_json_string():
+    assert _codes(_flow("decision", {"conditions": "{not valid json"})) == ["config_schema_malformed_json"]
+
+
+def test_array_field_wrong_top_level_type():
+    assert _codes(_flow("decision", {"conditions": 42})) == ["config_schema_type_mismatch"]
+    # A JSON string that parses fine but not to a list goes through the same check.
+    assert _codes(_flow("decision", {"conditions": "42"})) == ["config_schema_type_mismatch"]
+    # An empty string is treated like an empty list — no items, nothing to flag.
+    assert _codes(_flow("decision", {"conditions": ""})) == []
+
+
+def test_array_item_not_an_object():
+    assert _codes(_flow("decision", {"conditions": [123]})) == ["config_schema_type_mismatch"]
+
+
+def test_array_item_missing_required_field():
+    assert _codes(_flow("decision", {"conditions": [{"operator": "eq"}]})) == ["config_schema_missing_required_field"]
+    # Empty string counts as "missing" too, matching the executor's own `or` fallback.
+    assert _codes(_flow("decision", {"conditions": [{"handle": "", "operator": "eq"}]})) == ["config_schema_missing_required_field"]
+
+
+def test_array_item_nested_enum_is_validated():
+    warnings = config_schema_warnings(_flow("decision", {"conditions": [{"handle": "out_1", "operator": "greater_than"}]}))
+
+    assert [w["code"] for w in warnings] == ["config_schema_enum_invalid"]
+
+
+def test_array_item_nested_untyped_fields_are_never_flagged():
+    data = {"conditions": [{"handle": "out_1", "operator": "eq", "value": {"nested": "anything"}, "min": object()}]}
+    # "value"/"min" are deliberately untyped (their legal shape depends on the operator) —
+    # asserting no crash and no warning for an arbitrary dict/object value.
+    assert config_schema_warnings(_flow("decision", data)) == []
+
+
+def test_array_field_without_items_schema_only_checks_list_shape():
+    # value_sequence.steps has no "items" schema — shallow check only.
+    assert _codes(_flow("value_sequence", {"steps": [1, 2, 3]})) == []
+    assert _codes(_flow("value_sequence", {"steps": "not json"})) == ["config_schema_malformed_json"]
+
+
+def test_every_node_types_own_default_config_is_self_consistent():
+    # string_replace's default is a deliberate exception: its one starter rule ships with an
+    # empty "search" on purpose ("a freshly dropped block already shows an editable row" —
+    # obs/logic/nodes/string/replace.py), and an empty "search" is exactly what the executor
+    # itself treats as "this rule does nothing yet" (GraphExecutor._apply_replace_rules skips a
+    # blank search). The validator correctly reports that starter rule as incomplete.
+    expected_warning_codes = {"string_replace": ["config_schema_missing_required_field"]}
+
+    for node_type in BUILTIN_NODE_TYPES:
+        data = {key: field_schema["default"] for key, field_schema in node_type.config_schema.items() if "default" in field_schema}
+
+        codes = _codes(_flow(node_type.type, data))
+        assert codes == expected_warning_codes.get(node_type.type, []), node_type.type
+
+
+def test_unknown_config_field_flags_a_typo_and_suggests_the_close_schema_key():
+    warnings = config_schema_warnings(_flow("compare", {"operater": ">"}))
+
+    assert [w["code"] for w in warnings] == ["unknown_config_field"]
+    assert warnings[0]["message"].startswith("operater: not a config field")
+    assert "Did you mean 'operator'?" in warnings[0]["message"]
+
+
+def test_unknown_config_field_without_a_close_match_has_no_suggestion():
+    warnings = config_schema_warnings(_flow("compare", {"zzzzzz": 1}))
+
+    assert [w["code"] for w in warnings] == ["unknown_config_field"]
+    assert "Did you mean" not in warnings[0]["message"]
+
+
+def test_unknown_config_field_on_a_type_without_any_config():
+    # `not` declares no config at all — every key is unknown, and there is nothing to suggest.
+    assert _codes(_flow("not", {"operator": ">"})) == ["unknown_config_field"]
+
+
+def test_label_is_accepted_on_every_type():
+    assert _codes(_flow("compare", {"label": "Mein Block"})) == []
+    assert _codes(_flow("not", {"label": "Mein Block"})) == []
+
+
+def test_negation_keys_are_accepted_for_the_gates_and_binary_stats():
+    for node_type in ("and", "or", "xor"):
+        data = {"negate_in1": True, "negate_in30": False, "negate_out": True}
+        assert _codes(_flow(node_type, data)) == [], node_type
+    # A slot above the current input_count is left behind when the editor lowers the count;
+    # the runtime ignores it, so it is not reported.
+    assert _codes(_flow("and", {"input_count": 2, "negate_in5": True})) == []
+    assert _codes(_flow("binary_stats", {"negate_in1": True, "negate_in30": True})) == []
+
+
+def test_negation_typos_and_negation_on_other_types_are_flagged():
+    # Review finding F3 on PR #1405: a blanket negate_* allowance hid exactly these typos.
+    for key in ("negate_inn1", "negate_value", "negate_in0", "negate_in31"):
+        assert _codes(_flow("and", {key: True})) == ["unknown_config_field"], key
+    # binary_stats has no output negation; other blocks have no per-port negation at all.
+    assert _codes(_flow("binary_stats", {"negate_out": True})) == ["unknown_config_field"]
+    assert _codes(_flow("compare", {"negate_in1": True})) == ["unknown_config_field"]
+
+
+def test_type_specific_extra_keys_are_accepted_only_on_their_own_type():
+    assert _codes(_flow("datapoint_read", {"value_map": {"0": "aus"}})) == []
+    assert _codes(_flow("datapoint_write", {"value_map": {"1": "ein"}})) == []
+    assert _codes(_flow("api_client", {"headers_value_file": "/run/secrets/h", "auth_value_file": "/run/secrets/t"})) == []
+    assert _codes(_flow("heating_circuit", {"temp_winter": 15, "temp_summer": 18})) == []
+    assert _codes(_flow("heating_circuit", {"temp_winter": "15"})) == []
+    # The same keys elsewhere are typos for that type.
+    assert _codes(_flow("compare", {"value_map": {}})) == ["unknown_config_field"]
+
+
+def test_string_concat_static_text_slots_follow_their_pattern():
+    assert _codes(_flow("string_concat", {"text_1": "a", "text_20": "b"})) == []
+    # Above the current count: left behind when the editor lowers it, ignored by the runtime.
+    assert _codes(_flow("string_concat", {"count": 2, "text_5": "a"})) == []
+    for key in ("text_x", "text_0", "text_21"):
+        assert _codes(_flow("string_concat", {key: "a"})) == ["unknown_config_field"], key
+    # The pattern is string_concat's own — not a free pass for other types.
+    assert _codes(_flow("compare", {"text_1": "a"})) == ["unknown_config_field"]
+
+
+def test_unknown_config_field_suggests_known_extra_keys_too():
+    # Review finding F5 on PR #1405: hints used to consider config_schema keys only.
+    lable = config_schema_warnings(_flow("compare", {"lable": "Pumpe"}))
+    value_mapp = config_schema_warnings(_flow("datapoint_read", {"value_mapp": {}}))
+
+    assert "Did you mean 'label'?" in lable[0]["message"]
+    assert "Did you mean 'value_map'?" in value_mapp[0]["message"]
+
+
+def test_heating_legacy_thresholds_are_ignored_once_threshold_temp_is_set():
+    warnings = config_schema_warnings(_flow("heating_circuit", {"threshold_temp": 14, "temp_winter": 10, "temp_summer": 12}))
+
+    assert [w["code"] for w in warnings] == ["ignored_config_field", "ignored_config_field"]
+    assert warnings[0]["message"] == "temp_winter: legacy field, ignored because threshold_temp is set."
+
+
+def test_heating_temp_summer_alone_is_ignored():
+    for data in ({"temp_summer": 18}, {"temp_winter": None, "temp_summer": 18}):
+        warnings = config_schema_warnings(_flow("heating_circuit", data))
+
+        assert [w["code"] for w in warnings] == ["ignored_config_field"], data
+        assert warnings[0]["message"] == "temp_summer: legacy field, ignored because temp_winter is not set."
+
+
+def test_heating_legacy_thresholds_must_convert_to_float():
+    # GraphExecutor converts them with float(): unlike schema numbers, "" is not "unset" here.
+    assert _codes(_flow("heating_circuit", {"temp_winter": "abc"})) == ["config_schema_type_mismatch"]
+    assert _codes(_flow("heating_circuit", {"temp_winter": 10, "temp_summer": ""})) == ["config_schema_type_mismatch"]
+    # A None value is "not set" in the runtime as well and never flagged.
+    assert _codes(_flow("heating_circuit", {"temp_winter": 10, "temp_summer": None})) == []
+    assert _codes(_flow("heating_circuit", {"temp_winter": None})) == []

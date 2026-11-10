@@ -7,6 +7,31 @@ export const useLogicStore = defineStore('logic', () => {
   const nodeTypes = ref([])
   const loading   = ref(false)
 
+  // Every write to a sheet — full saves, toggle, rename, delete — runs one
+  // after another, across every editor instance and the graph picker: two
+  // concurrent writes could land out of order and the older one would undo
+  // the newer. Sheet saves are also tracked per sheet, so a reader (a remount
+  // of the editor, a run, an export) can wait for exactly that save.
+  let writeQueue = Promise.resolve()
+  const lastSaveByGraph = new Map()
+
+  function enqueueWrite(task, savedGraphId = null) {
+    const run = writeQueue.then(task)
+    writeQueue = run.catch(() => {})
+    if (savedGraphId) {
+      lastSaveByGraph.set(savedGraphId, run)
+      writeQueue.then(() => {
+        if (lastSaveByGraph.get(savedGraphId) === run) lastSaveByGraph.delete(savedGraphId)
+      })
+    }
+    return run
+  }
+
+  // The latest queued or running save of that sheet, if any.
+  function pendingSave(graphId) {
+    return lastSaveByGraph.get(graphId)
+  }
+
   async function fetchNodeTypes() {
     const { data } = await logicApi.nodeTypes()
     nodeTypes.value = data
@@ -59,8 +84,8 @@ export const useLogicStore = defineStore('logic', () => {
     return data
   }
 
-  async function duplicateGraph(id) {
-    const { data } = await logicApi.duplicateGraph(id)
+  async function duplicateGraph(id, name) {
+    const { data } = await logicApi.duplicateGraph(id, name)
     graphs.value.push(data)
     return data
   }
@@ -80,5 +105,5 @@ export const useLogicStore = defineStore('logic', () => {
     return data
   }
 
-  return { graphs, nodeTypes, loading, fetchNodeTypes, fetchGraphs, createGraph, saveGraph, deleteGraph, runGraph, renameGraph, duplicateGraph, importGraph, toggleEnabled }
+  return { graphs, nodeTypes, loading, enqueueWrite, pendingSave, fetchNodeTypes, fetchGraphs, createGraph, saveGraph, deleteGraph, runGraph, renameGraph, duplicateGraph, importGraph, toggleEnabled }
 })

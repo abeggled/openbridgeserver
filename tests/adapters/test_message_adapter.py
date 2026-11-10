@@ -1472,7 +1472,7 @@ async def test_pushover_provider_rejects_priority_two_before_posting(monkeypatch
     )
 
     assert result.ok is False
-    assert result.detail == "pushover priority=2 requires retry and expire"
+    assert result.detail == "invalid Pushover options: Pushover emergency priority (2) requires retry and expire"
     assert _FakeAsyncClient.calls == []
 
 

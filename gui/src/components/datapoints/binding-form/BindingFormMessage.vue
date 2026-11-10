@@ -73,6 +73,13 @@
     </div>
   </div>
 
+  <PushoverOptionsFields
+    v-if="sendsNotification && hasPushoverTarget(cfg.providers)"
+    v-model:priority="cfg.priority"
+    :options="cfg.pushover"
+    :hint="$t('adapters.pushoverOptions.placeholderHint')"
+  />
+
   <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
     <input type="checkbox" v-model="cfg.send_on_change" class="w-4 h-4 rounded" />
     {{ $t('adapters.bindingForm.messageSendOnChange') }}
@@ -82,16 +89,21 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { messageArchivesApi } from '@/api/client'
+import PushoverOptionsFields from '@/components/notifications/PushoverOptionsFields.vue'
+import { hasPushoverTarget, sendsNotification as sendsNotificationFor } from '@/utils/pushoverOptions'
 
 const props = defineProps({
   cfg: { type: Object, required: true },
   selectedInstance: { type: Object, default: null },
 })
 
+// Pushover options live in their own object; older bindings have none.
+if (!props.cfg.pushover || typeof props.cfg.pushover !== 'object') props.cfg.pushover = {}
+
 const OPERATORS = ['any', '=', '==', '<', '<=', '>', '>=', '!=', 'contains', 'contains not', 'starts with', 'ends with']
 const archives = ref([])
 
-const sendsNotification = computed(() => ['send_only', 'send_and_archive'].includes(props.cfg.archive_strategy ?? 'send_only'))
+const sendsNotification = computed(() => sendsNotificationFor(props.cfg.archive_strategy))
 const archivesNotification = computed(() => ['archive_only', 'send_and_archive'].includes(props.cfg.archive_strategy ?? 'send_only'))
 
 function providerEnabled(config) {

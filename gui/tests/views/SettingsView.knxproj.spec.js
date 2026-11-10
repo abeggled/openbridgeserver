@@ -122,6 +122,7 @@ beforeEach(() => {
         items: [
           { id: 'dp-temp', name: 'Temperature', data_type: 'FLOAT', unit: '°C', record_history: false },
           { id: 'dp-switch', name: 'Switch', data_type: 'BOOLEAN', unit: null, record_history: true },
+          { id: 'dp-sys', name: 'OBS Update Channel', data_type: 'STRING', unit: null, record_history: false, system: true },
         ],
       },
     }),
@@ -422,6 +423,39 @@ describe('SettingsView KNX project import', () => {
 
     wrapper.unmount()
   })
+
+  it('names the group addresses a read-only system DataPoint already serves', async () => {
+    // The backend skips those rows (#1370); without this line the user only sees
+    // fewer DataPoints than addresses and no reason for it.
+    knxprojApi.import.mockResolvedValueOnce({
+      data: { imported: 3, created: 1, updated: 1, skipped_system: 1, locations: 0, trades: 0, hierarchies: [] },
+    })
+    const wrapper = await mountSettingsView()
+    await openImportExportTab(wrapper)
+    await selectKnxProjectFile(wrapper)
+    await findKnxImportButton(wrapper).trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('1 übersprungen (Gruppenadresse bereits von einem System-Datenpunkt bedient)')
+
+    wrapper.unmount()
+  })
+
+  it('says nothing about skipped addresses when none were skipped', async () => {
+    knxprojApi.import.mockResolvedValueOnce({
+      data: { imported: 2, created: 2, updated: 0, skipped_system: 0, locations: 0, trades: 0, hierarchies: [] },
+    })
+    const wrapper = await mountSettingsView()
+    await openImportExportTab(wrapper)
+    await selectKnxProjectFile(wrapper)
+    await findKnxImportButton(wrapper).trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('2 DataPoints neu angelegt')
+    expect(wrapper.text()).not.toContain('übersprungen')
+
+    wrapper.unmount()
+  })
 })
 
 describe('SettingsView import/export coverage', () => {
@@ -659,6 +693,20 @@ describe('SettingsView history and icon coverage', () => {
     await flushPromises()
     expect(dpApi.update).toHaveBeenCalledWith('dp-temp', { record_history: true })
 
+    // Read-only system DataPoints get neither a toggle nor a bulk request (#1370).
+    await wrapper.find('[data-testid="input-history-filter-search"]').setValue('')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="toggle-history-dp-sys"]').exists()).toBe(false)
+    expect(dpApi.update.mock.calls.some(([id]) => id === 'dp-sys')).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('shows an empty history filter when the DataPoint list has no items', async () => {
+    dpApi.listAll.mockResolvedValue({ data: {} })
+    const wrapper = await mountSettingsView()
+    await openTab(wrapper, 'Historie DB')
+    expect(wrapper.find('[data-testid="history-filter-empty"]').exists()).toBe(true)
     wrapper.unmount()
   })
 
@@ -734,5 +782,76 @@ describe('SettingsView history and icon coverage', () => {
     createObjectUrl.mockRestore()
     revokeObjectUrl.mockRestore()
     clickSpy.mockRestore()
+  })
+})
+
+// #1296: merge notes of the group address conversion, shown to admins in the project's style.
+describe('SettingsView KNX merge notes', () => {
+  const NOTE = { address: '1/0/234', spelling: '1/234', field: 'description', kept: 'neu', dropped: 'alt' }
+  const gaPage = (style, conflicts) => ({ data: { total: 3, items: [], group_address_style: style, merge_conflicts: conflicts } })
+
+  it('shows nothing while there are no notes', async () => {
+    knxprojApi.listGA.mockResolvedValue(gaPage('TwoLevel', []))
+    const wrapper = await mountSettingsView()
+    await openImportExportTab(wrapper)
+    expect(wrapper.find('[data-testid="knx-merge-conflicts"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['ThreeLevel', '1/0/234'],
+    ['TwoLevel', '1/234'],
+    ['Free', '2282'],
+  ])('lists the notes with the address in the %s style', async (style, shown) => {
+    knxprojApi.listGA.mockResolvedValue(gaPage(style, [NOTE]))
+    const wrapper = await mountSettingsView()
+    await openImportExportTab(wrapper)
+    const hint = wrapper.find('[data-testid="knx-merge-conflicts"]')
+    expect(hint.text()).toContain('Hinweis zur Umstellung der Gruppenadressen')
+    expect(hint.text()).toContain('1 Angabe(n)')
+    const cells = hint.find('[data-testid="knx-merge-conflict"]').findAll('td').map(td => td.text())
+    expect(cells).toEqual([shown, '1/234', 'description', 'neu', 'alt'])
+    wrapper.unmount()
+  })
+
+  it('reloads style and notes after every import, restore and the factory reset', async () => {
+    knxprojApi.listGA.mockResolvedValue(gaPage('ThreeLevel', [NOTE]))
+    configApi.reset = vi.fn().mockResolvedValue({ data: { datapoints_deleted: 0, bindings_deleted: 0, adapter_instances_deleted: 0, knx_group_addresses_deleted: 3, logic_graphs_deleted: 0 } })
+    const wrapper = await mountSettingsView()
+    await openImportExportTab(wrapper)
+    const shownAddress = () => wrapper.find('[data-testid="knx-merge-conflict"] td').text()
+    expect(shownAddress()).toBe('1/0/234')
+
+    knxprojApi.listGA.mockResolvedValue(gaPage('TwoLevel', [NOTE]))
+    await selectKnxProjectFile(wrapper)
+    await findKnxImportButton(wrapper).trigger('click')
+    await flushPromises()
+    expect(shownAddress()).toBe('1/234')
+
+    knxprojApi.listGA.mockResolvedValue(gaPage('Free', [NOTE]))
+    await selectFile(wrapper.find('input[accept=".json"]'), new File(['{}'], 'backup.json', { type: 'application/json' }))
+    await flushPromises()
+    expect(shownAddress()).toBe('2282')
+
+    knxprojApi.listGA.mockResolvedValue(gaPage('TwoLevel', [NOTE]))
+    await selectFile(wrapper.find('input[accept=".sqlite,.db"]'), new File(['sqlite'], 'backup.sqlite', { type: 'application/octet-stream' }))
+    await flushPromises()
+    expect(shownAddress()).toBe('1/234')
+
+    knxprojApi.listGA.mockResolvedValue(gaPage('ThreeLevel', [NOTE]))
+    await wrapper.findAll('select').find(select => select.html().includes('20240506-0300')).setValue('20240506-0300')
+    await findButton(wrapper, 'Wiederherstellen').trigger('click')
+    await flushPromises()
+    expect(shownAddress()).toBe('1/0/234')
+
+    knxprojApi.listGA.mockResolvedValue(gaPage('ThreeLevel', []))
+    await openTab(wrapper, 'Gefahrenzone')
+    await findButton(wrapper, 'Alles löschen').trigger('click')
+    wrapper.findComponent({ name: 'ConfirmDialog' }).vm.$emit('confirm')
+    await flushPromises()
+    expect(configApi.reset).toHaveBeenCalled()
+    await openImportExportTab(wrapper)
+    expect(wrapper.find('[data-testid="knx-merge-conflicts"]').exists()).toBe(false)
+    wrapper.unmount()
   })
 })

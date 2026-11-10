@@ -2,15 +2,18 @@
   <div class="section-header">{{ $t('adapters.bindingForm.knxSection') }}</div>
   <div class="form-group">
     <label class="label">{{ $t('adapters.bindingForm.groupAddressLabel') }}</label>
-    <GaCombobox v-model="cfg.group_address" :placeholder="$t('adapters.bindingForm.groupAddressPlaceholder')" @select="$emit('ga-select', $event)" />
+    <GaCombobox v-model="cfg.group_address" :invalid="gaInvalid" @select="$emit('ga-select', $event)" />
   </div>
   <div class="form-group">
     <label class="label">{{ $t('adapters.bindingForm.dptLabel') }}</label>
-    <select v-model="cfg.dpt_id" class="input" required>
+    <select v-model="cfg.dpt_id" class="input" required @change="$emit('dpt-change')">
       <option value="">{{ $t('adapters.bindingForm.selectDpt') }}</option>
       <optgroup v-for="group in groupedDpts" :key="group.family" :label="group.label">
         <option v-for="dpt in group.dpts" :key="dpt.dpt_id" :value="dpt.dpt_id">
-          {{ dpt.dpt_id }} — {{ dpt.name }}<template v-if="dpt.unit"> [{{ dpt.unit }}]</template>
+          <template v-if="dpt.dpt_id.includes('.')">
+            {{ dpt.dpt_id }} — {{ dpt.name }}<template v-if="dpt.unit"> [{{ dpt.unit }}]</template>
+          </template>
+          <template v-else>{{ $t('adapters.bindingForm.dptMainType', { main: dpt.dpt_id.replace('DPT', '') }) }}</template>
         </option>
       </optgroup>
     </select>
@@ -35,17 +38,39 @@
       </p>
     </div>
   </div>
+  <div v-if="form.direction === 'SOURCE' || form.direction === 'BOTH'" class="form-group">
+    <label for="read_interval_s" class="label">{{ $t('adapters.bindingForm.readIntervalLabel') }}</label>
+    <input
+      id="read_interval_s"
+      v-model.number="cfg.read_interval_s"
+      type="number"
+      min="0"
+      :max="READ_INTERVAL_MAX_S"
+      step="any"
+      class="input"
+      :placeholder="$t('adapters.bindingForm.readIntervalPlaceholder')"
+    />
+    <p class="hint">{{ $t('adapters.bindingForm.readIntervalHint', { min: READ_INTERVAL_MIN_S, max: READ_INTERVAL_MAX_S }) }}</p>
+  </div>
 </template>
 
 <script setup>
 import GaCombobox from '@/components/ui/GaCombobox.vue'
+
+// Mirror READ_INTERVAL_MIN_S/_MAX_S in obs/adapters/knx/adapter.py (issue #1402).
+// The minimum only feeds the hint: 0 must stay enterable (= off) and buildConfig
+// rounds fractions, so the browser's min/step checks would block valid input; the
+// API rejects 1–9. The maximum is a plain upper bound the browser may enforce.
+const READ_INTERVAL_MIN_S = 10
+const READ_INTERVAL_MAX_S = 86400
 
 defineProps({
   cfg: { type: Object, required: true },
   form: { type: Object, required: true },
   groupedDpts: { type: Array, required: true },
   dpPersistValue: { type: Boolean, required: true },
+  gaInvalid: { type: Boolean, default: false },
 })
 
-defineEmits(['ga-select'])
+defineEmits(['ga-select', 'dpt-change'])
 </script>

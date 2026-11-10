@@ -693,6 +693,231 @@ async def _migration_v52_external_write(conn: aiosqlite.Connection) -> None:
         await conn.execute("ALTER TABLE datapoints ADD COLUMN external_write_enabled INTEGER NOT NULL DEFAULT 0")
 
 
+async def _migration_v54_hierarchy_tree_root_nodes(conn: aiosqlite.Connection) -> None:
+    """Give every hierarchy tree an implicit, hidden root node (#1217 follow-up).
+
+    A Logic graph link always points at a ``hierarchy_nodes`` row — there was
+    no way to link a graph "directly to a tree" without first creating a
+    visible child node, which is unwanted friction for a tree that is meant
+    to directly hold graphs with no further nesting (e.g. a tree named
+    "Beschattung" holding graphs straight away). Rather than loosening
+    hierarchy_logic_graph_links.node_id's NOT NULL constraint (SQLite has no
+    ALTER TABLE ... DROP NOT NULL short of a full table rebuild), every tree
+    gets exactly one ``is_tree_root=1`` node that behaves like an ordinary
+    node for linking purposes but is excluded from every *visible* folder
+    listing (get_tree_nodes/_build_tree, search_nodes) so it never appears as
+    a renamable/deletable child folder duplicating the tree's own name.
+    """
+    async with conn.execute("PRAGMA table_info(hierarchy_nodes)") as cur:
+        columns = {row["name"] for row in await cur.fetchall()}
+    if not columns:
+        return  # fresh DB — the CREATE TABLE below already includes the column
+    if "is_tree_root" not in columns:
+        await conn.execute("ALTER TABLE hierarchy_nodes ADD COLUMN is_tree_root INTEGER NOT NULL DEFAULT 0")
+
+    from datetime import datetime
+
+    now = datetime.now(UTC).isoformat()
+    async with conn.execute(
+        """SELECT ht.id, ht.name FROM hierarchy_trees ht
+           WHERE NOT EXISTS (
+               SELECT 1 FROM hierarchy_nodes hn WHERE hn.tree_id = ht.id AND hn.is_tree_root = 1
+           )"""
+    ) as cur:
+        trees_needing_root = await cur.fetchall()
+    for tree in trees_needing_root:
+        await conn.execute(
+            """INSERT INTO hierarchy_nodes
+                   (id, tree_id, parent_id, name, description, node_order, icon, is_tree_root, created_at, updated_at)
+               VALUES (?,?,NULL,?,'',-1,NULL,1,?,?)""",
+            (str(uuid.uuid4()), tree["id"], tree["name"], now, now),
+        )
+
+
+async def _migration_v55_knx_group_address_style(conn: aiosqlite.Connection) -> None:
+    """Store the ETS group address style of the imported project (#1296).
+
+    Own single-row table rather than app_settings: every app_settings row ends up
+    in the Logic engine's application config. The .knxproj import records the
+    style from now on. Installations that imported before stored their
+    addresses in the project's own notation, so the part count of the valid
+    addresses reveals it (3 → ThreeLevel, 2 → TwoLevel, 1 → Free), by majority;
+    rows that are no group address do not count. No valid rows or a tie fall
+    back to ThreeLevel, the notation xknx uses.
+    """
+    from obs.adapters.knx.group_address import DEFAULT_GROUP_ADDRESS_STYLE, style_from_addresses
+
+    addresses: list[str] = []
+    async with conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='knx_group_addresses'") as cur:
+        has_addresses = await cur.fetchone() is not None
+    if has_addresses:
+        async with conn.execute("SELECT address FROM knx_group_addresses") as cur:
+            addresses = [row["address"] for row in await cur.fetchall()]
+    style = style_from_addresses(addresses) or DEFAULT_GROUP_ADDRESS_STYLE
+    await conn.execute(
+        """CREATE TABLE IF NOT EXISTS knx_project (
+               id                  INTEGER PRIMARY KEY CHECK (id = 1),
+               group_address_style TEXT NOT NULL
+           )"""
+    )
+    await conn.execute("INSERT OR IGNORE INTO knx_project (id, group_address_style) VALUES (1, ?)", (style,))
+
+
+_KNX_GA_COLUMNS = (
+    ("knx_group_addresses", "address"),
+    ("knx_co_ga_links", "ga_address"),
+    ("knx_function_ga_links", "ga_address"),
+)
+
+
+async def _migration_v56_knx_internal_group_addresses(conn: aiosqlite.Connection) -> None:
+    """Move every stored group address text to the internal notation (#1296).
+
+    Before #1296 the .knxproj import stored addresses in the project's notation
+    (``1/234``, ``2282``), and the read paths now compare internal texts. In one
+    transaction this rewrites ``knx_group_addresses`` (primary key),
+    ``knx_co_ga_links`` (foreign key, ``ON DELETE CASCADE``),
+    ``knx_function_ga_links`` and the KNX binding configs. A raw row whose
+    internal spelling already exists (a reimport with an intermediate version)
+    is merged into it: filled fields of the internal row win, empty ones are
+    taken from the raw row. Without an internal row, the spelling in the
+    project's notation (style from V55) becomes it, other spellings follow in
+    sorted order. Conflicting non-empty fields are not dropped silently: they
+    are logged and recorded in ``knx_ga_merge_conflicts``, which
+    ``GET /api/v1/knxproj/group-addresses`` returns as ``merge_conflicts``; the
+    stored fields themselves (descriptions included) stay untouched. The parent row is inserted before its children
+    move and deleted after, so no foreign key is ever violated. Texts that are
+    no group address at all are left untouched. Idempotent.
+
+    Afterwards triggers reject any non-internal text in the three ``knx_*``
+    columns, so a store that bypassed ``normalize_ga`` fails loudly. Binding
+    configs are JSON and may carry legacy invalid addresses; they are checked
+    by the data-invariant tests instead.
+    """
+    import json as _json
+
+    from obs.adapters.knx.group_address import format_ga, sql_is_internal_ga, try_normalize_ga
+
+    async def _rows(sql: str, params: tuple = ()) -> list[Any]:
+        async with conn.execute(sql, params) as cur:
+            return list(await cur.fetchall())
+
+    if not await _rows("SELECT 1 FROM sqlite_master WHERE type='table' AND name='knx_group_addresses'"):
+        return
+    await conn.execute(
+        """CREATE TABLE IF NOT EXISTS knx_ga_merge_conflicts (
+               address  TEXT NOT NULL,
+               spelling TEXT NOT NULL,
+               field    TEXT NOT NULL,
+               kept     TEXT NOT NULL,
+               dropped  TEXT NOT NULL,
+               PRIMARY KEY (address, spelling, field)
+           )"""
+    )
+    ga_columns = [row["name"] for row in await _rows("PRAGMA table_info(knx_group_addresses)")]
+    style_rows = await _rows("SELECT group_address_style FROM knx_project WHERE id = 1")
+    style = style_rows[0]["group_address_style"] if style_rows else None
+
+    def _rank(raw: str) -> tuple[bool, str]:
+        internal = try_normalize_ga(raw)
+        return (style is None or format_ga(internal, style) != raw, raw)
+
+    raw_rows = [dict(row) for row in await _rows("SELECT * FROM knx_group_addresses")]
+    for row in sorted(raw_rows, key=lambda row: _rank(row["address"]) if try_normalize_ga(row["address"]) else (True, row["address"])):
+        raw = row["address"]
+        internal = try_normalize_ga(raw)
+        if internal is None or internal == raw:
+            continue
+        targets = await _rows("SELECT * FROM knx_group_addresses WHERE address = ?", (internal,))
+        if not targets:
+            values = {**row, "address": internal}
+            await conn.execute(
+                f"INSERT INTO knx_group_addresses ({','.join(ga_columns)}) VALUES ({','.join('?' * len(ga_columns))})",
+                [values[column] for column in ga_columns],
+            )
+        else:
+            target = dict(targets[0])
+            merged_columns = [column for column in ga_columns if column not in ("address", "imported_at")]
+            fill = {column: row[column] for column in merged_columns if target[column] in (None, "") and row[column] not in (None, "")}
+            conflicts = {
+                column: row[column]
+                for column in merged_columns
+                if target[column] not in (None, "") and row[column] not in (None, "") and row[column] != target[column] and column != "description"
+            }
+            if row["description"] not in (None, "", target["description"]) and target["description"] not in (None, ""):
+                conflicts["description"] = row["description"]
+            if conflicts:
+                logger.warning(
+                    "V56: %s und %s sind dieselbe Gruppenadresse %s; abweichende Felder von %s: %s", internal, raw, internal, raw, conflicts
+                )
+                await conn.executemany(
+                    "INSERT OR REPLACE INTO knx_ga_merge_conflicts (address, spelling, field, kept, dropped) VALUES (?, ?, ?, ?, ?)",
+                    [(internal, raw, column, str(target[column]), str(value)) for column, value in conflicts.items()],
+                )
+            if fill:
+                await conn.execute(
+                    f"UPDATE knx_group_addresses SET {', '.join(f'{column} = ?' for column in fill)} WHERE address = ?",
+                    [*fill.values(), internal],
+                )
+        for table, owner in (("knx_co_ga_links", "comm_object_id"), ("knx_function_ga_links", "function_id")):
+            await conn.execute(
+                f"INSERT OR IGNORE INTO {table} ({owner}, ga_address) SELECT {owner}, ? FROM {table} WHERE ga_address = ?",
+                (internal, raw),
+            )
+            await conn.execute(f"DELETE FROM {table} WHERE ga_address = ?", (raw,))
+        await conn.execute("DELETE FROM knx_group_addresses WHERE address = ?", (raw,))
+
+    # Function links have no foreign key and may name addresses missing from knx_group_addresses.
+    for row in await _rows("SELECT function_id, ga_address FROM knx_function_ga_links"):
+        internal = try_normalize_ga(row["ga_address"])
+        if internal is not None and internal != row["ga_address"]:
+            await conn.execute(
+                "INSERT OR IGNORE INTO knx_function_ga_links (function_id, ga_address) VALUES (?, ?)",
+                (row["function_id"], internal),
+            )
+            await conn.execute(
+                "DELETE FROM knx_function_ga_links WHERE function_id = ? AND ga_address = ?",
+                (row["function_id"], row["ga_address"]),
+            )
+
+    for row in await _rows("SELECT id, config FROM adapter_bindings WHERE UPPER(adapter_type) = 'KNX'"):
+        config = _json.loads(row["config"] or "{}")  # CHECK json_valid(config) guarantees JSON
+        if not isinstance(config, dict):
+            continue
+        changed = False
+        for key in ("group_address", "state_group_address"):
+            internal = try_normalize_ga(config.get(key))
+            if internal is not None and internal != config[key]:
+                config[key] = internal
+                changed = True
+        if changed:
+            await conn.execute("UPDATE adapter_bindings SET config = ? WHERE id = ?", (_json.dumps(config), row["id"]))
+
+    for table, column in _KNX_GA_COLUMNS:
+        for event in ("INSERT", f"UPDATE OF {column}"):
+            name = f"trg_{table}_{column}_internal_{event.split()[0].lower()}"
+            await conn.execute(
+                f"""CREATE TRIGGER IF NOT EXISTS {name} BEFORE {event} ON {table}
+                    WHEN NOT {sql_is_internal_ga("NEW." + column)}
+                    BEGIN SELECT RAISE(ABORT, '{table}.{column}: Gruppenadresse nicht in interner Schreibweise (#1296)'); END"""
+            )
+
+
+_MIGRATION_V53_HIERARCHY_LOGIC_GRAPH_LINKS = """
+CREATE TABLE IF NOT EXISTS hierarchy_logic_graph_links (
+    id         TEXT PRIMARY KEY,
+    node_id    TEXT NOT NULL REFERENCES hierarchy_nodes(id) ON DELETE CASCADE,
+    graph_id   TEXT NOT NULL REFERENCES logic_graphs(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    UNIQUE(node_id, graph_id)
+);
+CREATE INDEX IF NOT EXISTS idx_hierarchy_logic_graph_links_node
+    ON hierarchy_logic_graph_links(node_id);
+CREATE INDEX IF NOT EXISTS idx_hierarchy_logic_graph_links_graph
+    ON hierarchy_logic_graph_links(graph_id);
+"""
+
+
 _MIGRATION_V38 = """
 CREATE TABLE IF NOT EXISTS hierarchy_device_links (
     id         TEXT PRIMARY KEY,
@@ -1213,6 +1438,10 @@ MIGRATIONS: list[tuple[int, str | Callable]] = [
     (50, _migration_v50),
     (51, _MIGRATION_V51_REGIONAL_SETTINGS),
     (52, _migration_v52_external_write),
+    (53, _MIGRATION_V53_HIERARCHY_LOGIC_GRAPH_LINKS),
+    (54, _migration_v54_hierarchy_tree_root_nodes),
+    (55, _migration_v55_knx_group_address_style),
+    (56, _migration_v56_knx_internal_group_addresses),
 ]
 
 

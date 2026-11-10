@@ -7,13 +7,16 @@
  * of the configured regional format. The tooltip values go through the same
  * formatter as every other widget.
  */
-import { mount, type VueWrapper } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useFormatStore } from '@/stores/format'
+import { useThemeStore } from '@/stores/theme'
+import { history } from '@/api/client'
 
 const chartConfigs: any[] = []
+const chartInstances: any[] = []
 
 vi.mock('chart.js', () => {
   class ChartMock {
@@ -21,6 +24,7 @@ vi.mock('chart.js', () => {
     options: unknown
     constructor(_canvas: unknown, config: any) {
       chartConfigs.push(config)
+      chartInstances.push(this)
       this.options = config.options
     }
 
@@ -48,11 +52,15 @@ vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 
 let wrapper: VueWrapper | null = null
 
-async function mountChart() {
+// Der Theme-Store fiele ohne gespeichertes Theme auf matchMedia zurück, das jsdom nicht kennt
+beforeEach(() => { localStorage.setItem('visu_theme', 'dark') })
+afterEach(() => { localStorage.clear() })
+
+async function mountChart(config: Record<string, unknown> = { label: 'Verlauf' }) {
   const mod = await import('./Widget.vue')
   wrapper = mount(mod.default, {
     props: {
-      config: { label: 'Verlauf' },
+      config,
       datapointId: 'dp-1',
       value: null,
       editorMode: false,
@@ -113,5 +121,398 @@ describe('Chart Widget.vue — regional number format (#1073)', () => {
     const label = config.options.plugins.tooltip.callbacks.label
 
     expect(label({ parsed: { y: null }, datasetIndex: 0, dataset: { label: 'L1' } })).toBe('')
+  })
+})
+
+describe('Chart Widget.vue — y axes follow the series assignment (#1111)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    chartConfigs.length = 0
+  })
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
+  })
+
+  async function axesAfterLoad(config: Record<string, unknown>) {
+    const chartConfig = await mountChart({ label: 'Verlauf', ...config })
+    await flushPromises()
+    return chartConfig.options.scales
+  }
+
+  it('hides the left axis when every series is on the right', async () => {
+    const scales = await axesAfterLoad({
+      primary_axis: 'right',
+      series: [{ dp_id: 'dp-2', axis: 'right' }],
+    })
+
+    expect(scales.y.display).toBe(false)
+    expect(scales.y1.display).toBe(true)
+  })
+
+  it('shows only the left axis when every series is on the left', async () => {
+    const scales = await axesAfterLoad({ series: [{ dp_id: 'dp-2' }] })
+
+    expect(scales.y.display).toBe(true)
+    expect(scales.y1.display).toBe(false)
+  })
+
+  it('shows both axes when series are split across them', async () => {
+    const scales = await axesAfterLoad({ series: [{ dp_id: 'dp-2', axis: 'right' }] })
+
+    expect(scales.y.display).toBe(true)
+    expect(scales.y1.display).toBe(true)
+  })
+})
+
+describe('Chart Widget.vue — tooltip swatches and legend (#1361)', () => {
+  // Als Variablen, damit der i18n-Guard die Fixture-Werte nicht als UI-Text wertet
+  const bedroom = ['Schlaf', 'zimmer'].join('')
+  const bath    = ['B', 'ad'].join('')
+
+  const twoSeries = {
+    label:         'Verlauf',
+    primary_label: bedroom,
+    primary_color: '#3b82f6',
+    series:        [{ dp_id: 'dp-2', label: bath, color: '#ef4444' }],
+  }
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    chartConfigs.length = 0
+    chartInstances.length = 0
+  })
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
+  })
+
+  async function mountLoaded(config: Record<string, unknown>) {
+    const chartConfig = await mountChart(config)
+    await flushPromises()
+    return { chartConfig, chart: chartInstances[chartInstances.length - 1] }
+  }
+
+  it('fills the tooltip swatch completely with the series colour', async () => {
+    const { chartConfig } = await mountLoaded(twoSeries)
+    const labelColor = chartConfig.options.plugins.tooltip.callbacks.labelColor
+
+    expect(labelColor({ datasetIndex: 1 })).toEqual({ borderColor: '#ef4444', backgroundColor: '#ef4444', borderWidth: 0 })
+  })
+
+  it('falls back to a neutral swatch for an unknown dataset', async () => {
+    const { chartConfig } = await mountLoaded(twoSeries)
+    const labelColor = chartConfig.options.plugins.tooltip.callbacks.labelColor
+
+    expect(labelColor({ datasetIndex: 7 }).backgroundColor).toBe('#6b7280')
+  })
+
+  it('keeps the Chart.js legend off and renders underlined HTML entries instead', async () => {
+    const { chartConfig } = await mountLoaded(twoSeries)
+
+    expect(chartConfig.options.plugins.legend.display).toBe(false)
+    const items = wrapper!.findAll('.chart-legend-item')
+    expect(items.map(i => i.text())).toEqual([bedroom, bath])
+    expect((items[1].element as HTMLElement).style.borderBottomColor).toBe('rgb(239, 68, 68)')
+    expect(items[0].attributes('aria-pressed')).toBe('true')
+    // Light- und Dark-Mode brauchen eigene Text-/Hover-Farben, sonst wird der Hover hell auf hell
+    expect(items[0].classes()).toEqual(expect.arrayContaining([
+      'text-gray-500', 'dark:text-gray-400', 'hover:text-gray-900', 'dark:hover:text-gray-200',
+    ]))
+  })
+
+  it('numbers unlabelled series in the legend', async () => {
+    await mountLoaded({ label: 'Verlauf', series: [{ dp_id: 'dp-2' }] })
+
+    expect(wrapper!.findAll('.chart-legend-item').map(i => i.text()))
+      .toEqual(['Verlauf', 'widgets.chart.seriesFallback'])
+  })
+
+  it('shows no legend for a single series', async () => {
+    await mountLoaded({ label: 'Verlauf' })
+
+    expect(wrapper!.find('.chart-legend-item').exists()).toBe(false)
+  })
+
+  it('hides and shows a series when its legend entry is clicked', async () => {
+    const { chart } = await mountLoaded(twoSeries)
+    const item = () => wrapper!.findAll('.chart-legend-item')[1]
+
+    await item().trigger('click')
+    expect(chart.data.datasets[1].hidden).toBe(true)
+    expect(item().classes()).toContain('line-through')
+    expect(item().attributes('aria-pressed')).toBe('false')
+    expect(chart.update).toHaveBeenCalled()
+
+    await item().trigger('click')
+    expect(chart.data.datasets[1].hidden).toBe(false)
+    expect(item().classes()).not.toContain('line-through')
+  })
+
+  it('keeps a hidden series hidden when the data is reloaded', async () => {
+    const { chart } = await mountLoaded(twoSeries)
+    await wrapper!.findAll('.chart-legend-item')[1].trigger('click')
+
+    await wrapper!.setProps({ config: { ...twoSeries, time_range: 'last_24h' } })
+    await flushPromises()
+
+    expect(chart.data.datasets.map((d: any) => d.hidden)).toEqual([false, true])
+  })
+
+  it('toggles only the clicked entry when one datapoint is configured twice', async () => {
+    // Derselbe Datenpunkt als Haupt- und Zusatzserie: die ID allein ist kein eindeutiger Schlüssel
+    const sameDpTwice = { ...twoSeries, series: [{ dp_id: 'dp-1', label: bath, axis: 'right' }] }
+    const { chart } = await mountLoaded(sameDpTwice)
+    const items = () => wrapper!.findAll('.chart-legend-item')
+
+    await items()[1].trigger('click')
+    expect(items()[0].classes()).not.toContain('line-through')
+    expect(items()[1].classes()).toContain('line-through')
+    expect(chart.data.datasets.map((d: any) => d.hidden)).toEqual([false, true])
+
+    await wrapper!.setProps({ config: { ...sameDpTwice, time_range: 'last_24h' } })
+    await flushPromises()
+    expect(chart.data.datasets.map((d: any) => d.hidden)).toEqual([false, true])
+  })
+
+  it('remembers the toggle while a freshly created chart is still empty', async () => {
+    await mountLoaded(twoSeries)
+    const item = wrapper!.findAll('.chart-legend-item')[1]
+
+    // Typwechsel baut einen neuen, noch leeren Chart; loadData() hängt noch an der History-Abfrage
+    let release: (rows: unknown[]) => void = () => {}
+    const pending = new Promise<unknown[]>(resolve => { release = resolve })
+    vi.mocked(history.query).mockImplementation(() => pending as never)
+    vi.mocked(history.aggregate).mockImplementation(() => pending as never)
+    try {
+      await wrapper!.setProps({ config: { ...twoSeries, chart_type: 'bar' } })
+      const fresh = chartInstances[chartInstances.length - 1]
+      await item.trigger('click')
+      expect(fresh.data.datasets).toEqual([])
+      expect(fresh.update).not.toHaveBeenCalled()
+    } finally {
+      vi.mocked(history.query).mockResolvedValue([])
+      vi.mocked(history.aggregate).mockResolvedValue([])
+      release([])
+    }
+
+    await flushPromises()
+    const fresh = chartInstances[chartInstances.length - 1]
+    expect(fresh.data.datasets.map((d: any) => d.hidden)).toEqual([false, true])
+  })
+})
+
+describe('Chart Widget.vue — grid colour follows the Visu theme (#1361)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    chartConfigs.length = 0
+    chartInstances.length = 0
+  })
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
+  })
+
+  // Die Zeitachse färbt ihre Linien per Funktion (Tageswechsel hervorgehoben, #1430)
+  const gridColors = (scales: any) => [scales.x.grid.color({ tick: { major: false } }), scales.y.grid.color, scales.y1.grid.color]
+
+  it('uses the dark grid colour in dark mode', async () => {
+    const config = await mountChart()
+
+    expect(gridColors(config.options.scales)).toEqual(['#374151', '#374151', '#374151'])
+  })
+
+  it('uses a light grid colour in light mode', async () => {
+    localStorage.setItem('visu_theme', 'light')
+    const config = await mountChart()
+
+    expect(gridColors(config.options.scales)).toEqual(['#e5e7eb', '#e5e7eb', '#e5e7eb'])
+  })
+
+  it('recolours the grid when the theme is toggled', async () => {
+    const config = await mountChart()
+    const chart = chartInstances[chartInstances.length - 1]
+    chart.update.mockClear()
+
+    useThemeStore().toggle()
+    await nextTick()
+
+    expect(gridColors(config.options.scales)).toEqual(['#e5e7eb', '#e5e7eb', '#e5e7eb'])
+    expect(chart.update).toHaveBeenCalled()
+  })
+
+  it('ignores a theme toggle in the editor, where no chart is drawn', async () => {
+    const mod = await import('./Widget.vue')
+    wrapper = mount(mod.default, {
+      props: { config: { label: 'Verlauf' }, datapointId: 'dp-1', value: null, editorMode: true },
+      global: { mocks: { $t: (key: string) => key } },
+    })
+
+    useThemeStore().toggle()
+    await nextTick()
+
+    expect(chartInstances).toEqual([])
+  })
+})
+
+describe('Chart Widget.vue — closed while loading', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    chartConfigs.length = 0
+    chartInstances.length = 0
+  })
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
+  })
+
+  it('drops the history response when the widget was unmounted meanwhile', async () => {
+    let release: (rows: unknown[]) => void = () => {}
+    const pending = new Promise<unknown[]>(resolve => { release = resolve })
+    vi.mocked(history.query).mockImplementation(() => pending as never)
+    vi.mocked(history.aggregate).mockImplementation(() => pending as never)
+    try {
+      await mountChart({ label: 'Verlauf' })
+      const chart = chartInstances[chartInstances.length - 1]
+      wrapper!.unmount()
+      wrapper = null
+
+      release([])
+      await flushPromises()
+
+      expect(chart.data.datasets).toEqual([])
+      expect(chart.update).not.toHaveBeenCalled()
+    } finally {
+      vi.mocked(history.query).mockResolvedValue([])
+      vi.mocked(history.aggregate).mockResolvedValue([])
+    }
+  })
+})
+
+describe('Chart Widget.vue — calendar-aligned time axis (#1430)', () => {
+  const HOUR = 3_600_000
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    chartConfigs.length = 0
+    chartInstances.length = 0
+    useFormatStore().timezone = 'Europe/Zurich'
+  })
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
+    vi.mocked(history.aggregate).mockResolvedValue([])
+  })
+
+  const fakeScale = (min: number, max: number) => ({ min, max, width: 1200, ticks: [] as { value: number; major?: boolean }[] })
+
+  it('puts the 7-day line ticks on midnight and noon instead of millisecond steps', async () => {
+    const config = await mountChart()
+    const x = config.options.scales.x
+    // Screenshot range: 10/27 21:47 → 11/03 21:47 CET
+    const from = Date.UTC(2026, 9, 27, 20, 47)
+    const scale = fakeScale(from, from + 168 * HOUR)
+
+    x.afterBuildTicks(scale)
+
+    expect(scale.ticks).toHaveLength(14)
+    expect(scale.ticks[0]).toEqual({ value: Date.UTC(2026, 9, 27, 23), major: true })
+    expect(x.ticks.callback(scale.ticks[0].value)).toBe('Mi 28.10.')
+    expect(x.ticks.callback(scale.ticks[1].value)).toBe('12:00')
+    // Ein Wert, der kein berechneter Tick ist, bleibt unbeschriftet
+    expect(x.ticks.callback(from)).toBe('')
+  })
+
+  it('draws day changes with a stronger grid line', async () => {
+    const config = await mountChart()
+    const color = config.options.scales.x.grid.color
+
+    expect(color({ tick: { major: true } })).toBe('#4b5563')
+    expect(color({ tick: { major: false } })).toBe('#374151')
+    expect(color({})).toBe('#374151')
+  })
+
+  it('redraws when the server timezone arrives after mount', async () => {
+    await mountChart()
+    const chart = chartInstances[chartInstances.length - 1]
+    chart.update.mockClear()
+
+    useFormatStore().timezone = 'America/New_York'
+    await nextTick()
+
+    expect(chart.update).toHaveBeenCalled()
+  })
+
+  it('leaves the bar axis empty until buckets are loaded', async () => {
+    const config = await mountChart({ label: 'Verlauf', chart_type: 'bar' })
+    const scale = fakeScale(0, 0)
+
+    config.options.scales.x.afterBuildTicks(scale)
+
+    expect(scale.ticks).toEqual([])
+    expect(config.options.scales.x.grid.offset).toBe(false)
+  })
+
+  it('labels the aggregated bar bucket that contains a calendar boundary', async () => {
+    // 1-h-Buckets 22:00Z–01:00Z = 23:00–02:00 CET; Mitternacht liegt im zweiten
+    vi.mocked(history.aggregate).mockResolvedValue([
+      { bucket: '2026-11-02T22:00:00Z', v: 1, n: 1 },
+      { bucket: '2026-11-02T23:00:00Z', v: 2, n: 1 },
+      { bucket: '2026-11-03T00:00:00Z', v: 3, n: 1 },
+    ] as never)
+    const config = await mountChart({ label: 'Verlauf', chart_type: 'bar', time_range: 'last_7d' })
+    await flushPromises()
+    const x = config.options.scales.x
+    const scale = fakeScale(0, 0)
+
+    x.afterBuildTicks(scale)
+
+    // Je Bucket höchstens ein Tick; die Grenze am Ende (02:00) gehört zu keinem Bucket mehr
+    expect(scale.ticks).toEqual([
+      { value: 0, major: false },
+      { value: 1, major: true },
+      { value: 2, major: false },
+    ])
+    expect(x.ticks.callback(0)).toBe('23:00')
+    expect(x.ticks.callback(1)).toBe('Di 03.11.')
+    expect(x.ticks.callback(5)).toBe('')
+  })
+
+  it('keeps an aggregated bar bucket at its interval length across a data gap (#1431)', async () => {
+    // Zwei 1-h-Buckets 10:00–11:00 CET an aufeinanderfolgenden Tagen; der Tag dazwischen fehlt
+    vi.mocked(history.aggregate).mockResolvedValue([
+      { bucket: '2026-11-02T09:00:00Z', v: 1, n: 1 },
+      { bucket: '2026-11-03T09:00:00Z', v: 2, n: 1 },
+    ] as never)
+    const config = await mountChart({ label: 'Verlauf', chart_type: 'bar', time_range: 'last_7d' })
+    await flushPromises()
+    const x = config.options.scales.x
+    const scale = { ...fakeScale(0, 0), width: 400 }
+
+    x.afterBuildTicks(scale)
+
+    // 6-h-Ticks (12:00, 18:00, …) liegen in der Lücke, nicht im ersten Bucket
+    expect(scale.ticks).toEqual([])
+    expect(x.ticks.callback(0)).toBe('')
+  })
+
+  it('labels raw bar buckets on calendar boundaries', async () => {
+    const config = await mountChart({ label: 'Verlauf', chart_type: 'bar', time_range: 'last_24h' })
+    await flushPromises()
+    const x = config.options.scales.x
+    const scale = fakeScale(0, 0)
+
+    x.afterBuildTicks(scale)
+
+    expect(scale.ticks.length).toBeGreaterThan(0)
+    const indices = scale.ticks.map(t => t.value)
+    expect(indices).toEqual([...indices].sort((a, b) => a - b))
+    // 24 h auf 1200 px → 2-h-Schritt, also volle Stunden oder Datum am Tageswechsel
+    for (const index of indices) expect(x.ticks.callback(index)).toMatch(/^\d{2}:00$|^\p{L}{2} \d{2}\.\d{2}\.$/u)
   })
 })

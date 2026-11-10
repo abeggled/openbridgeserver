@@ -39,6 +39,7 @@ from obs.api.v1.services.knx_traceability import KnxDatapointContextOut, build_d
 from obs.api.v1.sessions import validate_session
 from obs.core.event_bus import DataValueEvent, get_event_bus
 from obs.core.registry import _row_to_datapoint, get_registry
+from obs.core.system_datapoints import is_system_datapoint
 from obs.db.database import Database, get_db
 from obs.models.datapoint import DataPointCreate, DataPointUpdate
 from obs.models.visu import PageConfig
@@ -109,6 +110,8 @@ class DataPointOut(BaseModel):
     record_history: bool
     control_class: Literal["room_local", "central_plant"] = "room_local"
     external_write_enabled: bool = False
+    # Backend-managed and read-only (#1370): no edit, duplicate, delete or value write.
+    system: bool = False
     created_at: str
     updated_at: str
     # Runtime
@@ -159,45 +162,10 @@ class DataPointDuplicateIn(BaseModel):
 
 
 def _coerce_value_for_type(value: Any, data_type: str) -> Any:
-    """Coerce *value* to the Python type declared for *data_type*.
+    """Thin alias for the shared coercion helper (see ``obs.models.types``)."""
+    from obs.models.types import coerce_value_for_type
 
-    Raises ValueError when the value is incompatible so callers can return 422.
-    UNKNOWN datapoints accept any value unchanged.
-    """
-    from obs.models.types import DataTypeRegistry
-
-    defn = DataTypeRegistry.get(data_type)
-    if defn.name == "UNKNOWN":
-        return value
-
-    py_type = defn.python_type
-
-    if isinstance(value, py_type) and not (py_type is int and isinstance(value, bool)):
-        return value
-    if py_type is int and isinstance(value, bool):
-        return int(value)
-    if py_type is float and isinstance(value, (int, float)) and not isinstance(value, bool):
-        return float(value)
-    if py_type is int and isinstance(value, float) and not isinstance(value, bool) and value == int(value):
-        return int(value)
-    if py_type is bool and isinstance(value, int) and not isinstance(value, bool):
-        return bool(value)
-    if py_type is datetime.date and isinstance(value, str):
-        try:
-            return datetime.date.fromisoformat(value)
-        except ValueError:
-            pass
-    if py_type is datetime.time and isinstance(value, str):
-        try:
-            return datetime.time.fromisoformat(value)
-        except ValueError:
-            pass
-    if py_type is datetime.datetime and isinstance(value, str):
-        try:
-            return datetime.datetime.fromisoformat(value)
-        except ValueError:
-            pass
-    raise ValueError(f"Value {value!r} ({type(value).__name__}) is not compatible with data_type '{data_type}'")
+    return coerce_value_for_type(value, data_type)
 
 
 def _enrich(dp: Any) -> DataPointOut:
@@ -216,12 +184,21 @@ def _enrich(dp: Any) -> DataPointOut:
         record_history=dp.record_history,
         control_class=getattr(dp, "control_class", "room_local"),
         external_write_enabled=getattr(dp, "external_write_enabled", False),
+        system=is_system_datapoint(dp.id),
         created_at=dp.created_at.isoformat(),
         updated_at=dp.updated_at.isoformat(),
         value=state.value if state else None,
         quality=state.quality if state else None,
         diagnostics=list(state.diagnostics.values()) if state else [],
     )
+
+
+_SYSTEM_DATAPOINT_DETAIL = "System DataPoint is read-only"
+
+
+def _reject_system_datapoint(dp_id: uuid.UUID) -> None:
+    if is_system_datapoint(dp_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, _SYSTEM_DATAPOINT_DETAIL)
 
 
 def _principal_from_dependency(value: Principal | str) -> Principal:
@@ -428,6 +405,7 @@ async def duplicate_datapoint(
     _user: str = Depends(get_admin_user),
     db: Database = Depends(get_db),
 ) -> DataPointOut:
+    _reject_system_datapoint(dp_id)
     registry = get_registry()
     now = datetime.datetime.now(datetime.UTC).isoformat()
     cancelled_after_commit: asyncio.CancelledError | None = None
@@ -458,7 +436,11 @@ async def duplicate_datapoint(
                     )
                 )
                 binding_rows = await transaction.fetchall(
-                    "SELECT * FROM adapter_bindings WHERE datapoint_id=? ORDER BY created_at",
+                    # A webhook binding is the public name (slug) and bearer secret
+                    # (token) of one endpoint for one DataPoint. Copying it would
+                    # either clone the secret or leave a dead twin that loses the
+                    # slug on reload, so the duplicate gets a fresh binding instead.
+                    "SELECT * FROM adapter_bindings WHERE datapoint_id=? AND adapter_type != 'WEBHOOK' ORDER BY created_at",
                     (str(dp_id),),
                 )
                 await registry.insert(duplicate, connection=transaction)
@@ -622,6 +604,7 @@ async def update_datapoint(
     current_dp = reg.get(dp_id)
     if current_dp is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
+    _reject_system_datapoint(dp_id)
     before = _audit_metadata_snapshot(current_dp)
 
     # `body.external_write_enabled` can only be truthy if the field was
@@ -776,6 +759,7 @@ async def delete_datapoint(
     reg = get_registry()
     if reg.get(dp_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
+    _reject_system_datapoint(dp_id)
     await reg.delete(dp_id)
 
 
@@ -880,6 +864,7 @@ async def write_value(
     dp = reg.get(dp_id)
     if dp is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"DataPoint {dp_id} not found")
+    _reject_system_datapoint(dp_id)
 
     principal: Principal | None = None
     authenticated_write_allowed = False

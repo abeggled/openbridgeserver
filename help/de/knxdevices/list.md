@@ -2,7 +2,7 @@
 title: KNX-Geräte
 ---
 
-# KNX-Geräte
+# KNX-Geräte {#knxdevices}
 
 Diese Ansicht zeigt alle physikalischen KNX-Geräte aus dem zuletzt importierten
 KNX-Projekt (ETS-Export), inklusive ihrer Kommunikationsobjekte und Gruppenadressen —

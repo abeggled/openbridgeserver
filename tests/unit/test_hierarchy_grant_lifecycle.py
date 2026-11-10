@@ -178,7 +178,7 @@ async def test_factory_reset_removes_hierarchy_grants_and_preserves_non_resource
                (principal_type, principal_id, node_type, node_id, role, effect)
            VALUES ('user', 'alice', 'logic_capability', 'http_request', 'resident', 'allow')"""
     )
-    registry = SimpleNamespace(_points={}, _values={})
+    registry = SimpleNamespace(forget=lambda keep=(): None)
     monkeypatch.setattr(config_api, "get_registry", lambda: registry)
 
     with (

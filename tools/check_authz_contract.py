@@ -71,6 +71,14 @@ _SYNTHETIC_ADMIN_BASELINE = Counter(
 )
 
 
+# Authorization helpers decide by principal type and code-declared adapter
+# delegation capabilities only.  An adapter-type comparison that lets such a
+# helper return early is an exception to that model and must be reviewed here
+# (issue #1303).  Refusals (raise) and principal-free validation helpers are
+# not counted.
+_ADAPTER_TYPE_AUTHZ_BYPASS_BASELINE: Counter[tuple[str, str, str]] = Counter()
+
+
 def collect_live_route_occurrences() -> dict[tuple[str, str], list[APIRoute | APIWebSocketRoute]]:
     result: dict[tuple[str, str], list[APIRoute | APIWebSocketRoute]] = {}
 
@@ -168,6 +176,46 @@ def _synthetic_admin_principals(repo_root: Path) -> Counter[tuple[str, str, str]
                 self.generic_visit(node)
 
         Visitor(relative).visit(tree)
+    return found
+
+
+def _mentions_adapter_type(node: ast.expr) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id == "adapter_type"
+    if isinstance(node, ast.Attribute):
+        return node.attr == "adapter_type"
+    if isinstance(node, ast.Subscript):
+        return isinstance(node.slice, ast.Constant) and node.slice.value == "adapter_type"
+    return False
+
+
+def _adapter_type_authz_bypasses(repo_root: Path) -> Counter[tuple[str, str, str]]:
+    """Count adapter-type comparisons that short-circuit an authz helper to allow.
+
+    An authz helper is an ``_ensure_*``/``ensure_*`` function under ``obs/api``
+    with a ``principal`` parameter.  A finding is an ``if`` whose condition
+    compares an ``adapter_type`` and whose body returns.
+    """
+    found: Counter[tuple[str, str, str]] = Counter()
+    for path in sorted((repo_root / "obs" / "api").rglob("*.py")):
+        relative = path.relative_to(repo_root).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for function in ast.walk(tree):
+            if not isinstance(function, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            if not function.name.lstrip("_").startswith("ensure_"):
+                continue
+            arguments = function.args
+            if "principal" not in {arg.arg for arg in [*arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs]}:
+                continue
+            for branch in ast.walk(function):
+                if not isinstance(branch, ast.If):
+                    continue
+                if not any(isinstance(node, ast.Return) for statement in branch.body for node in ast.walk(statement)):
+                    continue
+                for compare in ast.walk(branch.test):
+                    if isinstance(compare, ast.Compare) and any(_mentions_adapter_type(side) for side in [compare.left, *compare.comparators]):
+                        found[(relative, function.name, ast.unparse(compare))] += 1
     return found
 
 
@@ -449,6 +497,9 @@ def validate_contracts(repo_root: Path | None = None) -> list[str]:
     for key, count in synthetic.items():
         if count > _SYNTHETIC_ADMIN_BASELINE[key]:
             errors.append(f"new runtime admin imitation {key!r} (count {count}, baseline {_SYNTHETIC_ADMIN_BASELINE[key]})")
+    for key, count in _adapter_type_authz_bypasses(root).items():
+        if count > _ADAPTER_TYPE_AUTHZ_BYPASS_BASELINE[key]:
+            errors.append(f"new adapter-type exception in authz helper {key!r} (count {count}, baseline {_ADAPTER_TYPE_AUTHZ_BYPASS_BASELINE[key]})")
     return errors
 
 

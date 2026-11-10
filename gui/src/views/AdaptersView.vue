@@ -225,7 +225,7 @@
           </div>
 
           <div v-if="!isDemo" class="flex gap-3 flex-wrap">
-            <button v-if="a.adapter_type !== 'ANWESENHEITSSIMULATION' && a.adapter_type !== 'SNMP' && a.adapter_type !== 'MESSAGE'" @click="testConnection(a)" class="btn-secondary btn-sm" :disabled="busy[a.id] === 'test'"
+            <button v-if="!NO_CONNECTION_TEST_TYPES.includes(a.adapter_type)" @click="testConnection(a)" class="btn-secondary btn-sm" :disabled="busy[a.id] === 'test'"
               :title="$t('adapters.testConnectionTitle')">
               <Spinner v-if="busy[a.id] === 'test'" size="xs" color="slate" />
               {{ $t('adapters.testConnection') }}
@@ -242,6 +242,10 @@
             </button>
             <button v-if="a.adapter_type === 'IOBROKER'" @click="openIoBrokerImport(a)" class="btn-secondary btn-sm" :disabled="!a.connected"
               :title="$t('adapters.importTitle')">
+              {{ $t('adapters.importBtn') }}
+            </button>
+            <button v-if="a.adapter_type === 'HOME_ASSISTANT'" @click="openHaImport(a)" class="btn-secondary btn-sm" :disabled="!a.connected"
+              :title="$t('adapters.homeassistant.importTitle')" data-testid="btn-ha-import">
               {{ $t('adapters.importBtn') }}
             </button>
             <button v-if="a.adapter_type === 'ANWESENHEITSSIMULATION'" @click="openAnwesenheitSelector(a)" class="btn-secondary btn-sm"
@@ -324,6 +328,10 @@
           </button>
         </div>
       </div>
+    </Modal>
+
+    <Modal v-model="haImportOpen" :title="haImportInstance ? $t('adapters.homeassistant.modalTitleFull', { name: haImportInstance.name }) : $t('adapters.homeassistant.modalTitle')" max-width="2xl" resizable>
+      <HomeAssistantImport v-if="haImportInstance" :key="haImportInstance.id" :instance="haImportInstance" />
     </Modal>
 
     <Modal v-model="importOpen" :title="importInstance ? $t('adapters.iobroker.modalTitleFull', { name: importInstance.name }) : $t('adapters.iobroker.modalTitle')" max-width="2xl" resizable>
@@ -421,6 +429,7 @@ import AnwesenheitDatapointSelector from '@/components/adapters/AnwesenheitDatap
 import AnwesenheitConfigForm from '@/components/adapters/AnwesenheitConfigForm.vue'
 import KnxConfigForm        from '@/components/adapters/KnxConfigForm.vue'
 import MessageConfigForm    from '@/components/adapters/MessageConfigForm.vue'
+import HomeAssistantImport  from '@/components/adapters/HomeAssistantImport.vue'
 import Modal         from '@/components/ui/Modal.vue'
 import { adapterDotClass as dotClass, adapterBadgeVariant as statusBadgeVariant, adapterStatusLabel as statusLabel, adapterStatusDetailText } from '@/utils/adapterStatus'
 
@@ -453,6 +462,10 @@ function feedbackText(fb) {
   }
   return fb.detail ?? ''
 }
+// Adapter types without an outbound connection to test: they either run
+// entirely inside OBS or are driven by incoming traffic (WEBHOOK, #1256).
+const NO_CONNECTION_TEST_TYPES = ['ANWESENHEITSSIMULATION', 'SNMP', 'MESSAGE', 'WEBHOOK']
+
 const store          = useAdapterStore()
 const auth           = useAuthStore()
 const isDemo         = computed(() => auth.username === 'demo')
@@ -501,6 +514,15 @@ async function loadAnwesenheitHealth(a) {
   } catch {
     // silently ignore — health is informational only
   }
+}
+
+// Home Assistant entity import (#1392)
+const haImportOpen = ref(false)
+const haImportInstance = ref(null)
+
+function openHaImport(a) {
+  haImportInstance.value = a
+  haImportOpen.value = true
 }
 
 // ioBroker Import

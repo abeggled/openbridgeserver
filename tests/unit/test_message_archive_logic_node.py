@@ -10,6 +10,7 @@ from obs.adapters.message.providers.base import MessageSendResult
 from obs.logic.manager import LogicManager, _fresh_input_handles
 from obs.logic.models import FlowData
 from obs.logic.registry import get_node_type
+from tests.unit._api_client_fakes import serve_via_request
 from tests.unit.conftest import edge, node
 
 
@@ -56,6 +57,7 @@ def _patch_api_success():
     mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
     mock_client.request = AsyncMock(return_value=_MockResponse())
+    serve_via_request(mock_client)
     return patcher, mock_client
 
 

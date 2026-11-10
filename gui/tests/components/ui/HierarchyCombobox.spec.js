@@ -194,4 +194,107 @@ describe('HierarchyCombobox', () => {
     const html = chips[0].html()
     expect(html).toContain('Küche')
   })
+
+  it('offers the tree root as its own selectable item when includeTreeRoots is set', async () => {
+    const { wrapper } = await mountHierarchyCombobox(
+      { modelValue: [], includeTreeRoots: true },
+      {
+        trees: [{ id: 1, name: 'Beschattung', root_node_id: 100 }],
+        nodesByTree: {
+          1: [{ id: 11, tree_id: 1, parent_id: null, name: 'Foo' }],
+        },
+      },
+    )
+    await wrapper.find('input').trigger('focus')
+    await flushPromises()
+    const items = wrapper.findAll('[data-testid^="combobox-item-"]')
+    const labels = items.map((i) => i.text())
+    // The tree root ("Beschattung" alone) and its child ("Beschattung › Foo")
+    // must both be selectable — the graph can be linked to either.
+    expect(labels.some((l) => l.includes('Beschattung') && !l.includes('Foo'))).toBe(true)
+    expect(labels.some((l) => l.includes('Foo'))).toBe(true)
+
+    await wrapper.find('[data-testid="combobox-item-0"]').trigger('click')
+    const events = wrapper.emitted('update:modelValue')
+    expect(events[events.length - 1][0]).toEqual(['1:100'])
+  })
+
+  it('does not offer the tree root when includeTreeRoots is left off (default)', async () => {
+    const { wrapper } = await mountHierarchyCombobox(
+      { modelValue: [] },
+      {
+        trees: [{ id: 1, name: 'Beschattung', root_node_id: 100 }],
+        nodesByTree: {
+          1: [{ id: 11, tree_id: 1, parent_id: null, name: 'Foo' }],
+        },
+      },
+    )
+    await wrapper.find('input').trigger('focus')
+    await flushPromises()
+    const items = wrapper.findAll('[data-testid^="combobox-item-"]')
+    expect(items.length).toBe(1)
+    expect(items[0].text()).toContain('Foo')
+  })
+
+  it('skips the synthetic root item when includeTreeRoots is set but the tree has no root_node_id', async () => {
+    const { wrapper } = await mountHierarchyCombobox(
+      { modelValue: [], includeTreeRoots: true },
+      {
+        trees: [{ id: 1, name: 'Beschattung' }],
+        nodesByTree: {
+          1: [{ id: 11, tree_id: 1, parent_id: null, name: 'Foo' }],
+        },
+      },
+    )
+    await wrapper.find('input').trigger('focus')
+    await flushPromises()
+    const items = wrapper.findAll('[data-testid^="combobox-item-"]')
+    expect(items.length).toBe(1)
+    expect(items[0].text()).toContain('Foo')
+  })
+
+  it('sorts hierarchy items alphabetically regardless of per-tree fetch order', async () => {
+    const trees = [
+      { id: 1, name: 'Zeta', root_node_id: 100 },
+      { id: 2, name: 'Alpha', root_node_id: 200 },
+    ]
+    const nodesByTree = {
+      1: [{ id: 11, tree_id: 1, parent_id: null, name: 'Baum' }],
+      2: [{ id: 21, tree_id: 2, parent_id: null, name: 'Baum' }],
+    }
+    const hierarchyApi = {
+      listTrees: vi.fn().mockResolvedValue({ data: trees }),
+      // Tree 1 ("Zeta") resolves LAST even though it's listed first, so a
+      // correct final order can only come from an explicit sort — not from
+      // Promise.all push order, which would follow resolution timing.
+      getTreeNodes: vi.fn().mockImplementation((tid) => {
+        const delay = tid === 1 ? 20 : 0
+        return new Promise((resolve) => setTimeout(() => resolve({ data: nodesByTree[tid] ?? [] }), delay))
+      }),
+    }
+    vi.doMock('@/api/client', () => ({ hierarchyApi }))
+    const mod = await import('@/components/ui/HierarchyCombobox.vue')
+    const wrapper = mount(mod.default, {
+      props: { modelValue: [], includeTreeRoots: true },
+      attachTo: document.body,
+    })
+    await new Promise((r) => setTimeout(r, 50))
+    await flushPromises()
+
+    await wrapper.find('input').trigger('focus')
+    await flushPromises()
+    const labels = wrapper.findAll('[data-testid^="combobox-item-"]').map((i) => i.text())
+
+    const alphaIdx = labels.findIndex((l) => l.includes('Alpha') && !l.includes('Baum'))
+    const alphaChildIdx = labels.findIndex((l) => l.includes('Alpha') && l.includes('Baum'))
+    const zetaIdx = labels.findIndex((l) => l.includes('Zeta') && !l.includes('Baum'))
+    const zetaChildIdx = labels.findIndex((l) => l.includes('Zeta') && l.includes('Baum'))
+
+    // "Alpha" (root + child) sorts entirely before "Zeta" (root + child),
+    // and each tree's own root sorts right above its own child.
+    expect(alphaIdx).toBeGreaterThanOrEqual(0)
+    expect(alphaIdx).toBeLessThan(alphaChildIdx)
+    expect(alphaChildIdx).toBeLessThan(zetaIdx)
+    expect(zetaIdx).toBeLessThan(zetaChildIdx)
+  })
 })

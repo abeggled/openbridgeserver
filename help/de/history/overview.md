@@ -2,7 +2,7 @@
 title: Historie
 ---
 
-# Historie
+# Historie {#history}
 
 Zeigt historische Werte eines einzelnen Objekts als Diagramm und optional als Tabelle —
 zum Nachvollziehen von Wertverläufen, unabhängig vom Live-Wert auf der Objekt-Detailseite.
@@ -30,6 +30,6 @@ Auswahl geändert werden — es zählt immer nur die zuletzt gestartete Abfrage.
 
 Das Diagramm zeigt die geladene Reihe über der Zeit, mit der Anzahl geladener Punkte in
 der Kopfzeile. Im **Raw**-Modus erscheint zusätzlich eine Tabelle mit jedem einzelnen
-Wert: Zeitstempel, Wert (inkl. Einheit, falls vorhanden), Qualität (`good`/`uncertain`)
+Wert: Zeitstempel, Wert (inkl. Einheit, falls vorhanden), Qualität (**Gut**/**Unbekannt**)
 und der Adapter, von dem der Wert stammt. Ist im gewählten Zeitraum kein Wert vorhanden,
 erscheint ein entsprechender Hinweis statt eines leeren Diagramms.

@@ -21,4 +21,5 @@ NODE_TYPE = NodeTypeDef(
         "operand": {"type": "number", "default": "", "label": "Operand"},
     },
     color="#1d4ed8",
+    help_id="logic-block-compare",
 )

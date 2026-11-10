@@ -87,6 +87,7 @@ class InfluxDBHistoryPlugin(HistoryPlugin):
         self._write_backoff_until = 0.0
         self._write_backoff_seconds = _WRITE_BACKOFF_INITIAL_SECONDS
         self._write_skip_logged = False
+        self.last_ping_error: str | None = None
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -345,11 +346,7 @@ class InfluxDBHistoryPlugin(HistoryPlugin):
                     r = await client.get(url)
                     return r.status_code < 300
             elif self._version == 2:
-                url = f"{self._url}/api/v2/ping"
-                headers = self._headers(content_type="")
-                async with httpx.AsyncClient(timeout=5) as client:
-                    r = await client.get(url, headers=headers)
-                    return r.status_code < 300
+                return await self._ping_v2()
             else:  # v3
                 # Try a trivial InfluxQL query against the database
                 data = await self._run_influxql(f'SHOW MEASUREMENTS ON "{self._database}" LIMIT 1')
@@ -357,6 +354,36 @@ class InfluxDBHistoryPlugin(HistoryPlugin):
         except Exception:
             logger.exception("InfluxDB ping failed")
             return False
+
+    async def _ping_v2(self) -> bool:
+        """Check reachability via /ping, then token, org and bucket via /api/v2/buckets.
+
+        InfluxDB 2.x has no /api/v2/ping; that path answers 401/404 like any
+        unknown route. On failure, ``last_ping_error`` says which step failed.
+        """
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.get(f"{self._url}/ping")
+            if r.status_code >= 300:
+                self.last_ping_error = f"/ping returned HTTP {r.status_code}"
+                return False
+            r = await client.get(
+                f"{self._url}/api/v2/buckets",
+                params={"org": self._org, "name": self._bucket},
+                headers=self._headers(content_type=""),
+            )
+        if r.status_code in (401, 403):
+            self.last_ping_error = f"token rejected (HTTP {r.status_code})"
+            return False
+        if r.status_code == 404:
+            self.last_ping_error = f"organization '{self._org}' not found"
+            return False
+        if r.status_code >= 300:
+            self.last_ping_error = f"bucket lookup returned HTTP {r.status_code}"
+            return False
+        if not r.json().get("buckets"):
+            self.last_ping_error = f"bucket '{self._bucket}' not found in organization '{self._org}'"
+            return False
+        return True
 
 
 # ---------------------------------------------------------------------------

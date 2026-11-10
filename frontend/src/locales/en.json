@@ -215,7 +215,11 @@
       "public": "Public",
       "publicDesc": "Without login, interactive",
       "pinDesc": "PIN required"
-    }
+    },
+    "device": "Device:",
+    "deviceNone": "— no profile —",
+    "deviceUnknown": "Unknown ({slug})",
+    "productName": "open bridge server"
   },
   "picker": {
     "notFound": "Object not found",
@@ -387,7 +391,30 @@
     "heiligabend": "Christmas Eve",
     "adventOffset": "1st Advent {sign}{offset} days",
     "switchValue": "Switch value",
-    "switchValueHint": "e.g. 1 / 0 / true / false",
+    "switchValueHint_boolean": "Switches the value to On (true) or Off (false).",
+    "switchValueHint_integer": "Whole number, e.g. 50 or 0.",
+    "switchValueHint_float": "Decimal number, e.g. 21.5 or 0.",
+    "switchValueHint_date": "Date in YYYY-MM-DD format, e.g. 2026-12-24.",
+    "switchValueHint_time": "Time in HH:MM:SS format, e.g. 08:00:00.",
+    "switchValueHint_datetime": "Date and time (ISO 8601), e.g. 2026-12-24T08:00:00.",
+    "switchValueHint_text": "Taken literally — including 1, 0, on or ein.",
+    "switchValueOn": "On (true)",
+    "switchValueOff": "Off (false)",
+    "switchValueErrorRequired": "Please enter an output value.",
+    "switchValueErrorBoolean": "Not a valid yes/no value — allowed are 1/0, true/false, on/off, ein/aus.",
+    "switchValueErrorInteger": "Not a valid whole number.",
+    "switchValueErrorFloat": "Not a valid number.",
+    "switchValueErrorDate": "Not a valid date (expected YYYY-MM-DD).",
+    "switchValueErrorTime": "Not a valid time (expected HH:MM or HH:MM:SS).",
+    "switchValueErrorDatetime": "Not a valid timestamp (expected YYYY-MM-DDTHH:MM:SS).",
+    "qualityBad": "Quality: bad",
+    "qualityUncertain": "Quality: uncertain",
+    "noSchedulePoints": "No schedule points",
+    "timerActive": "Timer active",
+    "timerInactive": "Timer inactive",
+    "editSchedulePoints": "Edit schedule points",
+    "confirmActivate": "Activate timer?",
+    "confirmDeactivate": "Deactivate timer?",
     "labelSunrise": "Sunrise",
     "labelSunset": "Sunset",
     "labelSolarNoon": "Solar noon",
@@ -450,7 +477,14 @@
       "editorPlaceholder": "History chart",
       "seriesFallback": "Series {n}",
       "primaryLabel": "Label (optional)",
-      "labelPlaceholder": "e.g. Temperature history"
+      "labelPlaceholder": "e.g. Temperature history",
+      "chartTitle": "Chart title",
+      "chartType": "Chart type",
+      "chartTypeLine": "〰 Line",
+      "chartTypeBar": "▐ Bar",
+      "color": "Color",
+      "primaryLabelHint": "Without its own label, the primary series uses the chart title.",
+      "toggleSeries": "Show/hide series"
     },
     "energiefluss": {
       "title": "Energy flow",
@@ -613,13 +647,16 @@
       "activeIndicatorLine": "Line (bottom)",
       "activeIndicatorNone": "None",
       "defaultLabel": "Link",
+      "iconSize": "Icon size (px)",
+      "iconSizeHint": "0 = default size. Wide SVG icons keep their aspect ratio.",
       "labelPlaceholder": "e.g. Living room",
       "noTarget": "No target",
       "showArrow": "Show navigation arrow (→)",
       "showIcon": "Show icon",
       "preserveIconColor": "Preserve SVG icon color (no black/white)",
       "targetPage": "Target page",
-      "title": "Link"
+      "title": "Link",
+      "historyBack": "Back to the previously visited page (no history: target page)"
     },
     "qrcode": {
       "title": "QR code",
@@ -821,7 +858,13 @@
       "timezoneHint": "(optional, empty = local)",
       "modeDigital": "Digital",
       "modeAnalog": "Analog",
-      "modeWortuhr": "Word clock"
+      "modeWortuhr": "Word clock",
+      "minuteDots": "Minute dots in the corners",
+      "minuteDotsHint": "Shows the minutes between the 5-minute steps as 1–4 dots in the corners (e.g. \"quarter to six\" + 2 dots = 17:47). The words then round down instead of to the nearest step.",
+      "timezonePlaceholder": "e.g. Asia/Tokyo",
+      "timezoneFormat": "IANA format, e.g.",
+      "optional": "(optional)",
+      "labelPlaceholder": "e.g. Living room"
     },
     "valuedisplay": {
       "title": "Value display",
@@ -1057,6 +1100,32 @@
     "missing": {
       "title": "Unknown",
       "ariaLabel": "Unknown widget type"
+    },
+    "terminliste": {
+      "title": "Event list",
+      "titlePlaceholder": "e.g. Appointments",
+      "sources": "Calendar sources (max. {max})",
+      "sourcesHint": "Objects an iCalendar block (Logic) writes a filter's array output to.",
+      "sourceN": "Source {n}",
+      "sourceLabelPlaceholder": "Name, e.g. Waste collection",
+      "color": "Colour",
+      "addSource": "+ Add source",
+      "removeSource": "Remove source",
+      "days": "Number of days",
+      "separator": "Separator",
+      "separatorSemicolon": "Semicolon (;)",
+      "separatorStar": "Asterisk (*)",
+      "separatorNewline": "Line break",
+      "datePattern": "Date format",
+      "datePatternHint": "Placeholders as in the general settings, e.g. EEE dd.MM.yy → Wed 15.07.26",
+      "showTime": "Show start time",
+      "showLocation": "Show location",
+      "showEmptyDays": "Show days without events",
+      "today": "Today",
+      "tomorrow": "Tomorrow",
+      "noSources": "No calendar source configured",
+      "noEvents": "No events in the next {n} days",
+      "noEventsOnDay": "–"
     }
   },
   "datetimeNames": {
@@ -1065,5 +1134,10 @@
     "weekdaysTwo": "Mo|Tu|We|Th|Fr|Sa|Su",
     "months": "January|February|March|April|May|June|July|August|September|October|November|December",
     "monthsShort": "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec"
+  },
+  "alarm": {
+    "acknowledge": "Acknowledge",
+    "acknowledgeFailed": "Could not acknowledge — the alarm may already have ended.",
+    "waiting": "{n} more alarm(s) waiting"
   }
 }

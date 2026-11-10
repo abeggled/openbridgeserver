@@ -54,7 +54,10 @@ export default defineConfig({
           },
           {
             text: 'Objekte',
-            items: [{ text: 'Objektliste', link: '/de/datapoints/list' }],
+            items: [
+              { text: 'Objektliste', link: '/de/datapoints/list' },
+              { text: 'Objekt-Detail', link: '/de/datapoints/detail' },
+            ],
           },
           {
             text: 'KNX-Geräte',
@@ -92,20 +95,29 @@ export default defineConfig({
               { text: 'Bausteine: Astro', link: '/de/logic/blocks-astro' },
               { text: 'Bausteine: Benachrichtigung', link: '/de/logic/blocks-notification' },
               { text: 'Bausteine: Integration', link: '/de/logic/blocks-integration' },
+              { text: 'Bausteine: Energie (HEMS)', link: '/de/logic/blocks-hems' },
               { text: 'Bausteine: Skript', link: '/de/logic/blocks-script' },
               { text: 'Bausteine: KI', link: '/de/logic/blocks-ai' },
             ],
           },
           {
+            text: 'Visu',
+            items: [{ text: 'Widgets', link: '/de/visu/widgets' }],
+          },
+          {
             text: 'Einstellungen',
             items: [
+              { text: 'Einstellungen', link: '/de/settings/' },
               { text: 'Allgemeine Einstellungen', link: '/de/settings/general' },
               { text: 'Passwort ändern', link: '/de/settings/password' },
               { text: 'Benutzer', link: '/de/settings/users' },
               { text: 'API Keys', link: '/de/settings/apikeys' },
               { text: 'Sicherheit', link: '/de/settings/security' },
               { text: 'Support', link: '/de/settings/support' },
+              { text: 'Updates', link: '/de/settings/updates' },
               { text: 'Links', link: '/de/settings/links' },
+              { text: 'Visu-Geräte', link: '/de/settings/visu-devices' },
+              { text: 'Visu-Alarme', link: '/de/settings/visu-alarms' },
               { text: 'Hierarchie', link: '/de/settings/hierarchy' },
               { text: 'Datenmanagement', link: '/de/settings/importexport' },
               { text: 'Icons', link: '/de/settings/icons' },
@@ -139,7 +151,10 @@ export default defineConfig({
           },
           {
             text: 'Data Points',
-            items: [{ text: 'Data Point List', link: '/en/datapoints/list' }],
+            items: [
+              { text: 'Data Point List', link: '/en/datapoints/list' },
+              { text: 'Data Point Detail', link: '/en/datapoints/detail' },
+            ],
           },
           {
             text: 'KNX Devices',
@@ -177,20 +192,29 @@ export default defineConfig({
               { text: 'Blocks: Astro', link: '/en/logic/blocks-astro' },
               { text: 'Blocks: Notification', link: '/en/logic/blocks-notification' },
               { text: 'Blocks: Integration', link: '/en/logic/blocks-integration' },
+              { text: 'Blocks: Energy (HEMS)', link: '/en/logic/blocks-hems' },
               { text: 'Blocks: Script', link: '/en/logic/blocks-script' },
               { text: 'Blocks: AI', link: '/en/logic/blocks-ai' },
             ],
           },
           {
+            text: 'Visu',
+            items: [{ text: 'Widgets', link: '/en/visu/widgets' }],
+          },
+          {
             text: 'Settings',
             items: [
+              { text: 'Settings', link: '/en/settings/' },
               { text: 'General Settings', link: '/en/settings/general' },
               { text: 'Change Password', link: '/en/settings/password' },
               { text: 'Users', link: '/en/settings/users' },
               { text: 'API Keys', link: '/en/settings/apikeys' },
               { text: 'Security', link: '/en/settings/security' },
               { text: 'Support', link: '/en/settings/support' },
+              { text: 'Updates', link: '/en/settings/updates' },
               { text: 'Links', link: '/en/settings/links' },
+              { text: 'Visu devices', link: '/en/settings/visu-devices' },
+              { text: 'Visu alarms', link: '/en/settings/visu-alarms' },
               { text: 'Hierarchy', link: '/en/settings/hierarchy' },
               { text: 'Data Management', link: '/en/settings/importexport' },
               { text: 'Icons', link: '/en/settings/icons' },

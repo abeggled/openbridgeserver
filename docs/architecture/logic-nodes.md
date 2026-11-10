@@ -17,9 +17,11 @@ module and its tests; shared infrastructure is only touched when the shared cont
 
 ```text
 obs/logic/
+├── booleans.py              # to_bool: the boolean rule shared by executor and engine modules
 ├── capabilities.py          # authorization capability identifiers per node type
 ├── executor.py              # shared execution dispatcher (see "Execution")
 ├── graph_analysis.py        # shared graph/topology helpers
+├── hems_surplus.py          # control engine called by the hems_surplus dispatcher branch
 ├── manager.py               # scheduling, persistence, runtime
 ├── models.py                # NodeTypeDef, NodeTypePort, FlowData, …
 ├── registry.py              # assembles the catalogue, lookup helpers
@@ -33,6 +35,7 @@ obs/logic/
     │   ├── and_node.py      # one module per function block: NODE_TYPE
     │   ├── …
     ├── datapoint/
+    ├── hems/
     ├── math/
     ├── string/
     ├── timer/
@@ -172,6 +175,11 @@ Two registered types are intentionally never executed and fall through the dispa
 no-op branch: `comment` (purely visual annotation) and `ai_logic` (placeholder). They are listed as
 `NON_EXECUTING_NODE_TYPES` in the guardrail test; every other registered type must have a branch.
 
+A block whose algorithm is too large for a `case` branch (`hems_surplus`) keeps the branch a thin
+call into a pure, I/O-free engine module next to the executor (`obs/logic/hems_surplus.py`): it
+reads neither the clock nor the graph — `now` and the per-node state dict are passed in — so the
+dispatcher remains the only place that decides *when* a node runs.
+
 ### Node-specific knowledge outside node modules
 
 Besides the two handlers above, these shared modules still key on individual node types. This is the
@@ -181,8 +189,9 @@ and update this table, rather than opening a node-specific branch somewhere new:
 | Location | Node-specific knowledge | Why it is not (yet) in the node module |
 |---|---|---|
 | `obs/logic/validation.py` — `_DURATION_FIELDS` | duration bounds for `timer_delay`, `timer_pulse`, `api_client` | persistence-time validation runs before execution; a per-node validation hook on the node contract is the intended replacement |
-| `obs/logic/graph_analysis.py` — `TICK_BOUNDARY_NODE_TYPES` | `memory` is the explicit tick boundary | a graph-topology property, evaluated without instantiating nodes |
-| `obs/api/v1/logic.py` | `comment` excluded from layout-only diffs (as is the cosmetic `data.label` block name of every node); `datapoint_read`/`datapoint_write` for usage reporting; `missing_node` placeholder on import, and its shape canonicalized on read (pre-#1157 generated label marker dropped, a missing type carried in `label` promoted to `original_type`) | API-level concerns (change detection, usage lists, import fallback, read-time migrations) |
+| `obs/logic/graph_analysis.py` — `TICK_BOUNDARY_NODE_TYPES` (mirrored in `LogicView.vue`), `TIMER_NODE_TYPES` | `memory`, `timer_delay` and `timer_pulse` are tick boundaries: their output does not depend on their inputs within a run, so a feedback loop through one is no cycle (the manager reads a timer's trigger level after the run); `TIMER_NODE_TYPES` are the blocks whose timing the `LogicManager` owns | a graph-topology property, evaluated without instantiating nodes |
+| `obs/logic/graph_analysis.py` — `_TYPE_EXTRA_CONFIG_KEYS`, `_TYPE_EXTRA_CONFIG_KEY_PATTERNS`, `_heating_legacy_warnings` | `data` keys outside a type's `config_schema` that `POST /graphs/validate` must not report as `unknown_config_field`: per-port negation on `and`/`or`/`xor`/`binary_stats`, `string_concat.text_<n>`, `datapoint_read`/`datapoint_write.value_map`, the migrated `api_client` secret-file names, and `heating_circuit`'s legacy thresholds (reported as `ignored_config_field` where the runtime skips them) | keys the editor or a read-time migration writes without declaring them in `config_schema`; a block that starts writing such a key must be added here, or `/graphs/validate` reports it |
+| `obs/api/v1/logic.py` | `comment` excluded from layout-only diffs (as is the cosmetic `data.label` block name of every node); `datapoint_read`/`datapoint_write` for usage reporting; `missing_node` placeholder on import, and its shape canonicalized on read (pre-#1157 generated label marker dropped, a missing type carried in `label` promoted to `original_type`); the read-time migrations of stored `node.data` keys (`_migrate_legacy_node_data` in `obs/logic/manager.py`: the `api_client` secret-file names and, #1377, a `timer_delay`/`timer_pulse` duration stored under the sibling block's key) applied on read, in the layout-only comparison and before `POST /graphs/validate` — the manager applies them when it loads a sheet, and its `_TIMER_DURATION_KEYS` is also the key `_timer_duration` reads | API-level concerns (change detection, usage lists, import fallback, read-time migrations) |
 
 Note that `_DURATION_FIELDS` duplicates bounds the node definitions already declare in their
 `config_schema` (`min`). Deriving them generically would silently widen validation to every
@@ -208,7 +217,20 @@ today, so it is deliberately left as an explicit table.
      not pulse, and a Write Object does not write. Register the handle in
      `retained_boundary_handles` (`GraphExecutor.execute`) and `init_retained_boundary_handles`
      (`LogicManager.initialize_graph`) so the deliberate absence is not reported as a failed
-     upstream producer on every run.
+     upstream producer on every run. `hems_surplus` takes the other route for *level* outputs that
+     are merely unchanged: its dispatcher branch returns every level output at its current value
+     plus `_emitted`, the handles actually sent this tick. Downstream logic always computes with
+     the level; a directly wired Write Object without its own trigger is marked `_skip_unchanged`,
+     gets the last value even of a trigger output between firings (that edge counts as a level in
+     `_hems_level_edge`) and is written only when it differs from its `last_write_val`; with the
+     block's "only on change" off it gets a value only when `_emitted`. Action-node freshness
+     (`_event_fresh_inputs`) honours `_emitted`. Its *trigger* outputs are events: present
+     only on the run that sent them, a firing being the run that sent True, and traced as pulse origins (`_PULSE_ORIGIN_NODE_TYPES`,
+     `_hems_trigger_handles`) like Edge Detection's. In `GraphExecutor.execute` an absent trigger
+     output or a removed consumer's handle is a boundary; an absent *level* (or any handle of a
+     failed block) is a failed producer. `initialize_graph` excludes the block and treats every
+     wired handle of it as a boundary. A run made obsolete by a save undoes its ticks of the block
+     (`run_tag`, `undo_hems_run`).
    - *Save/startup state.* `LogicManager.initialize_graph` evaluates the sheet on a **throwaway**
      state copy, so a block whose output depends on persisted state needs a decision. Listing it in
      `_INIT_EXCLUDED_NODE_TYPES` (as `memory` and `statistics` are) keeps it out of the pass
@@ -231,6 +253,11 @@ today, so it is deliberately left as an explicit table.
    source layout, plus execution tests for the dispatcher branch.
 6. Frontend, translations and the block table in `README.md` / `README.de.md` follow the normal GUI
    and i18n rules.
+7. **Write its help section and declare its id** — add `## <Label> {#<help-id>}` to
+   `help/{de,en}/logic/blocks-<category>.md` and set the matching `help_id="…"` on the node type
+   definition. `NodePalette.vue` renders a help button from that declared value, and
+   `tools/check_help_contract.py` fails CI when a palette-visible block declares no id or points at a
+   section that does not exist. A block without `help_id` gets no button rather than a dead one.
 
 Beyond the capability classification (step 3) and the dispatcher branch (step 4) — both of which are
 part of implementing the block, not of defining the catalogue — no shared file is involved: the

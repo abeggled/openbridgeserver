@@ -18,7 +18,7 @@ beforeEach(() => {
   }
   Object.defineProperty(window, 'localStorage', { value: storage, configurable: true })
   Object.defineProperty(globalThis, 'localStorage', { value: storage, configurable: true })
-  vi.doMock('vue-router', () => ({ useRoute: () => ({ query: {} }) }))
+  vi.doMock('vue-router', () => ({ useRoute: () => ({ query: {} }), useRouter: () => ({ push: vi.fn() }) }))
   vi.doMock('@vue-flow/core', () => ({
     VueFlow: { name: 'VueFlow', props: ['snapToGrid', 'snapGrid'], template: '<div data-testid="vue-flow"><slot /></div>' },
     Handle: { template: '<span />' },

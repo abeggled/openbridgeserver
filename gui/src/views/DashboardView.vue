@@ -114,7 +114,7 @@
                 <div :class="['text-sm font-mono font-medium', liveClass(dp)]">
                   {{ displayValue(dp) }}
                 </div>
-                <Badge :variant="qualityVariant(dp.quality)" size="xs" dot>{{ dp.quality ?? '—' }}</Badge>
+                <Badge :variant="qualityVariant(dp.quality)" size="xs" dot>{{ qualityLabel(dp.quality) ?? '—' }}</Badge>
               </div>
             </div>
           </template>
@@ -200,5 +200,9 @@ function qualityVariant(q) {
   if (q === 'bad')       return 'danger'
   if (q === 'uncertain') return 'warning'
   return 'muted'
+}
+
+function qualityLabel(q) {
+  return q === 'good' ? t('datapoints.quality.good') : q === 'bad' ? t('datapoints.quality.bad') : q === 'uncertain' ? t('datapoints.quality.uncertain') : q
 }
 </script>

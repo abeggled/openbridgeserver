@@ -63,6 +63,16 @@ class LogicGraphRun(BaseModel):
 
     input_overrides: dict[str, dict[str, Any]] = {}
     debug: bool = False
+    # Trigger (timer_cron) block ids fired in this run exactly like a
+    # scheduled cron tick, so a debug session need not wait for it (#1276).
+    fire_triggers: list[str] = []
+
+
+class LogicGraphDuplicate(BaseModel):
+    """Optional override for the duplicate's name — falls back to the ``"Kopie von {name}"``
+    default when omitted or blank."""
+
+    name: str | None = None
 
 
 class LogicGraphOut(BaseModel):
@@ -107,6 +117,9 @@ class NodeTypeDef(BaseModel):
     required_capability: str | None = None
     hidden_from_palette: bool = False
     legacy: bool = False
+    # Heading anchor id in help/{en,de}/logic/blocks-<category>.md, resolvable at
+    # runtime via GET /help/help-index.json -> .helpIds[help_id].{en,de}.
+    help_id: str | None = None
 
 
 class LogicRunPreflightCheck(BaseModel):

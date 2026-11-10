@@ -2,7 +2,7 @@
 title: Monitor
 ---
 
-# Monitor
+# Monitor {#ringbuffer}
 
 The Monitor shows value changes live as they arrive in the system, and keeps a
 configurably sized history of them in the ring buffer. Unlike the data point history (see

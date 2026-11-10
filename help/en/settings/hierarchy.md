@@ -6,7 +6,7 @@ title: Hierarchy
 
 The Hierarchy tab lives in the Admin GUI under **Settings → Hierarchy**.
 
-## Device structure {#settings-hierarchy}
+## Hierarchies {#settings-hierarchy}
 
 Represents a tree-shaped structure (buildings, rooms, trades, topology, …) that data points
 can be assigned to — it's used both for navigation/grouping in the GUI and as the basis for
@@ -26,3 +26,19 @@ KNX project import in the Data Management tab.
 Nodes can be manually renamed, added, and deleted again (deleting a branch also removes all
 its child nodes). The "display start level" determines from which level the shortened path is
 shown in data point lists — the full path always remains visible as a tooltip.
+
+A number in parentheses after a hierarchy's or node's name shows how many child elements sit
+directly underneath it (e.g. "Shading (2)") — omitted for elements with no children. This
+always counts direct children only, not the cumulative count across all deeper levels.
+
+## Assigning Logic graphs
+
+The same hierarchies can also be used to group Logic graphs — a graph can be sorted into
+several independent hierarchies at once (e.g. a technical grouping by
+shading/lighting/sockets alongside a topological one by room). This assignment is purely
+organizational and has no effect on permissions — Logic graphs keep their own, independent
+permission model.
+
+This page manages only the hierarchies themselves (trees and nodes); assigning a Logic graph
+to a hierarchy position happens entirely in the Logic editor, via its "Open Logic" picker
+(Logic module → toolbar).

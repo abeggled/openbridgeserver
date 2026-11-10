@@ -21,7 +21,8 @@ async function mountCard({ linked = [], results = [] } = {}) {
     createLink: vi.fn().mockResolvedValue({}),
     deleteLink: vi.fn().mockResolvedValue({}),
   }
-  vi.doMock('@/api/client.js', () => ({ hierarchyApi }))
+  const helpApi = { index: vi.fn().mockResolvedValue({ data: { helpIds: {} } }) }
+  vi.doMock('@/api/client.js', () => ({ hierarchyApi, helpApi }))
   const mod = await import('@/components/datapoints/DataPointHierarchyCard.vue')
   const wrapper = mount(mod.default, {
     props: { dpId: 'dp-1' },
@@ -71,7 +72,9 @@ describe('DataPointHierarchyCard', () => {
     await flushPromises()
 
     expect(hierarchyApi.searchNodes).toHaveBeenCalledWith('Küche', 40)
-    const result = wrapper.find('button:not([disabled])')
+    // Scoped to the results list — the card header's help button (#1198) is
+    // also an enabled <button>, and a bare selector would match it first.
+    const result = wrapper.find('.max-h-52 button:not([disabled])')
     expect(result.exists()).toBe(true)
     expect((result.text().match(/Haus/g) || []).length).toBe(1)
     expect(result.text()).toContain('Gebäude')
@@ -108,5 +111,21 @@ describe('DataPointHierarchyCard', () => {
     expect(buttons.some((button) => button.text().includes('Gebäude B'))).toBe(false)
     expect(wrapper.find('[title="Haus › Gebäude A › EG › Küche"]').exists()).toBe(true)
     expect(wrapper.find('[title="Haus › Gebäude B › EG › Küche"]').exists()).toBe(true)
+  })
+
+  it('renders a help button in the card header (#1198)', async () => {
+    const { wrapper } = await mountCard()
+    expect(wrapper.find('[data-testid="help-button-datapoints-detail-hierarchy"]').exists()).toBe(true)
+  })
+
+  it('opens the help store with datapoints-detail-hierarchy when its button is clicked', async () => {
+    const { wrapper } = await mountCard()
+    const { useHelpStore } = await import('@/stores/help')
+    const helpStore = useHelpStore()
+
+    await wrapper.find('[data-testid="help-button-datapoints-detail-hierarchy"]').trigger('click')
+
+    expect(helpStore.isOpen).toBe(true)
+    expect(helpStore.currentHelpId).toBe('datapoints-detail-hierarchy')
   })
 })

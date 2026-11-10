@@ -41,6 +41,7 @@ def test_bulk_and_multi_scope_contracts_allow_only_stable_summary_fields() -> No
     assert ROUTE_SECURITY_CONTRACTS[("POST", "/api/v1/logic/graphs/{graph_id}/run")].allowed_detail_fields == {
         "control_class",
         "denied_checks",
+        "fire_triggers",
         "output_count",
         "warning_count",
     }

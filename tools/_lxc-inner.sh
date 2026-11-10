@@ -243,6 +243,18 @@ ExecCondition=/opt/obs/obs-onewire-should-run.sh
 ExecStartPre=/opt/obs/obs-onewire-configure.sh
 EOF
 
+# The package also enables owserver.socket with a bare `ListenStream=4304`,
+# i.e. on all interfaces, independent of the ExecCondition gate above.
+# owserver has no authentication and OBS only talks to it over localhost,
+# so bind the socket to loopback. With socket activation owserver ignores
+# the port from /etc/owfs.conf, so the socket alone decides where it listens.
+mkdir -p /etc/systemd/system/owserver.socket.d
+cat > /etc/systemd/system/owserver.socket.d/override.conf << 'EOF'
+[Socket]
+ListenStream=
+ListenStream=127.0.0.1:4304
+EOF
+
 cat > /opt/obs/obs-first-boot.sh << 'FIRSTBOOT'
 #!/bin/bash
 set -euo pipefail

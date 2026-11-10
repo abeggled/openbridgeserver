@@ -30,4 +30,5 @@ NODE_TYPE = NodeTypeDef(
         "group": {"type": "number", "default": 0, "label": "Capture-Gruppe (0 = gesamter Treffer)"},
     },
     color="#0369a1",
+    help_id="logic-block-substring-extractor",
 )

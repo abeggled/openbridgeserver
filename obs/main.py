@@ -13,27 +13,34 @@ Startup-Sequenz:
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import Any
 
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from obs import __version__
+from obs.core.system_datapoints import SystemDataPointError
 
 logger = logging.getLogger(__name__)
+
+# Mirrors uvicorn's own exit code for a failed application startup.
+_STARTUP_FAILED_EXIT_CODE = 3
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     from obs.adapters import registry as adapter_registry
-    from obs.api.auth import require_configured_owner
+    from obs.api.setup import announce_setup_mode
     from obs.api.v1.websocket import init_ws_manager
     from obs.config import get_settings
-    from obs.core.event_bus import DataValueEvent, init_event_bus
+    from obs.core.event_bus import AdapterInstanceStartedEvent, AdapterStatusEvent, DataValueEvent, init_event_bus
     from obs.core.mqtt_client import init_mqtt_client
     from obs.core.registry import init_registry
     from obs.core.write_router import init_write_router
@@ -51,6 +58,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     from obs.log_buffer import LogBufferHandler
 
     LogBufferHandler.install(asyncio.get_event_loop(), level=log_level)
+    # Runs after uvicorn configured its loggers, whichever way the server was started.
+    from obs.adapters.webhook.access_log import install_webhook_access_log_filter
+
+    install_webhook_access_log_filter()
     logger.info(f"open bridge server v{__version__} starting …")
 
     # 1. Database
@@ -69,7 +80,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         except Exception:
             logger.exception("Failed to apply persistent log level")
         logger.info("Applied persistent log level from app_settings: %s", persistent_log_level)
-    await require_configured_owner(db)
+    await announce_setup_mode(db, settings.server.port)
 
     # Rebuild Mosquitto passwd file from DB on every startup (keeps it in sync).
     # SIGHUP is sent after MQTT connects (see below) so Mosquitto reloads cleanly.
@@ -112,12 +123,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     ws_manager = init_ws_manager()
     bus.subscribe(DataValueEvent, ws_manager.handle_value_event)
 
+    # 7b. Visu alarms — conditions start from the current values, nothing is raised at startup
+    from obs.visu_alarms import init_visu_alarm_engine, reload_visu_alarms
+
+    alarm_engine = init_visu_alarm_engine(registry.get_value)
+    await reload_visu_alarms(db)
+    bus.subscribe(DataValueEvent, alarm_engine.handle_value_event)
+
     # 6. Write Router
     #    Path A: MQTT dp/{uuid}/set → adapters (external commands)
     #    Path B: DataValueEvent → DEST/BOTH bindings (cross-protocol propagation)
     write_router = init_write_router(db, registry, event_bus=bus)
     mqtt.on_write_request(write_router.handle)
     bus.subscribe(DataValueEvent, write_router.handle_value_event)
+    #    Path C: an adapter instance (re)connects → it gets the system DataPoint
+    #    values again (#1370). Subscribed before any adapter starts, so no
+    #    connection can slip past it.
+    bus.subscribe(AdapterStatusEvent, write_router.handle_adapter_status)
+    bus.subscribe(AdapterInstanceStartedEvent, write_router.handle_instance_started)
 
     # 7. MQTT connect
     await mqtt.start()
@@ -135,6 +158,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     import obs.adapters.mqtt.adapter
     import obs.adapters.onewire.adapter
     import obs.adapters.snmp.adapter
+    import obs.adapters.webhook.adapter
     import obs.adapters.zeitschaltuhr.adapter  # noqa: F401
 
     await adapter_registry.start_all(bus, db, value_getter=registry.get_value)
@@ -154,6 +178,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     from obs.db.maintenance import init_db_maintenance_scheduler
 
     db_maintenance_scheduler = init_db_maintenance_scheduler(db=db)
+
+    # 12. Update-Prüfung (#1370) — publiziert Kanal + installierte Version sofort,
+    #     die erste Online-Prüfung folgt mit zufälligem Versatz.
+    from obs.update.service import init_update_service
+
+    update_service = await init_update_service(db, bus, settings.update_check)
 
     logger.info(
         "open bridge server ready — %d datapoints, %d adapters registered",
@@ -178,6 +208,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     yield  # ← application running
 
     # Shutdown (reverse order)
+    await update_service.stop()
     await db_maintenance_scheduler.stop()
     await autobackup_scheduler.stop()
     await logic_mgr.stop()
@@ -279,6 +310,10 @@ async def _stop_optional_ringbuffer() -> None:
         await active_rb.stop()
 
 
+async def _system_datapoint_error_handler(_request: Any, _exc: Exception) -> JSONResponse:
+    return JSONResponse(status_code=403, content={"detail": "System DataPoint is read-only"})
+
+
 def create_app() -> FastAPI:
     from pathlib import Path
 
@@ -302,6 +337,32 @@ def create_app() -> FastAPI:
     # Rate limiter state (used by @limiter.limit decorators in auth.py)
     app.state.limiter = auth_limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    # Read-only system DataPoints (#1370): whichever route reaches the registry guard.
+    app.add_exception_handler(SystemDataPointError, _system_datapoint_error_handler)
+
+    from fastapi import Request
+    from fastapi.responses import JSONResponse, RedirectResponse
+
+    # ── WEBHOOK adapter trigger endpoint (issue #1256) ────────────────────
+    # Registered *before* the CORS middleware and _setup_gate: Starlette runs the
+    # last-added middleware first, so this puts the webhook gate innermost.
+    #   * CORS wraps it, which means a browser caller on an allowed origin gets
+    #     the allow-origin header on the trigger response and not only on the
+    #     preflight (a response returned from here never reaches inner layers).
+    #   * The setup gate stays the outermost middleware: an installation that
+    #     has not been claimed yet must not expose any entry point, not even one
+    #     guarded by a per-binding token.
+    #
+    # A middleware rather than a route because each WEBHOOK instance picks its
+    # own path prefix at runtime; see obs/api/webhook.py for the full reasoning.
+    @app.middleware("http")
+    async def _webhook_gate(request: Request, call_next):
+        from obs.api.webhook import handle_webhook_request
+
+        response = await handle_webhook_request(request)
+        if response is not None:
+            return response
+        return await call_next(request)
 
     # CORS — configure allowed origins via config.yaml or OBS_CORS__ORIGINS env var
     app.add_middleware(
@@ -315,8 +376,23 @@ def create_app() -> FastAPI:
 
     app.include_router(router, prefix="/api/v1")
 
-    from fastapi import Request
-    from fastapi.responses import JSONResponse, RedirectResponse
+    @app.middleware("http")
+    async def _setup_gate(request: Request, call_next):
+        """Reduce the whole HTTP surface to the setup page while no owner exists.
+
+        OPTIONS passes through so the CORS layer can still answer preflights;
+        the request it belongs to is blocked all the same.
+        """
+        from obs.api.setup import path_is_allowed_during_setup, setup_required
+
+        if not setup_required() or request.method == "OPTIONS" or path_is_allowed_during_setup(request.url.path):
+            return await call_next(request)
+        if request.url.path.startswith("/api/"):
+            return JSONResponse(
+                {"detail": "open bridge server is not set up yet — create the first owner at /setup.", "setup_required": True},
+                status_code=503,
+            )
+        return RedirectResponse("/setup", status_code=303)
 
     def _spa_index_response(index: Path) -> FileResponse:
         return FileResponse(
@@ -519,4 +595,45 @@ async def main() -> None:
         loop="asyncio",
     )
     server = uvicorn.Server(config)
-    await server.serve()
+    try:
+        await server.serve()
+    except SystemExit as exc:
+        # Uvicorn meldet einen fehlgeschlagenen Application-Startup per
+        # sys.exit(3) *innerhalb* von serve() (uvicorn.server.Server.startup).
+        await _abort_failed_startup(exc.code if isinstance(exc.code, int) else _STARTUP_FAILED_EXIT_CODE)
+        return  # _abort_failed_startup() kehrt im Betrieb nicht zurueck.
+    if not server.started:
+        # Kein Listener, aber auch kein SystemExit — z. B. Signal waehrend des
+        # Startups. Derselbe Hänger, dieselbe Behandlung.
+        await _abort_failed_startup()
+
+
+async def _abort_failed_startup(exit_code: int = _STARTUP_FAILED_EXIT_CODE) -> None:
+    """Terminate the process when the lifespan failed instead of hanging forever.
+
+    Uvicorn returns from ``serve()`` after a failed startup, but the interpreter
+    then waits for the *non-daemon* worker threads that aiosqlite starts per
+    connection (``Thread(target=_connection_worker_thread)``).  The database is
+    opened before the fail-closed owner check, so a fresh install would keep a
+    live-but-unserving process: ``docker ps`` shows "Up … (unhealthy)" forever,
+    no restart policy fires and systemd still considers obs.service running.
+
+    Close what startup managed to open, then leave hard — a startup that failed
+    has no other resources worth unwinding, and ``os._exit`` cannot be blocked
+    by a thread that never joins.
+    """
+    try:
+        from obs.message_archive import close_message_archive_store
+
+        await close_message_archive_store()
+    except Exception:
+        logger.exception("Could not close the message archive during startup abort")
+    try:
+        from obs.db.database import get_db
+
+        await get_db().disconnect()
+    except Exception:
+        logger.exception("Could not close the database during startup abort")
+    logger.error("open bridge server startup failed — exiting (see the traceback above).")
+    logging.shutdown()
+    os._exit(exit_code)

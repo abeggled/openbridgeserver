@@ -2,7 +2,7 @@
 title: KNX Devices
 ---
 
-# KNX Devices
+# KNX Devices {#knxdevices}
 
 This view shows all physical KNX devices from the last imported KNX project (ETS export),
 including their communication objects and group addresses — regardless of whether they

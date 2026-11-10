@@ -117,7 +117,7 @@ async def create_ets_hierarchy(db: Database, request: EtsImportRequest) -> Impor
         if not rows:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
-                "Keine ETS-Gruppenadressen importiert. Bitte zuerst eine .knxproj oder CSV importieren.",
+                "Keine ETS-Gruppenadressen importiert. Bitte zuerst eine .knxproj importieren.",
             )
 
         if request.mode == "mid":
@@ -353,6 +353,15 @@ async def create_ets_hierarchy(db: Database, request: EtsImportRequest) -> Impor
     await db.execute_and_commit(
         "INSERT INTO hierarchy_trees (id, name, description, source, created_at, updated_at) VALUES (?,?,?,?,?,?)",
         (tree_id, request.tree_name, _ets_import_description(request.mode), _ets_import_description(request.mode), now, now),
+    )
+    # Every tree gets an implicit, hidden root node so a Logic graph can be
+    # linked directly "to the tree" without a visible child folder (#1217
+    # follow-up) — see _migration_v54_hierarchy_tree_root_nodes.
+    await db.execute_and_commit(
+        """INSERT INTO hierarchy_nodes
+               (id, tree_id, parent_id, name, description, node_order, icon, is_tree_root, created_at, updated_at)
+           VALUES (?,?,NULL,?,'',-1,NULL,1,?,?)""",
+        (_new_id(), tree_id, request.tree_name, now, now),
     )
 
     if node_inserts:

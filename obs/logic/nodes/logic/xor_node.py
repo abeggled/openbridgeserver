@@ -22,4 +22,5 @@ NODE_TYPE = NodeTypeDef(
         },
     },
     color="#1d4ed8",
+    help_id="logic-block-xor",
 )

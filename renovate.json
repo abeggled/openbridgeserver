@@ -20,6 +20,17 @@
       "matchPackageNames": ["typescript"],
       "matchUpdateTypes": ["major"],
       "enabled": false
+    },
+    {
+      "description": "Hold Python minor/major bumps: the Docker image and the LXC template must run the same Python, and the LXC template uses the distro python3 of its Ubuntu base (26.04 ships 3.14). Bump Docker, CI and the unittest matrix together once an Ubuntu release with the new Python is the LXC base (see PR #1338).",
+      "matchDepNames": ["python"],
+      "matchUpdateTypes": ["major", "minor"],
+      "enabled": false
+    },
+    {
+      "description": "Automerge patch updates once all required checks are green (#1291). `strict` branch protection makes Renovate rebase a stale branch on its own (rebaseWhen: auto, default) before merging, so the up-to-date guarantee holds without manual rework.",
+      "matchUpdateTypes": ["patch"],
+      "automerge": true
     }
   ]
 }

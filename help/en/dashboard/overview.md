@@ -2,7 +2,7 @@
 title: Overview
 ---
 
-# Overview
+# Overview {#dashboard}
 
 The Overview is the Admin-GUI's landing page and shows the current system status at a
 glance. Live Values and WS Status update live over the WebSocket connection; the other
@@ -67,6 +67,6 @@ The status dot summarizes:
 ## Live Values {#dashboard-values}
 
 The last known values of the first ten data points, including their MQTT topic and quality
-(`good` / `uncertain` / `bad`). Values updated over the WebSocket connection since the page
+(**Good** / **Unknown** / **Bad**). Values updated over the WebSocket connection since the page
 loaded are highlighted. "All →" leads to the full, searchable and filterable data point list
 under **Data Points**.

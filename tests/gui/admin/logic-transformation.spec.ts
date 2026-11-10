@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { apiPost, apiPut, apiDelete } from '../helpers'
+import { apiPost, apiPut, apiDelete, openLogicGraph } from '../helpers'
 
 /**
  * E2E tests for issue #287:
@@ -31,7 +31,7 @@ async function createGraphAndOpenNode(
 
   await page.goto('/logic')
   await page.waitForLoadState('networkidle')
-  await page.selectOption('[data-testid="select-graph"]', graph.id)
+  await openLogicGraph(page, graph.id)
   await page.waitForTimeout(1_000)
 
   // Click the node to open config panel
@@ -179,7 +179,7 @@ test('Logic-Graph: value_map auf datapoint_read wird bei Ausführung angewendet'
   try {
     await page.goto('/logic')
     await page.waitForLoadState('networkidle')
-    await page.selectOption('[data-testid="select-graph"]', graph.id)
+    await openLogicGraph(page, graph.id)
     await page.waitForTimeout(1_000)
 
     await page.click('[data-testid="btn-debug"]')

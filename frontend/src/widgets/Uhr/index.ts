@@ -20,6 +20,7 @@ WidgetRegistry.register({
     color:       '#3b82f6',
     label:       '',
     timezone:    '',
+    minuteDots:  false,
   },
   compatibleTypes: ['*'],
   noDatapoint:     true,

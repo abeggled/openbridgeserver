@@ -6,6 +6,13 @@
 -->
 <template>
   <div class="flex-1 min-h-0 overflow-y-auto border-l-4 border-amber-400 p-4 space-y-5" data-testid="debug-inspector">
+    <!-- A Trigger block has no input to override: it fires on demand like a cron tick (issue #1276) -->
+    <section v-if="canFire" class="rounded border border-slate-200 dark:border-slate-700 p-3">
+      <button class="btn-secondary btn-sm text-amber-500 disabled:opacity-50 disabled:cursor-not-allowed" :disabled="fireDisabled" data-testid="debug-fire-trigger" @click="$emit('fire-trigger')">{{ $t('logic.debugInspector.fireTrigger') }}</button>
+      <p class="text-[11px] text-slate-500 mt-2">{{ $t('logic.debugInspector.fireTriggerHint') }}</p>
+      <p v-if="fireDisabledHint" class="text-[11px] text-amber-500 mt-1" data-testid="debug-fire-trigger-hint">{{ fireDisabledHint }}</p>
+    </section>
+
     <section>
       <div class="flex justify-between items-center mb-2">
         <h4 class="text-xs font-bold uppercase tracking-wide text-slate-500">{{ $t('logic.debugInspector.inputs') }}</h4>
@@ -31,7 +38,7 @@
         <button v-if="outputEntries.length" class="text-xs text-blue-400" @click="copyPayload">{{ payloadCopied ? $t('logic.debugInspector.copied') : $t('logic.debugInspector.copyAll') }}</button>
       </div>
       <p v-if="!outputEntries.length" class="text-sm text-slate-500">{{ $t('logic.debugInspector.noExecution') }}</p>
-      <ValueView v-for="([key, value]) in outputEntries" :key="key" :value="value" :label="key" class="mb-3" />
+      <ValueView v-for="([key, value]) in outputEntries" :key="key" :value="value" :label="outputLabels[key] ?? key" class="mb-3" />
     </section>
 
     <section v-if="metadata" class="text-xs text-slate-500 border-t border-slate-200 dark:border-slate-700 pt-3 space-y-1">
@@ -47,8 +54,10 @@ import { computed, ref, onUnmounted } from 'vue'
 import { copyText } from '@/utils/clipboard'
 import ValueView from './DebugValueView.vue'
 
-const props = defineProps({ inputs: { type: Array, default: () => [] }, outputs: { type: Object, default: () => ({}) }, metadata: { type: Object, default: null }, hasOverrides: { type: Boolean, default: false } })
-defineEmits(['set-override', 'clear-override', 'clear-all'])
+// outputLabels maps technical port ids (out_1 …) to the names the user gave
+// the outputs, e.g. of an extractor block (issue #1104).
+const props = defineProps({ inputs: { type: Array, default: () => [] }, outputs: { type: Object, default: () => ({}) }, outputLabels: { type: Object, default: () => ({}) }, metadata: { type: Object, default: null }, hasOverrides: { type: Boolean, default: false }, canFire: { type: Boolean, default: false }, fireDisabled: { type: Boolean, default: false }, fireDisabledHint: { type: String, default: '' } })
+defineEmits(['set-override', 'clear-override', 'clear-all', 'fire-trigger'])
 const outputEntries = computed(() => Object.entries(props.outputs || {}))
 const payloadCopied = ref(false)
 let copiedTimer = null

@@ -4,6 +4,7 @@ import {
   hierarchyDisplayLabel,
   hierarchyDisplayPath,
   normalizeHierarchyDisplayDepth,
+  parseHierarchyCompositeId,
 } from '@/utils/hierarchyDisplay'
 
 describe('hierarchyDisplayPath', () => {
@@ -70,5 +71,23 @@ describe('hierarchyDisplayPath', () => {
         displayDepth: 0,
       }),
     ).toBe('Haus › EG › Kueche')
+  })
+})
+
+describe('parseHierarchyCompositeId', () => {
+  it('splits a composite "tree_id:node_id" string at the first colon', () => {
+    expect(parseHierarchyCompositeId('tree-1:node-1')).toEqual({ tree_id: 'tree-1', node_id: 'node-1' })
+  })
+
+  it('keeps everything after the first colon as node_id, even if it contains further colons', () => {
+    expect(parseHierarchyCompositeId('tree-1:node-1:extra')).toEqual({ tree_id: 'tree-1', node_id: 'node-1:extra' })
+  })
+
+  it('returns null when there is no colon at all', () => {
+    expect(parseHierarchyCompositeId('not-a-composite-id')).toBeNull()
+  })
+
+  it('returns null when the tree_id part is empty (a leading colon)', () => {
+    expect(parseHierarchyCompositeId(':node-1')).toBeNull()
   })
 })

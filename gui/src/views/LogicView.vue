@@ -5,26 +5,28 @@
       <!-- Actions scroll horizontally on narrow/laptop viewports; the status
            bar below lives outside this container so it stays visible
            instead of scrolling off with whichever action produced it. -->
-      <div class="flex items-center gap-3 overflow-x-auto min-w-0">
+      <div class="flex items-center gap-3 overflow-x-auto min-w-0 pb-1">
         <!-- Reserved to the NodePalette column's current width below (see
              titleSpacerClass), so the dropdown lines up with the canvas
              instead of crowding the title. -->
         <h2 :class="[titleSpacerClass, 'flex-shrink-0 overflow-hidden whitespace-nowrap text-sm font-bold text-slate-800 dark:text-slate-100']">{{ $t('logic.title') }}</h2>
-        <!-- Logikblatt selector -->
-        <select ref="graphSelectEl" v-model="activeGraphId" @change="loadGraph"
-          class="input text-xs py-1 px-2 flex-shrink-0"
-          :style="{ width: graphSelectWidthCh + 'ch', maxWidth: '280px' }"
-          data-testid="select-graph">
-          <option value="">{{ $t('logic.selectGraph') }}</option>
-          <option v-for="g in store.graphs" :key="g.id" :value="g.id">{{ g.name }}{{ g.enabled ? '' : $t('logic.graphDisabledSuffix') }}</option>
-        </select>
-        <button v-if="auth.isAdmin" @click="newGraph" class="btn-primary btn-sm">{{ $t('logic.newGraphBtn') }}</button>
-        <button v-if="auth.isAdmin && activeGraphId" @click="saveGraph" class="btn-secondary btn-sm" :disabled="saving" data-testid="btn-save">
+        <!-- Logikblatt-Auswahl: Ordner-Navigation statt flacher Liste (#1217) -->
+        <button type="button" @click="showGraphPicker = true" class="btn-secondary btn-sm flex-shrink-0 max-w-[280px] truncate" data-testid="btn-open-graph-picker">
+          {{ activeGraph ? activeGraph.name : $t('logic.selectGraph') }}
+        </button>
+        <GraphPickerModal
+          v-model="showGraphPicker"
+          :active-graph-id="activeGraphId"
+          @select="onGraphPicked"
+          @graph-deleted="onGraphDeletedFromPicker"
+        />
+        <button v-if="auth.isAdmin" @click="newGraph" class="btn-primary btn-sm flex-shrink-0">{{ $t('logic.newGraphBtn') }}</button>
+        <button v-if="auth.isAdmin && activeGraphId" @click="saveGraph({ manual: true })" class="btn-secondary btn-sm flex-shrink-0" :disabled="saving || graphLoading" data-testid="btn-save">
           <Spinner v-if="saving" size="sm" color="white" />
           {{ $t('common.save') }}
         </button>
-        <button v-if="activeGraphId" @click="requestGraphRun"
-          :class="['btn-secondary btn-sm', activeGraph?.enabled ? 'text-green-400' : 'text-slate-500 opacity-50 cursor-not-allowed']"
+        <button v-if="activeGraphId" @click="requestGraphRun()"
+          :class="['btn-secondary btn-sm flex-shrink-0', activeGraph?.enabled ? 'text-green-400' : 'text-slate-500 opacity-50 cursor-not-allowed']"
           :disabled="!activeGraph?.enabled || runPreflightLoading"
           :title="activeGraph?.enabled ? $t('logic.runTitle') : $t('logic.runDisabledTitle')"
           data-testid="btn-run">
@@ -33,7 +35,7 @@
           {{ $t('logic.run') }}
         </button>
         <button v-if="auth.isAdmin && activeGraphId" @click="toggleDebug"
-          :class="['btn-secondary btn-sm', debugMode ? 'text-amber-400 ring-1 ring-amber-400/50' : 'text-slate-400']"
+          :class="['btn-secondary btn-sm flex-shrink-0', debugMode ? 'text-amber-400 ring-1 ring-amber-400/50' : 'text-slate-400']"
           :title="$t('logic.debugMode')" data-testid="btn-debug">
           <svg
             aria-hidden="true"
@@ -57,10 +59,10 @@
         <!-- Raster visibility is a purely local presentation preference and is
              therefore available without edit permissions (#1075); snapping and
              the grid size stay admin-only because they move blocks. -->
-        <div v-if="activeGraphId" class="flex items-center gap-1">
+        <div v-if="activeGraphId" class="flex items-center gap-1 flex-shrink-0">
           <button
             type="button"
-            :class="['btn-secondary btn-sm', gridVisible ? 'text-blue-400 ring-1 ring-blue-400/50' : 'text-slate-400']"
+            :class="['btn-secondary btn-sm flex-shrink-0', gridVisible ? 'text-blue-400 ring-1 ring-blue-400/50' : 'text-slate-400']"
             :title="gridVisible ? $t('logic.gridHideTitle') : $t('logic.gridShowTitle')"
             :aria-pressed="gridVisible ? 'true' : 'false'"
             data-testid="btn-grid-visible"
@@ -71,7 +73,7 @@
           <template v-if="auth.isAdmin">
             <button
               type="button"
-              :class="['btn-secondary btn-sm', snapToGrid ? 'text-blue-400 ring-1 ring-blue-400/50' : 'text-slate-400']"
+              :class="['btn-secondary btn-sm flex-shrink-0', snapToGrid ? 'text-blue-400 ring-1 ring-blue-400/50' : 'text-slate-400']"
               :title="$t('logic.snapToGridTitle')"
               :aria-pressed="snapToGrid ? 'true' : 'false'"
               data-testid="btn-snap-to-grid"
@@ -79,7 +81,7 @@
             >
               # {{ $t('logic.snapToGrid') }}
             </button>
-            <label v-if="snapToGrid || gridVisible" class="flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
+            <label v-if="snapToGrid || gridVisible" class="flex items-center gap-1 flex-shrink-0 text-xs text-slate-500 dark:text-slate-400">
               <span class="sr-only">{{ $t('logic.gridSize') }}</span>
               <input
                 :value="snapGridSize"
@@ -96,33 +98,33 @@
           </template>
         </div>
         <button v-if="auth.isAdmin && activeGraphId" @click="doToggleEnabled"
-          :class="['btn-secondary btn-sm', activeGraph?.enabled ? 'text-green-400' : 'text-orange-400 ring-1 ring-orange-400/50']"
+          :class="['btn-secondary btn-sm flex-shrink-0', activeGraph?.enabled ? 'text-green-400' : 'text-orange-400 ring-1 ring-orange-400/50']"
           :title="activeGraph?.enabled ? $t('logic.toggleActiveTitle') : $t('logic.toggleDisabledTitle')"
           data-testid="btn-toggle-enabled">
           {{ activeGraph?.enabled ? $t('logic.toggleActive') : $t('logic.toggleDisabled') }}
         </button>
-        <button v-if="auth.isAdmin && activeGraphId" @click="copySelection" class="btn-secondary btn-sm" :disabled="!hasSelection || graphLoading"
+        <button v-if="auth.isAdmin && activeGraphId" @click="copySelection" class="btn-secondary btn-sm flex-shrink-0" :disabled="!hasSelection || graphLoading"
           :title="$t('logic.copySelectionTitle')" data-testid="btn-copy-nodes">
           ⧉ {{ $t('logic.copySelection') }}
         </button>
-        <button v-if="auth.isAdmin && activeGraphId" @click="pasteClipboard" class="btn-secondary btn-sm" :disabled="!clipboard || graphLoading"
+        <button v-if="auth.isAdmin && activeGraphId" @click="pasteClipboard" class="btn-secondary btn-sm flex-shrink-0" :disabled="!clipboard || graphLoading"
           :title="$t('logic.pasteSelectionTitle')" data-testid="btn-paste-nodes">
           📋 {{ $t('logic.pasteSelection') }}
         </button>
-        <button v-if="auth.isAdmin && activeGraphId" @click="openRenameGraph" class="btn-secondary btn-sm" :title="$t('logic.renameGraph')" data-testid="btn-rename">
+        <button v-if="auth.isAdmin && activeGraphId" @click="openRenameGraph" class="btn-secondary btn-sm flex-shrink-0" :title="$t('logic.renameGraph')" data-testid="btn-rename">
           ✏ {{ $t('logic.rename') }}
         </button>
-        <button v-if="auth.isAdmin && activeGraphId" @click="doDuplicateGraph" class="btn-secondary btn-sm" :title="$t('logic.duplicateGraph')" data-testid="btn-duplicate">
+        <button v-if="auth.isAdmin && activeGraphId" @click="openDuplicate" class="btn-secondary btn-sm flex-shrink-0" :title="$t('logic.duplicateGraph')" data-testid="btn-duplicate">
           ⧉ {{ $t('logic.duplicate') }}
         </button>
-        <button v-if="activeGraphId" @click="doExportGraph" class="btn-secondary btn-sm" :title="$t('logic.exportJson')" data-testid="btn-export">
+        <button v-if="activeGraphId" @click="doExportGraph" class="btn-secondary btn-sm flex-shrink-0" :title="$t('logic.exportJson')" data-testid="btn-export">
           ↓ {{ $t('logic.export') }}
         </button>
-        <label v-if="auth.isAdmin" class="btn-secondary btn-sm cursor-pointer" :title="$t('logic.importJson')" data-testid="btn-import">
+        <label v-if="auth.isAdmin" class="btn-secondary btn-sm flex-shrink-0 cursor-pointer" :title="$t('logic.importJson')" data-testid="btn-import">
           ↑ {{ $t('logic.import') }}
           <input type="file" accept=".json" class="hidden" @change="onImportFile" data-testid="input-import-file" />
         </label>
-        <button v-if="auth.isAdmin && activeGraphId" @click="confirmDeleteGraph" class="btn-secondary btn-sm text-red-400" data-testid="btn-delete">
+        <button v-if="auth.isAdmin && activeGraphId" @click="confirmDeleteGraph" class="btn-secondary btn-sm flex-shrink-0 text-red-400" data-testid="btn-delete">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
           </svg>
@@ -164,15 +166,18 @@
           v-model:edges="edges"
           :node-types="nodeTypeComponents"
           :default-edge-options="defaultEdgeOptions"
-          :delete-key-code="auth.isAdmin ? ['Backspace', 'Delete'] : []"
-          :nodes-draggable="auth.isAdmin"
-          :nodes-connectable="auth.isAdmin"
-          :edges-updatable="auth.isAdmin"
+          :delete-key-code="canvasEditable ? ['Backspace', 'Delete'] : []"
+          :nodes-draggable="canvasEditable"
+          :nodes-connectable="canvasEditable"
+          :edges-updatable="canvasEditable"
           :snap-to-grid="snapToGrid"
           :snap-grid="snapGrid"
           fit-view-on-init
           class="logic-canvas"
           @connect="onConnect"
+          @edge-update="onEdgeUpdate"
+          @edges-change="onElementsChange"
+          @nodes-change="onNodesChange"
           @node-click="onNodeClick"
           @node-drag-start="onNodeDragStart"
           @node-drag="onNodeDrag"
@@ -220,12 +225,18 @@
         @set-override="setDebugOverride"
         @clear-override="clearDebugOverride"
         @clear-all="clearAllDebugOverrides"
+        :fire-disabled="firingTrigger || !activeGraph?.enabled"
+        :fire-disabled-hint="activeGraph?.enabled ? '' : $t('logic.runDisabledTitle')"
+        @fire-trigger="fireTrigger"
       />
     </div>
 
     <!-- New Graph Modal -->
-    <Modal v-model="showNewGraph" :title="$t('logic.newGraphModal')" max-width="sm">
-      <form @submit.prevent="doCreateGraph" class="flex flex-col gap-4">
+    <Modal v-model="showNewGraph" :title="$t('logic.newGraphModal')" max-width="6xl">
+      <template #header-actions>
+        <HelpButton help-id="logic-new-sheet" />
+      </template>
+      <form @submit.prevent="doCreateGraph" class="flex flex-col gap-4 min-h-[34rem]">
         <div class="form-group">
           <label class="label">{{ $t('logic.name') }}</label>
           <input v-model="newGraphName" type="text" class="input" required :placeholder="$t('logic.newGraphPlaceholder')" />
@@ -233,6 +244,11 @@
         <div class="form-group">
           <label class="label">{{ $t('logic.description') }} <span class="text-slate-600 font-normal">{{ $t('logic.optional') }}</span></label>
           <input v-model="newGraphDesc" type="text" class="input" />
+        </div>
+        <div class="form-group">
+          <label class="label">{{ $t('logic.hierarchyNodes') }} <span class="text-slate-600 font-normal">{{ $t('logic.optional') }}</span></label>
+          <HierarchyCombobox v-model="newGraphHierarchyNodes" include-tree-roots data-testid="new-graph-hierarchy" />
+          <p class="text-xs text-slate-500 mt-1">{{ $t('logic.hierarchyNodesHint') }}</p>
         </div>
         <div class="flex justify-end gap-3">
           <button type="button" @click="showNewGraph = false" class="btn-secondary">{{ $t('common.cancel') }}</button>
@@ -259,6 +275,20 @@
       </form>
     </Modal>
 
+    <!-- Duplicate Graph Modal -->
+    <Modal v-model="showDuplicate" :title="$t('logic.duplicateGraph')" max-width="sm">
+      <form @submit.prevent="doDuplicate" class="flex flex-col gap-4">
+        <div class="form-group">
+          <label class="label">{{ $t('logic.name') }}</label>
+          <input v-model="duplicateName" type="text" class="input" required autofocus data-testid="input-duplicate-name" />
+        </div>
+        <div class="flex justify-end gap-3">
+          <button type="button" @click="showDuplicate = false" class="btn-secondary" data-testid="btn-duplicate-cancel">{{ $t('common.cancel') }}</button>
+          <button type="submit" class="btn-primary" data-testid="btn-duplicate-confirm">{{ $t('logic.duplicate') }}</button>
+        </div>
+      </form>
+    </Modal>
+
     <ConfirmDialog v-model="showDeleteConfirm"
       :title="$t('logic.deleteGraph')"
       :message="$t('logic.deleteGraphConfirm')"
@@ -279,7 +309,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch, watchEffect, markRaw } from 'vue'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount, onUnmounted, watch, watchEffect, markRaw } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { VueFlow, useVueFlow, addEdge } from '@vue-flow/core'
@@ -295,14 +325,19 @@ import '@vue-flow/node-resizer/dist/style.css'
 import { useLogicStore }    from '@/stores/logic'
 import { useSettingsStore } from '@/stores/settings'
 import { useAuthStore }     from '@/stores/auth'
-import { logicApi }        from '@/api/client'
+import { logicApi, hierarchyApi } from '@/api/client'
 import { logicRunAuthzApi } from '@/api/logicAuthz'
 import { cloneSelectionForClipboard, remapClipboardForPaste } from '@/utils/logicClipboard'
 import { AUTH_TOKEN_REFRESHED_EVENT } from '@/utils/authEvents'
+import { extractorOutputLabels, extractorRowCount, retainPreviews } from '@/utils/logicExtractorOutputs'
+import { translateVariableErrors } from '@/utils/logicVariables'
 import NodePalette         from '@/components/logic/NodePalette.vue'
 import NodeConfigPanel     from '@/components/logic/NodeConfigPanel.vue'
 import ActionPreflightDialog from '@/components/authz/ActionPreflightDialog.vue'
 import Modal               from '@/components/ui/Modal.vue'
+import GraphPickerModal    from '@/components/logic/GraphPickerModal.vue'
+import HierarchyCombobox   from '@/components/ui/HierarchyCombobox.vue'
+import { parseHierarchyCompositeId } from '@/utils/hierarchyDisplay'
 import ConfirmDialog       from '@/components/ui/ConfirmDialog.vue'
 import Spinner             from '@/components/ui/Spinner.vue'
 import HelpButton          from '@/components/ui/HelpButton.vue'
@@ -313,9 +348,12 @@ import DatapointNode    from '@/components/logic/nodes/DatapointNode.vue'
 import PythonScriptNode from '@/components/logic/nodes/PythonScriptNode.vue'
 import MissingNode      from '@/components/logic/nodes/MissingNode.vue'
 import CommentNode      from '@/components/logic/nodes/CommentNode.vue'
+import { binaryStatsInputCount } from '@/utils/binaryStatsInputCount'
+import { provideCanvasEditable } from '@/components/logic/nodes/canvasEditable'
+import { hemsInputPorts } from '@/utils/logicHemsOutputs'
 
 // ── Store ──────────────────────────────────────────────────────────────────
-const { t }    = useI18n()
+const { t, locale } = useI18n()
 const route    = useRoute()
 const store    = useLogicStore()
 const settings = useSettingsStore()
@@ -417,7 +455,7 @@ const nodeTypeComponents = {
   // Comment (issue #1043)
   comment: _comment,
   // Logic
-  and: _generic, or: _generic, not: _generic, xor: _generic, gate: _generic, memory: _generic, merge: _generic,
+  and: _generic, or: _generic, not: _generic, xor: _generic, binary_stats: _generic, gate: _generic, memory: _generic, merge: _generic,
   change_filter: _generic, edge_detect: _generic,
   compare: _generic, hysteresis: _generic, decision: _generic, value_mapping: _generic,
   // Math
@@ -433,7 +471,9 @@ const nodeTypeComponents = {
   clamp: _generic, random_value: _generic, statistics: _generic, avg_multi: _generic,
   heating_circuit: _generic, min_max_tracker: _generic, consumption_counter: _generic,
   // Timer extended
-  operating_hours: _generic,
+  operating_hours: _generic, sensor_watchdog: _generic,
+  // HEMS
+  hems_surplus: _generic,
   // String
   string_concat: _generic, string_replace: _generic,
   // Notification
@@ -451,41 +491,26 @@ const nodeTypeComponents = {
 const activeGraphId = ref('')
 const activeGraph   = computed(() => store.graphs.find(g => g.id === activeGraphId.value))
 
-// Sized to the longest visible option text (in `ch` units) so the graph-name
-// select never shrinks below what's needed to show the selected name — a flex
-// item's default min-width:auto lets a <select> collapse to just its dropdown
-// arrow under space pressure otherwise, hiding the graph name entirely.
-const graphSelectEl = ref(null)
-let _measureCtx // lazily created, reused across computations
-// 1ch is only as wide as the "0" glyph — in a proportional font a shorter
-// but wide-glyph name (e.g. many uppercase letters, CJK) can need more
-// pixels than a longer narrow-glyph one, so plain text.length undercounts
-// it and clips the option text (Codex review on PR #1172). Measuring against
-// the select's own computed font gives the real rendered width instead.
-function measureTextPx(text, font) {
-  if (_measureCtx === undefined) {
-    _measureCtx = document.createElement('canvas').getContext('2d')
-  }
-  if (!_measureCtx) return null
-  _measureCtx.font = font
-  return _measureCtx.measureText(text).width
+// Ordner-Navigation statt Dropdown (#1217): das Popup meldet die gewählte
+// Logik über ein Event statt v-model auf activeGraphId, damit derselbe Weg
+// wie bei der bisherigen <select @change="loadGraph"> genommen wird — nur
+// der Auslöser ändert sich.
+const showGraphPicker = ref(false)
+async function onGraphPicked(graphId) {
+  // Save the outgoing sheet before anything switches; if that fails, stay.
+  if (!await leaveCanvas()) return
+  activeGraphId.value = graphId
+  await loadGraph()
 }
-
-const graphSelectWidthCh = computed(() => {
-  const texts = [
-    t('logic.selectGraph'),
-    ...store.graphs.map(g => g.name + (g.enabled ? '' : t('logic.graphDisabledSuffix'))),
-  ]
-  const el = graphSelectEl.value
-  const font = el ? getComputedStyle(el).font : ''
-  const chPx = font ? measureTextPx('0', font) : null
-  if (chPx) {
-    const widestPx = texts.reduce((max, text) => Math.max(max, measureTextPx(text, font)), 0)
-    return Math.min(Math.max(Math.ceil(widestPx / chPx), 12), 40)
-  }
-  const longest = texts.reduce((max, text) => Math.max(max, text.length), 0)
-  return Math.min(Math.max(longest, 12), 40)
-})
+// The picker's own "Löschen" (unassigned pseudo-folder) deletes the graph
+// itself — if that happened to be the one currently open here, close it too.
+function onGraphDeletedFromPicker(graphId) {
+  if (activeGraphId.value !== graphId) return
+  activeGraphId.value = ''
+  // While a switch to the deleted sheet loads, the canvas still holds the
+  // previous sheet — that one still exists, so its edit must be saved.
+  replaceCanvas('', [], [], { discard: _canvasGraphId === graphId })
+}
 
 // ── Edge options — animated only when graph is enabled ─────────────────────
 const defaultEdgeOptions = computed(() => {
@@ -527,18 +552,27 @@ const titleSpacerClass = computed(() => {
 
 const saving        = ref(false)
 const graphLoading  = ref(false)
+// Set while create/import/duplicate swap sheets after leaveCanvas() saved
+// the canvas: their server round trips happen before the swap.
+const sheetSwitching = ref(false)
+// Read-only while a sheet loads or is being swapped: the canvas still shows
+// the previous sheet, and an edit made now would either be dropped or
+// overwritten by the arriving content.
+const canvasEditable = computed(() => auth.isAdmin && !graphLoading.value && !sheetSwitching.value)
+provideCanvasEditable(canvasEditable)
 let _loadGraphRequestId = 0
 const statusMsg     = ref(null)
 const canvasWrapper = ref(null)
 
 let _statusTimer = null
-function showStatus(ok, text, ms = 3000) {
+// `kind: 'save'` marks a save's own result, which a later save may replace.
+function showStatus(ok, text, ms = 3000, kind = null) {
   // Without cancelling the previous timer, a quick Copy → Paste → Save
   // sequence leaves multiple independent timeouts running; the earliest one
   // (e.g. from Copy) can then null out a later, still-relevant status (e.g.
   // Save's result) almost immediately instead of after its own `ms`.
   clearTimeout(_statusTimer)
-  statusMsg.value = { ok, text }
+  statusMsg.value = kind ? { ok, text, kind } : { ok, text }
   _statusTimer = setTimeout(() => { statusMsg.value = null }, ms)
 }
 
@@ -558,6 +592,11 @@ function currentFlowData() {
   }
 }
 
+// Blocks whose output does not depend on their inputs within one run — mirrors
+// TICK_BOUNDARY_NODE_TYPES in obs/logic/graph_analysis.py: a feedback loop
+// through one of them is no cycle.
+const TICK_BOUNDARY_NODE_TYPES = new Set(['memory', 'timer_delay', 'timer_pulse'])
+
 function analyzeFlowWarnings(flowNodes, flowEdges) {
   const nodeMap = new Map(flowNodes.map(n => [n.id, n]))
   const inDegree = new Map(flowNodes.map(n => [n.id, 0]))
@@ -565,7 +604,7 @@ function analyzeFlowWarnings(flowNodes, flowEdges) {
 
   for (const edge of flowEdges) {
     if (!adj.has(edge.source) || !inDegree.has(edge.target)) continue
-    if (nodeMap.get(edge.target)?.type === 'memory') continue
+    if (TICK_BOUNDARY_NODE_TYPES.has(nodeMap.get(edge.target)?.type)) continue
     adj.get(edge.source).push(edge.target)
     inDegree.set(edge.target, inDegree.get(edge.target) + 1)
   }
@@ -681,24 +720,36 @@ function findCyclicNodeIds(adj, candidates) {
 }
 
 async function loadGraph() {
-  if (!activeGraphId.value) { nodes.value = []; edges.value = []; return }
+  if (!activeGraphId.value) { replaceCanvas(''); return }
   // Tag this request so overlapping sheet switches don't let an earlier
   // response's `finally` clear graphLoading (or apply its stale data) after a
   // newer request has already taken over.
   const requestId = ++_loadGraphRequestId
+  const graphId = activeGraphId.value
+  // A newer load took over, or the sheet was closed/replaced without one
+  // (delete, create) while this load was waiting.
+  const superseded = () => requestId !== _loadGraphRequestId || activeGraphId.value !== graphId
   graphLoading.value = true
+  // The config panel would keep editing a block of the outgoing canvas,
+  // whose edits the read-only load drops.
+  selectedNode.value = null
   try {
-    const { data } = await logicApi.getGraph(activeGraphId.value)
-    if (requestId !== _loadGraphRequestId) return
-    nodes.value = (data.flow_data.nodes || []).map(n => {
+    // Re-picking the open sheet: persist its edit first, or the GET returns
+    // the state before it. Saves of the sheet being loaded settle first.
+    const saved = await persistPendingChanges(graphId)
+    if (superseded()) return
+    // A save this view did not start (the previous instance's unmount flush)
+    // failed: its own error message went with it, so report it here.
+    if (!saved && _canvasGraphId !== graphId) showStatus(false, t('logic.errorSave'), 3000, 'save')
+    const { data } = await logicApi.getGraph(graphId)
+    if (superseded()) return
+    replaceCanvas(graphId, (data.flow_data.nodes || []).map(n => {
       // eslint-disable-next-line no-unused-vars
       const { _dbg, _dbg_title, ...nodeData } = n.data ?? {}
       return { ...n, position: n.position || { x: 100, y: 100 }, data: nodeData }
-    })
-    edges.value = data.flow_data.edges || []
-    selectedNode.value = null
+    }), data.flow_data.edges || [])
   } catch (err) {
-    if (requestId !== _loadGraphRequestId) return
+    if (superseded()) return
     // A failed load must not leave an editable (but never actually loaded)
     // sheet around: with only nodes/edges cleared, activeGraphId still
     // named this sheet and graphLoading still clears in `finally` below, so
@@ -706,39 +757,204 @@ async function loadGraph() {
     // the real, unrelated graph on the server with nothing. Revert the
     // selection entirely instead of presenting a stale or blank editor.
     activeGraphId.value = ''
-    nodes.value = []
-    edges.value = []
-    selectedNode.value = null
+    replaceCanvas('')
     showStatus(false, err.response?.data?.detail ?? t('logic.errorLoad'))
   } finally {
     if (requestId === _loadGraphRequestId) graphLoading.value = false
   }
 }
 
-async function saveGraph() {
-  if (!auth.isAdmin || !activeGraphId.value) return
+// ── Canvas ownership & unsaved edits ───────────────────────────────────────
+// `nodes`/`edges` always hold exactly one sheet's content, _canvasGraphId —
+// which lags behind activeGraphId while a sheet switch is loading, so edits
+// and saves in that window still belong to the sheet actually shown. Every
+// edit bumps _editRev; _sentRev and _savedRev record how far saves got. A
+// canvas replacement resets all three and bumps _canvasEpoch, so the late
+// result of a save for an earlier canvas cannot touch them.
+let _canvasGraphId = ''
+let _canvasEpoch = 0
+let _editRev = 0
+let _sentRev = 0
+let _savedRev = 0
+
+// Edits the server has not confirmed: pending, in flight, failed or refused.
+function hasUnsavedEdits() {
+  return !!_canvasGraphId && _editRev > _savedRev
+}
+
+// Edits no save is underway for: pending, failed or refused.
+function hasUnsentEdits() {
+  return !!_canvasGraphId && _editRev > _sentRev
+}
+
+// The only way to swap the canvas to another sheet's content (or clear it).
+// An unsent edit of the outgoing sheet is saved first, from the snapshot
+// saveGraph takes right now — unless that sheet is gone (`discard`).
+function replaceCanvas(graphId, flowNodes = [], flowEdges = [], { discard = false } = {}) {
+  clearTimeout(_autoSaveTimer)
+  if (!discard && hasUnsentEdits()) saveGraph()
+  _canvasGraphId = graphId
+  _canvasEpoch += 1
+  _editRev = 0
+  _sentRev = 0
+  _savedRev = 0
+  nodes.value = flowNodes
+  edges.value = flowEdges
+  // New content, not an edit — the content watcher must not count it, nor
+  // Vue Flow's own normalisation of it during the next ticks.
+  _persistedSignature = persistedSignature()
+  _contentSettling = true
+  const epoch = _canvasEpoch
+  nextTick().then(nextTick).then(() => {
+    if (epoch !== _canvasEpoch) return
+    _persistedSignature = persistedSignature()
+    _contentSettling = false
+  })
+  // The config panel would otherwise keep editing a block of the old canvas.
+  selectedNode.value = null
+}
+
+// Saves the canvas into the sheet it belongs to. Resolves to true when
+// saved, false when the save failed, and null when it was refused for good:
+// by the graph validation or by a 4xx from the server. A refused edit stays
+// unsaved but does not block run/export/duplicate — retrying cannot help, so
+// those act on the server's state as they did before auto-save.
+// Server answers that retrying the same payload cannot change; anything else
+// (5xx, network, 408/409/429) is a failure to retry.
+// A 401 only reaches here once the token refresh failed and the API client
+// is already redirecting to /login — prompting for a retry would block that.
+const PERMANENT_SAVE_REJECTIONS = new Set([400, 401, 403, 404, 413, 422])
+
+// `manual`: the Save button — its confirmation always shows, while an
+// auto-save's "saved" must not replace an error the user still has to read.
+async function saveGraph({ manual = false } = {}) {
+  const graphId = _canvasGraphId
+  if (!auth.isAdmin || !graphId) return false
+  // Any save carries the latest canvas, so a pending auto-save is redundant.
+  clearTimeout(_autoSaveTimer)
   const graphWarnings = analyzeFlowWarnings(nodes.value, edges.value)
   if (graphWarnings.length) {
+    // Always say that nothing was saved — an edit must never look saved.
+    // Only the Save button also marks the blocks: an auto-save overwriting
+    // the debug bands on every move of a legacy sheet's blocks would get in
+    // the way.
     const saveBlockedKey = hasDuplicateHandleWarning(graphWarnings) ? 'logic.graphValidationSaveBlockedDuplicateHandle' : 'logic.graphValidationSaveBlocked'
-    showStatus(false, t(saveBlockedKey, { count: warningCountForDisplay(graphWarnings) }), 6000)
-    applyDebugValues(Object.fromEntries(
-      graphWarnings.map(w => [w.node_id, {
-        __error__: t(w.code === 'duplicate_target_handle' ? 'logic.graphValidationNodeErrorDuplicateHandle' : 'logic.graphValidationNodeError'),
-        __diagnostic__: w.code,
-      }])
-    ))
-    return
+    showStatus(false, t(saveBlockedKey, { count: warningCountForDisplay(graphWarnings) }), 6000, 'save')
+    if (manual) {
+      applyDebugValues(Object.fromEntries(
+        graphWarnings.map(w => [w.node_id, {
+          __error__: t(w.code === 'duplicate_target_handle' ? 'logic.graphValidationNodeErrorDuplicateHandle' : 'logic.graphValidationNodeError'),
+          __diagnostic__: w.code,
+        }])
+      ))
+    }
+    // Refused for good: counts as sent, so neither a flush, a canvas swap
+    // nor the reload prompt keeps re-trying it.
+    _sentRev = Math.max(_sentRev, _editRev)
+    return null
   }
-  saving.value = true
-  try {
-    const graph = store.graphs.find(g => g.id === activeGraphId.value)
-    await store.saveGraph(activeGraphId.value, graph.name, graph.description, graph.enabled, currentFlowData())
-    showStatus(true, t('logic.saved'))
-  } catch (err) {
-    showStatus(false, err.response?.data?.detail ?? t('logic.errorSave'))
-  } finally {
-    saving.value = false
+  // Snapshot synchronously: by the time a queued save runs, the canvas may
+  // already show another sheet.
+  const flowData = currentFlowData()
+  const epoch = _canvasEpoch
+  const rev = _editRev
+  const sameCanvas = () => epoch === _canvasEpoch
+  _sentRev = rev
+  // Queued in the store, shared with the graph picker and with the next
+  // instance of this view: a remount must not load before this save lands.
+  return store.enqueueWrite(async () => {
+    saving.value = true
+    let result = false
+    try {
+      const graph = store.graphs.find(g => g.id === graphId)
+      if (graph) {
+        await store.saveGraph(graphId, graph.name, graph.description, graph.enabled, flowData)
+        if (sameCanvas()) _savedRev = Math.max(_savedRev, rev)
+        // An auto-save confirms itself only over nothing or an earlier
+        // save's result (clearing a past failure), never over other news.
+        if (manual || !statusMsg.value || statusMsg.value.kind === 'save') showStatus(true, t('logic.saved'), 3000, 'save')
+        result = true
+      } else {
+        // Deleted meanwhile (e.g. from the graph picker) — nothing to save
+        // into, ever, and nothing to report: the user deleted it.
+        result = null
+      }
+    } catch (err) {
+      showStatus(false, err.response?.data?.detail ?? t('logic.errorSave'), 3000, 'save')
+      if (PERMANENT_SAVE_REJECTIONS.has(err.response?.status)) result = null
+    } finally {
+      saving.value = false
+      // Failed (not refused): the edit counts as unsent again, so the next
+      // flush, the reload prompt and run/export/duplicate retry or guard
+      // it. A newer save already underway keeps its claim.
+      if (result === false && sameCanvas() && _sentRev === rev) _sentRev = _savedRev
+    }
+    return result
+  }, graphId)
+}
+
+// ── Auto-save ──────────────────────────────────────────────────────────────
+// Structural edits (block config, connections created/removed/re-wired,
+// blocks dropped/pasted/removed) are persisted after a short idle period,
+// so a burst of edits costs one PUT.
+const AUTO_SAVE_DELAY_MS = 500
+let _autoSaveTimer = null
+
+function scheduleAutoSave(signature = persistedSignature()) {
+  if (!auth.isAdmin || !_canvasGraphId) return
+  // Counted here — the content watcher must not count (and re-debounce) the
+  // same change again when it runs.
+  _persistedSignature = signature
+  _editRev += 1
+  clearTimeout(_autoSaveTimer)
+  _autoSaveTimer = setTimeout(saveGraph, AUTO_SAVE_DELAY_MS)
+}
+
+// Every change to what a save would persist counts as an edit, wherever it
+// comes from: edits on the block cards themselves (inline rename, negation
+// toggle, comment resize — Vue Flow's updateNodeData emits no change event)
+// and moved blocks included. The handlers above still schedule directly, so
+// a run/export right after them already sees the edit synchronously.
+let _persistedSignature = ''
+function persistedSignature() {
+  return JSON.stringify(currentFlowData())
+}
+// Right after a canvas swap, Vue Flow normalises the new content itself
+// (snapping positions to the grid, dropping edges to missing blocks); that is
+// not a user edit and must not be saved. The baseline is taken once it is
+// done.
+let _contentSettling = false
+watch(persistedSignature, (signature) => {
+  if (!_contentSettling && signature !== _persistedSignature) scheduleAutoSave(signature)
+})
+
+// Saves an unsent edit right away instead of waiting for the debounce.
+function flushUnsentEdits() {
+  if (hasUnsentEdits()) saveGraph()
+}
+
+// Saves the canvas before it is left (another sheet, a new or imported
+// sheet). Resolves to false when that save failed — the caller then stays,
+// because switching would discard the edit with nothing left to retry it
+// from. Edits made while the save was in flight are saved too; a refused
+// edit can never be saved and does not hold the switch up.
+async function leaveCanvas() {
+  while (hasUnsavedEdits()) {
+    const rev = _editRev
+    if (!await persistPendingChanges(_canvasGraphId)) return false
+    if (_editRev === rev) break
   }
+  return true
+}
+
+// Actions that read the sheet back from the server (run, export, duplicate,
+// reload) must see the last edit, not the state before the debounce elapsed.
+// Resolves to false when that edit failed to save, so the caller stops
+// instead of acting on the server's older state.
+async function persistPendingChanges(graphId) {
+  if (_canvasGraphId === graphId) flushUnsentEdits()
+  // The flushed save queues behind any earlier one, so it settles last.
+  return (await store.pendingSave(graphId)) !== false
 }
 
 // ── Node selection & config ────────────────────────────────────────────────
@@ -755,7 +971,7 @@ const lastRunDebugOutputs = ref({})
 let debugStateGeneration = 0
 const DEBUG_TOOLTIP_MAX_CHARS = 1000
 
-function fmtDebugVal(nodeOut, { full = false, maxChars = null } = {}) {
+function fmtDebugVal(nodeOut, { full = false, maxChars = null, portLabels = {} } = {}) {
   if (!nodeOut || typeof nodeOut !== 'object') return null
 
   function maybeClip(text) {
@@ -777,7 +993,7 @@ function fmtDebugVal(nodeOut, { full = false, maxChars = null } = {}) {
     return text.length <= limit ? text : `${text.slice(0, limit)}…`
   }
 
-  if ('__error__' in nodeOut) return `${t('logic.nodeError')}: ${clipped(nodeOut.__error__, 50)}`
+  if ('__error__' in nodeOut) return `${t('logic.nodeError')}: ${clipped(translateVariableErrors(nodeOut.__error__, t), 50)}`
   if ('_message' in nodeOut) {
     const message = nodeOut._message !== null && nodeOut._message !== undefined
       ? `"${String(nodeOut._message).slice(0, 24)}"`
@@ -790,10 +1006,14 @@ function fmtDebugVal(nodeOut, { full = false, maxChars = null } = {}) {
   if ('response' in nodeOut && 'status' in nodeOut && 'success' in nodeOut) {
     return `response=${clipped(nodeOut.response, 80)}   status=${fv(nodeOut.status)}   success=${fv(nodeOut.success)}`
   }
+  // Configured output names are free text — keep the band compact and the
+  // tooltip within its cap regardless of how long a user made them.
   const pairs = Object.entries(nodeOut)
     .filter(([key]) => !key.startsWith('_'))
-    .map(([key, value]) => `${key}=${fv(value)}`)
-  return pairs.length ? pairs.join('   ') : null
+    .map(([key, value]) => `${clipped(portLabels[key] ?? key, 24)}=${fv(value)}`)
+  if (!pairs.length) return null
+  const line = pairs.join('   ')
+  return full ? maybeClip(line) : line
 }
 
 // Last run outputs — always kept (not just in debug mode) so that
@@ -805,28 +1025,61 @@ const runPreflightError = ref('')
 const runPreflightItems = ref([])
 const preflightApproved = ref(false)
 const preflightGraphId = ref('')
+// Trigger blocks the run awaiting the preflight dialog fires (issue #1276) —
+// a snapshot like preflightGraphId, so another run request cannot change it.
+const preflightFireTriggers = ref([])
+// A "fire now" in flight: the button stays locked so a double click cannot
+// run the sheet — and its side effects — twice.
+const firingTrigger = ref(false)
 let preflightRequestId = 0
 
+// Extractor blocks keep the last received payload (`_preview`) across runs
+// that carry none, so their path picker survives an untriggered re-execution
+// (issue #1104).
+function setLastRunOutputs(outputs) {
+  lastRunOutputs.value = retainPreviews(lastRunOutputs.value, outputs)
+}
+
+// Outputs the canvas debug bands were last rendered from — the band text is
+// baked into node.data, so a locale change re-renders it from here.
+let _debugBandOutputs = null
+
 function applyDebugValues(outputs, captureDebugOutputs = debugMode.value) {
-  lastRunOutputs.value = outputs
+  setLastRunOutputs(outputs)
   if (captureDebugOutputs) lastRunDebugOutputs.value = outputs
-  nodes.value = nodes.value.map(node => ({
-    ...node,
-    data: {
-      ...node.data,
-      _dbg: fmtDebugVal(outputs[node.id]) ?? undefined,
-      _dbg_title: fmtDebugVal(outputs[node.id], { full: true, maxChars: DEBUG_TOOLTIP_MAX_CHARS }) ?? undefined,
-    },
-  }))
+  _debugBandOutputs = outputs
+  renderDebugBands(outputs)
+}
+
+function renderDebugBands(outputs) {
+  nodes.value = nodes.value.map(node => {
+    // Debug band shows the configured output names, not `out_N` (issue #1104)
+    const portLabels = extractorOutputLabels(node, t)
+    return {
+      ...node,
+      data: {
+        ...node.data,
+        _dbg: fmtDebugVal(outputs[node.id], { portLabels }) ?? undefined,
+        _dbg_title: fmtDebugVal(outputs[node.id], { full: true, maxChars: DEBUG_TOOLTIP_MAX_CHARS, portLabels }) ?? undefined,
+      },
+    }
+  })
 }
 
 function clearDebugValues() {
+  _debugBandOutputs = null
   nodes.value = nodes.value.map(node => {
     // eslint-disable-next-line no-unused-vars
     const { _dbg, _dbg_title, ...data } = node.data
     return { ...node, data }
   })
 }
+
+// Translated parts of the band (fallback output names, error texts) follow
+// the active locale without waiting for the next execution.
+watch(locale, () => {
+  if (_debugBandOutputs) renderDebugBands(_debugBandOutputs)
+})
 
 function countGraphDiagnostics(outputs) {
   return Object.values(outputs || {}).filter(out =>
@@ -875,28 +1128,36 @@ function normalizeRunPreflight(data) {
   }))
 }
 
-async function runApprovedGraph(graphId) {
+async function runApprovedGraph(graphId, fireTriggers = []) {
   preflightApproved.value = true
   try {
-    await runGraph(graphId)
+    await runGraph(graphId, fireTriggers)
   } finally {
     preflightApproved.value = false
     preflightGraphId.value = ''
+    preflightFireTriggers.value = []
   }
 }
 
-async function requestGraphRun() {
+// fireTriggers: Trigger blocks this run fires like a cron tick (issue #1276).
+// The debug pane's "fire now" takes the same save + preflight path as the
+// run button; the plain run button never fires one.
+async function requestGraphRun(fireTriggers = []) {
   if (!activeGraphId.value || !activeGraph.value?.enabled) return
   const graphId = activeGraphId.value
+  // Bail out if the sheet was switched while the save was in flight.
+  if (!await persistPendingChanges(graphId) || activeGraphId.value !== graphId) return
   const requestId = ++preflightRequestId
   runPreflightLoading.value = true
   runPreflightError.value = ''
   runPreflightItems.value = []
   preflightGraphId.value = ''
+  preflightFireTriggers.value = []
   try {
     const { data } = await logicRunAuthzApi.preflight(graphId)
     if (requestId !== preflightRequestId || activeGraphId.value !== graphId || data.graph_id !== graphId) return
     preflightGraphId.value = graphId
+    preflightFireTriggers.value = fireTriggers
     const items = normalizeRunPreflight(data)
     runPreflightItems.value = items
     // Only interrupt with the confirmation dialog when a check is actually
@@ -904,7 +1165,7 @@ async function requestGraphRun() {
     // grant restrictions) proceeds immediately without the popup.
     if (items.every(item => item.allowed !== false)) {
       runPreflightLoading.value = false
-      await runApprovedGraph(graphId)
+      await runApprovedGraph(graphId, fireTriggers)
       return
     }
     showRunPreflight.value = true
@@ -921,7 +1182,17 @@ async function confirmGraphRun() {
   const graphId = preflightGraphId.value
   if (!graphId || activeGraphId.value !== graphId || runPreflightItems.value.some(item => !item.allowed)) return
   showRunPreflight.value = false
-  await runApprovedGraph(graphId)
+  await runApprovedGraph(graphId, preflightFireTriggers.value)
+}
+
+async function fireTrigger(nodeId) {
+  if (firingTrigger.value) return
+  firingTrigger.value = true
+  try {
+    await requestGraphRun([nodeId])
+  } finally {
+    firingTrigger.value = false
+  }
 }
 
 function parseOverride(text) {
@@ -943,11 +1214,17 @@ const hasDebugOverrides = computed(() => Object.values(debugOverrides.value).som
 
 const debugInputs = computed(() => {
   if (!selectedNode.value) return []
+  // A Trigger fires through "fire now" only (issue #1276): its fired level is
+  // captured as an input, but an override of it would make every plain run fire.
+  if (selectedNode.value.type === 'timer_cron') return []
   const definition = store.nodeTypes.find(type => type.type === selectedNode.value.type)
   let ports = definition?.inputs || []
   const count = Number(selectedNode.value.data?.input_count) || 2
-  if (['and', 'or', 'xor'].includes(selectedNode.value.type)) {
-    ports = Array.from({ length: Math.max(2, Math.min(30, count)) }, (_, i) => ({ id: `in${i + 1}`, label: `${i + 1}` }))
+  if (['and', 'or', 'xor', 'binary_stats'].includes(selectedNode.value.type)) {
+    const gateCount = selectedNode.value.type === 'binary_stats'
+      ? binaryStatsInputCount(selectedNode.value.data?.input_count)
+      : Math.max(2, Math.min(30, count))
+    ports = Array.from({ length: gateCount }, (_, i) => ({ id: `in${i + 1}`, label: `${i + 1}` }))
   } else if (selectedNode.value.type === 'avg_multi') {
     ports = Array.from({ length: Math.max(2, Math.min(20, count)) }, (_, i) => ({ id: `in_${i + 1}`, label: `${i + 1}` }))
   } else if (selectedNode.value.type === 'string_concat') {
@@ -955,6 +1232,8 @@ const debugInputs = computed(() => {
     ports = Array.from({ length: Math.max(2, Math.min(20, stringCount)) }, (_, i) => ({ id: `in_${i + 1}`, label: `${i + 1}` }))
   } else if (selectedNode.value.type === 'python_script') {
     ports = ['a', 'b', 'c'].map(id => ({ id, label: id }))
+  } else if (selectedNode.value.type === 'hems_surplus') {
+    ports = hemsInputPorts(selectedNode.value.data, t)
   }
   const known = new Set(ports.map(port => port.id))
   for (const edge of edges.value.filter(item => item.target === selectedNode.value.id)) {
@@ -991,7 +1270,7 @@ const debugInputs = computed(() => {
   })
 })
 
-async function runGraph(graphId = activeGraphId.value) {
+async function runGraph(graphId = activeGraphId.value, fireTriggers = []) {
   if ((!auth.isAdmin && !preflightApproved.value) || !graphId) return
   const requestGraphId = graphId
   const requestDebugGeneration = debugStateGeneration
@@ -1001,8 +1280,12 @@ async function runGraph(graphId = activeGraphId.value) {
       nodeId,
       Object.fromEntries(Object.entries(values).map(([port, value]) => [port, parseOverride(value)])),
     ]).filter(([, values]) => Object.keys(values).length))
-    const { data } = requestedDebugState || Object.keys(parsedOverrides).length
-      ? await logicApi.runGraph(requestGraphId, { debug: requestedDebugState, input_overrides: parsedOverrides })
+    const { data } = requestedDebugState || Object.keys(parsedOverrides).length || fireTriggers.length
+      ? await logicApi.runGraph(requestGraphId, {
+        debug: requestedDebugState,
+        input_overrides: parsedOverrides,
+        ...(fireTriggers.length ? { fire_triggers: fireTriggers } : {}),
+      })
       : await logicApi.runGraph(requestGraphId)
     if (activeGraphId.value !== requestGraphId) return
     const outputs = data.outputs || {}
@@ -1023,7 +1306,7 @@ async function runGraph(graphId = activeGraphId.value) {
     // Always update lastRunOutputs (needed for extractor config panels)
     if (debugMode.value || diagnosticCount > 0) applyDebugValues(outputs, acceptsDebugResponse)
     else {
-      lastRunOutputs.value = outputs
+      setLastRunOutputs(outputs)
       clearDebugValues()
     }
     if (acceptsDebugResponse) {
@@ -1041,32 +1324,54 @@ watch(activeGraphId, () => {
   runPreflightLoading.value = false
   runPreflightItems.value = []
   preflightGraphId.value = ''
+  preflightFireTriggers.value = []
 })
 
 // ── New graph ──────────────────────────────────────────────────────────────
 const showNewGraph  = ref(false)
 const newGraphName  = ref('')
 const newGraphDesc  = ref('')
+const newGraphHierarchyNodes = ref([]) // composite "tree_id:node_id" strings — optional, unassigned when empty
 
 function newGraph() {
   if (!auth.isAdmin) return
   newGraphName.value = ''
   newGraphDesc.value = ''
+  newGraphHierarchyNodes.value = []
   showNewGraph.value = true
 }
 async function doCreateGraph() {
   if (!auth.isAdmin) return
-  const g = await store.createGraph(newGraphName.value, newGraphDesc.value)
-  showNewGraph.value = false
-  activeGraphId.value = g.id
-  nodes.value = []; edges.value = []
+  if (!await leaveCanvas()) return
+  sheetSwitching.value = true
+  try {
+    const g = await store.createGraph(newGraphName.value, newGraphDesc.value)
+    // Optional: link the new graph into the picked hierarchy node(s) right away —
+    // matches the many-to-many model #1217 already established (0, 1 or several
+    // nodes). Best-effort: a link failure must not block the graph having been
+    // created, it would just stay reachable via "Nicht zugeordnet" instead.
+    await Promise.all(
+      newGraphHierarchyNodes.value.map((compositeId) => {
+        const parsed = parseHierarchyCompositeId(compositeId)
+        if (!parsed) return null
+        return hierarchyApi.createLogicGraphLink({ node_id: parsed.node_id, graph_id: g.id }).catch(() => {})
+      }),
+    )
+    showNewGraph.value = false
+    activeGraphId.value = g.id
+    replaceCanvas(g.id)
+  } finally {
+    sheetSwitching.value = false
+  }
 }
 
 // ── Toggle enabled ─────────────────────────────────────────────────────────
 async function doToggleEnabled() {
   if (!auth.isAdmin || !activeGraphId.value) return
   try {
-    const updated = await store.toggleEnabled(activeGraphId.value)
+    // Captured now: the queued task may run after the user switched sheets.
+    const graphId = activeGraphId.value
+    const updated = await store.enqueueWrite(() => store.toggleEnabled(graphId))
     showStatus(true, updated.enabled ? t('logic.activated') : t('logic.deactivated'))
   } catch (err) {
     showStatus(false, err.response?.data?.detail ?? t('logic.errorToggle'))
@@ -1081,30 +1386,58 @@ function confirmDeleteGraph() {
 }
 async function doDeleteGraph() {
   if (!auth.isAdmin || !activeGraphId.value) return
-  await store.deleteGraph(activeGraphId.value)
+  const graphId = activeGraphId.value
+  // Persist a pending edit first: should the delete fail, the sheet stays
+  // and so must its edit. Every queued write (save, toggle, rename) has to
+  // land before the DELETE, or it fails afterwards with a spurious error.
+  await persistPendingChanges(graphId)
+  await store.enqueueWrite(() => store.deleteGraph(graphId))
+  // The user may have opened another sheet meanwhile — leave that one open.
+  if (activeGraphId.value !== graphId) return
   activeGraphId.value = ''
-  nodes.value = []; edges.value = []
+  replaceCanvas('', [], [], { discard: _canvasGraphId === graphId })
 }
 
 // ── Duplizieren ────────────────────────────────────────────────────────────
-async function doDuplicateGraph() {
+const showDuplicate = ref(false)
+const duplicateName = ref('')
+
+function openDuplicate() {
   if (!auth.isAdmin || !activeGraphId.value) return
+  const g = store.graphs.find(g => g.id === activeGraphId.value)
+  duplicateName.value = `${g?.name ?? ''}${t('logic.duplicateNameSuffix')}`
+  showDuplicate.value = true
+}
+
+async function doDuplicate() {
+  if (!auth.isAdmin || !activeGraphId.value || !duplicateName.value.trim()) return
+  const graphId = activeGraphId.value
+  const name = duplicateName.value.trim()
   try {
-    const copy = await store.duplicateGraph(activeGraphId.value)
+    // Persists the canvas, and waits for any save of the source sheet still
+    // queued (e.g. from a just-unmounted editor), before it is copied.
+    if (!await leaveCanvas() || !await persistPendingChanges(graphId)) return
+    sheetSwitching.value = true
+    const copy = await store.duplicateGraph(graphId, name)
+    showDuplicate.value = false
     activeGraphId.value = copy.id
     await loadGraph()
     showStatus(true, t('logic.duplicated', { name: copy.name }))
   } catch (err) {
     showStatus(false, err.response?.data?.detail ?? t('logic.errorDuplicate'))
+  } finally {
+    sheetSwitching.value = false
   }
 }
 
 // ── Exportieren (programmatisch mit Auth-Header) ───────────────────────────
 async function doExportGraph() {
   if (!activeGraphId.value) return
+  const graphId = activeGraphId.value
   try {
-    const { data } = await logicApi.exportGraph(activeGraphId.value)
-    const g = store.graphs.find(g => g.id === activeGraphId.value)
+    if (!await persistPendingChanges(graphId)) return
+    const { data } = await logicApi.exportGraph(graphId)
+    const g = store.graphs.find(g => g.id === graphId)
     const filename = g ? `${g.name.replace(/ /g, '_')}.json` : 'logic_graph.json'
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
     const url  = URL.createObjectURL(blob)
@@ -1134,7 +1467,11 @@ function openRenameGraph() {
 async function doRenameGraph() {
   if (!auth.isAdmin || !activeGraphId.value || !renameGraphName.value.trim()) return
   try {
-    await store.renameGraph(activeGraphId.value, renameGraphName.value.trim(), renameGraphDesc.value)
+    // Captured now: the queued task may run after the user switched sheets.
+    const graphId = activeGraphId.value
+    const name = renameGraphName.value.trim()
+    const description = renameGraphDesc.value
+    await store.enqueueWrite(() => store.renameGraph(graphId, name, description))
     showRenameGraph.value = false
     showStatus(true, t('logic.renamed'))
   } catch (err) {
@@ -1152,6 +1489,8 @@ async function onImportFile(event) {
     const text = await file.text()
     const payload = JSON.parse(text)
     const namesBefore = new Set(store.graphs.map(g => g.name))
+    if (!await leaveCanvas()) return
+    sheetSwitching.value = true
     const imported = await store.importGraph(payload)
     activeGraphId.value = imported.id
     await loadGraph()
@@ -1166,19 +1505,14 @@ async function onImportFile(event) {
     }
   } catch (err) {
     showStatus(false, err?.response?.data?.detail ?? t('logic.errorImport'))
+  } finally {
+    sheetSwitching.value = false
   }
 }
 
-// ── Connect handler — REQUIRED to actually create edges ────────────────────
-function onConnect(params) {
-  if (!auth.isAdmin) return
-  const opts = defaultEdgeOptions.value
-  const nextEdges = addEdge({
-    ...params,
-    type: opts.type,
-    animated: opts.animated,
-    style: opts.style,
-  }, edges.value)
+// Rejects edge sets the graph validation refuses and reports why; only an
+// accepted set reaches the canvas and the auto-save.
+function applyValidatedEdges(nextEdges) {
   const graphWarnings = analyzeFlowWarnings(nodes.value, nextEdges)
   if (graphWarnings.length) {
     const connectBlockedKey = hasDuplicateHandleWarning(graphWarnings) ? 'logic.graphValidationConnectBlockedDuplicateHandle' : 'logic.graphValidationConnectBlocked'
@@ -1186,11 +1520,78 @@ function onConnect(params) {
     return
   }
   edges.value = nextEdges
+  scheduleAutoSave()
+}
+
+// ── Connect handler — REQUIRED to actually create edges ────────────────────
+function onConnect(params) {
+  if (!canvasEditable.value) return
+  if (edges.value.some(e => sameConnection(e, params))) return
+  const opts = defaultEdgeOptions.value
+  // addEdge pushes into the array it is given — hand it a copy, or a
+  // connection the validation then rejects would already sit in `edges`.
+  applyValidatedEdges(addEdge({
+    ...params,
+    type: opts.type,
+    animated: opts.animated,
+    style: opts.style,
+  }, [...edges.value]))
+}
+
+// A handle stored as `undefined` (dropped from JSON), '' and Vue Flow's
+// `null` for "no handle" name the same port — as in Vue Flow's own
+// duplicate check.
+function sameConnection(a, b) {
+  return a.source === b.source && a.target === b.target
+    && (a.sourceHandle || null) === (b.sourceHandle || null)
+    && (a.targetHandle || null) === (b.targetHandle || null)
+}
+
+// ── Re-wire an existing edge by dragging one of its ends ───────────────────
+// Vue Flow only reports the drop; without this handler the edge snaps back.
+function onEdgeUpdate({ edge, connection }) {
+  if (!canvasEditable.value) return
+  if (!connection?.source || !connection?.target) return
+  // Dropped back onto the same handles — nothing changed, nothing to save.
+  if (sameConnection(edge, connection)) return
+  applyValidatedEdges(edges.value.map(e => e.id === edge.id
+    ? {
+        ...e,
+        // Same id scheme as Vue Flow's own updateEdge: an id still naming the
+        // old connection would collide once that connection is drawn again.
+        id: `vueflow__edge-${connection.source}${connection.sourceHandle ?? ''}-${connection.target}${connection.targetHandle ?? ''}`,
+        source: connection.source,
+        target: connection.target,
+        sourceHandle: connection.sourceHandle,
+        targetHandle: connection.targetHandle,
+      }
+    : e))
+}
+
+// Vue Flow applies removals itself (Delete key, or removing a block together
+// with its edges); only the persistence is left to do here. Selection and
+// drag changes arrive through the same events and must not trigger a save.
+function onElementsChange(changes) {
+  if (changes.some(change => change.type === 'remove')) scheduleAutoSave()
+}
+
+// The properties panel works on its own copy of the selected block, so it
+// would stay open for a deleted block and its edits would go nowhere while
+// still triggering a save. Debug overrides of deleted blocks go too (#1159).
+function onNodesChange(changes) {
+  const removedIds = new Set(changes.filter(change => change.type === 'remove').map(change => change.id))
+  if (removedIds.size) {
+    if (removedIds.has(selectedNode.value?.id)) selectedNode.value = null
+    if (Object.keys(debugOverrides.value).some(id => removedIds.has(id))) {
+      debugOverrides.value = Object.fromEntries(Object.entries(debugOverrides.value).filter(([id]) => !removedIds.has(id)))
+    }
+  }
+  onElementsChange(changes)
 }
 
 // ── Drop node from palette ─────────────────────────────────────────────────
 function onDrop(event) {
-  if (!auth.isAdmin) return
+  if (!canvasEditable.value) return
   const type = event.dataTransfer.getData('application/vueflow-node-type')
   if (!type || !activeGraphId.value) return
 
@@ -1214,11 +1615,14 @@ function onDrop(event) {
     },
   }
   nodes.value = [...nodes.value, newNode]
+  scheduleAutoSave()
 }
 
 // ── Node selection ─────────────────────────────────────────────────────────
 function onNodeClick({ node }) {
-  if (!auth.isAdmin) return
+  // During a load the panel would edit a block of the outgoing canvas,
+  // whose edits the read-only canvas drops.
+  if (!canvasEditable.value) return
   selectedNode.value = { ...node }
 }
 
@@ -1266,7 +1670,7 @@ function pasteClipboard() {
   // graphLoading guards against a slow getGraph() from an earlier sheet
   // switch resolving after this paste and overwriting nodes/edges with the
   // just-loaded (pre-paste) sheet, silently dropping the pasted blocks.
-  if (!auth.isAdmin || !clipboard.value || !activeGraphId.value || graphLoading.value) return
+  if (!canvasEditable.value || !clipboard.value || !activeGraphId.value) return
   // Anchor the pasted group at the center of the currently visible canvas
   // (converted to flow coordinates, same technique as onDrop) only when
   // pasting into a *different* sheet than the one it was copied from —
@@ -1296,6 +1700,7 @@ function pasteClipboard() {
   // would silently update the wrong node instead of the pasted selection.
   selectedNode.value = null
   showStatus(true, t('logic.pastedNodes', { count: pasted.nodes.length }))
+  scheduleAutoSave()
 }
 
 function _isEditableTarget(el) {
@@ -1319,16 +1724,33 @@ function _onClipboardKeydown(event) {
   }
 }
 
-let _autoSaveTimer = null
 function onNodeDataUpdate(newData) {
-  if (!auth.isAdmin || !selectedNode.value) return
+  if (!canvasEditable.value || !selectedNode.value) return
+  const rowsBefore = extractorRowCount(selectedNode.value)
   nodes.value = nodes.value.map(n =>
     n.id === selectedNode.value.id ? { ...n, data: { ...n.data, ...newData } } : n
   )
   selectedNode.value = { ...selectedNode.value, data: { ...selectedNode.value.data, ...newData } }
-  // Auto-save after 500 ms idle
-  clearTimeout(_autoSaveTimer)
-  _autoSaveTimer = setTimeout(() => saveGraph(), 500)
+  // Configured output names feed the debug band text — re-render it so a
+  // renamed extractor output shows up without another execution. Adding or
+  // removing a row shifts the out_N numbering, so the cached per-port
+  // values would be shown under the wrong names: drop that block's band
+  // until the next execution delivers values for the new layout.
+  if (extractorRowCount(selectedNode.value) !== rowsBefore) {
+    const id = selectedNode.value.id
+    if (_debugBandOutputs) {
+      const { [id]: _staleBand, ...rest } = _debugBandOutputs
+      _debugBandOutputs = rest
+    }
+    // The Debug values tab reads the same per-port values — they would be
+    // listed under the shifted row names just as wrongly.
+    if (id in lastRunDebugOutputs.value) {
+      const { [id]: _staleInspector, ...rest } = lastRunDebugOutputs.value
+      lastRunDebugOutputs.value = rest
+    }
+  }
+  if (_debugBandOutputs) renderDebugBands(_debugBandOutputs)
+  scheduleAutoSave()
 }
 
 // ── WebSocket — live debug updates ────────────────────────────────────────
@@ -1413,6 +1835,7 @@ watch(activeGraphId, (id, previousId) => {
     lastRunInputs.value = {}
     lastRunDebugOutputs.value = {}
     lastRunMetadata.value = null
+    _debugBandOutputs = null
   }
   if (id) localStorage.setItem('logic_active_graph', id)
   else localStorage.removeItem('logic_active_graph')
@@ -1421,6 +1844,7 @@ watch(activeGraphId, (id, previousId) => {
 // ── Init ───────────────────────────────────────────────────────────────────
 onMounted(async () => {
   window.addEventListener('keydown', _onClipboardKeydown)
+  window.addEventListener('beforeunload', _onBeforeUnload)
   window.addEventListener(AUTH_TOKEN_REFRESHED_EVENT, _wsReconnectAfterTokenRefresh)
   await store.fetchNodeTypes()
   await store.fetchGraphs()
@@ -1435,9 +1859,27 @@ onMounted(async () => {
   }
 })
 
+onBeforeUnmount(() => {
+  // Leaving the editor within the debounce window must not drop the edit.
+  flushUnsentEdits()
+})
+
+// A reload or tab close never unmounts the view: start the pending save and
+// ask the browser to confirm, which gives that save time to complete. A save
+// already queued counts as underway and is not prompted for; behind a slow
+// earlier save it may still be cut off by the unload. A save
+// already sent is left alone — prompting for it would also block the API
+// client's forced redirect to /login when that very save got a 401.
+function _onBeforeUnload(event) {
+  if (!hasUnsentEdits()) return
+  flushUnsentEdits()
+  event.preventDefault()
+  event.returnValue = ''
+}
 onUnmounted(() => {
   _wsDisconnect()
   window.removeEventListener('keydown', _onClipboardKeydown)
+  window.removeEventListener('beforeunload', _onBeforeUnload)
   window.removeEventListener(AUTH_TOKEN_REFRESHED_EVENT, _wsReconnectAfterTokenRefresh)
   window.removeEventListener('mousemove', _onMinimapMouseMove, { capture: true })
   window.removeEventListener('mouseup',   _onMinimapMouseUp,   { capture: true })

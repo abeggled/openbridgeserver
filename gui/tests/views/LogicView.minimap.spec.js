@@ -57,7 +57,7 @@ afterEach(() => {
 async function mountView(storageOverrides = {}) {
   overrideStorage(makeStorage(storageOverrides))
 
-  vi.doMock('vue-router', () => ({ useRoute: () => ({ query: {} }) }))
+  vi.doMock('vue-router', () => ({ useRoute: () => ({ query: {} }), useRouter: () => ({ push: vi.fn() }) }))
   vi.doMock('@/api/client', () => ({
     logicApi: {
       nodeTypes:   vi.fn().mockResolvedValue({ data: [] }),

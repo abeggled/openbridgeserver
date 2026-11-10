@@ -31,14 +31,16 @@ from obs.api.auth import Principal, get_current_principal, get_current_user
 from obs.api.authz import AuthzAction, AuthzDecision, AuthzTarget, RoleGrant, authorize
 from obs.api.authz_service import filter_authorized_datapoints, load_role_grants, resolve_datapoint_targets
 from obs.api.v1.application_audit import audit_application_contract, mark_contract_audited, write_application_success
+from obs.api.v1.content_disposition import attachment_header
 from obs.db.database import Database, get_db
 from obs.logic.capabilities import LOGIC_CREATE_CAPABILITY
-from obs.logic.graph_analysis import topology_warnings
-from obs.logic.manager import _migrate_legacy_api_client_field_names, _normalise_api_client_variables
+from obs.logic.graph_analysis import config_schema_warnings, topology_warnings
+from obs.logic.manager import InvalidFireTriggerError, _migrate_legacy_node_data, _normalise_api_client_variables
 from obs.logic.models import (
     FlowData,
     LogicEdge,
     LogicGraphCreate,
+    LogicGraphDuplicate,
     LogicGraphImport,
     LogicGraphOut,
     LogicGraphRun,
@@ -50,7 +52,7 @@ from obs.logic.models import (
     NodeTypeDef,
 )
 from obs.logic.registry import get_node_type, list_node_types
-from obs.logic.validation import validate_timer_durations
+from obs.logic.validation import validate_timer_durations, validate_write_targets
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +63,7 @@ def _validate_timer_durations(flow_data: FlowData) -> None:
     """Translate shared persistence validation to an API error."""
     try:
         validate_timer_durations(flow_data)
+        validate_write_targets(flow_data)
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
@@ -95,7 +98,7 @@ def _normalized_without_positions(raw: dict) -> dict:
     dicts would misclassify a move-only save as an execution change.
     """
     flow_data = FlowData.model_validate(raw)
-    _migrate_legacy_api_client_field_names(flow_data)
+    _migrate_legacy_node_data(flow_data)
     return _without_positions(json.loads(flow_data.model_dump_json()))
 
 
@@ -136,7 +139,7 @@ def _normalize_missing_node_placeholders(flow_data: FlowData) -> None:
 def _row_to_out(row: dict) -> LogicGraphOut:
     raw = json.loads(row["flow_data"]) if row["flow_data"] else {}
     flow_data = FlowData.model_validate(raw)
-    _migrate_legacy_api_client_field_names(flow_data)
+    _migrate_legacy_node_data(flow_data)
     _normalize_missing_node_placeholders(flow_data)
     return LogicGraphOut(
         id=row["id"],
@@ -320,10 +323,16 @@ def _flow_from_row(row: dict) -> FlowData:
     return FlowData.model_validate(raw)
 
 
+# Blocks whose ###OBSn### variables read DataPoints (#1301); all need the same authorization as a Read Object.
+_VARIABLE_BLOCK_TYPES = frozenset(
+    {"api_client", "json_extractor", "xml_extractor", "string_concat", "string_replace", "notify_message", "message_archive", "ical"}
+)
+
+
 def _node_datapoint_ids(node: LogicNode) -> list[object]:
     if node.type in {"datapoint_read", "datapoint_write"}:
         return [node.data.get("datapoint_id")]
-    if node.type == "api_client":
+    if node.type in _VARIABLE_BLOCK_TYPES:
         return [variable["datapoint_id"] for variable in _normalise_api_client_variables(node.data.get("variables")).values()]
     if node.type == "value_sequence":
         steps = node.data.get("steps") or []
@@ -618,6 +627,51 @@ def _logic_run_warnings(outputs: dict) -> list[dict[str, str]]:
 
 @router.get("/node-types", response_model=list[NodeTypeDef])
 async def get_node_types(_user: str = Depends(get_current_user)) -> list[NodeTypeDef]:
+    """List every built-in Logic function block, for building a `flow_data` graph.
+
+    Each `NodeTypeDef` is the complete, authoritative contract for one block — this is the
+    single source of truth also used by the Logic editor, so nothing here goes stale.
+
+    **Ports and `flow_data` wiring.** A `LogicGraph`'s `flow_data` is `{nodes: [...], edges:
+    [...]}`. Each node has `id`, `type` (one of the `type` values in this catalogue), `position`
+    (`{x, y}`, cosmetic only), and `data` (the node's `config_schema` values, plus a `label`
+    string). Each edge has `id`, `source`/`target` (node ids) and `sourceHandle`/`targetHandle`
+    (port ids from that node type's `outputs`/`inputs`). A port's `type` is `"value"` (carries a
+    value every tick it has one) or `"trigger"` (carries a one-shot pulse, no persistent value).
+
+    **Execution semantics not visible elsewhere in this API:**
+    - A node's per-tick result is a dict keyed by output port id. A key **absent** from that dict
+      means "nothing produced this tick" — a trigger that did not fire, or a value withheld by the
+      block itself (e.g. `change_filter` only sets `changed` when the input actually changed).
+      This is different from the key being present with value `null`/`None`, which means a value
+      arrived but was empty/unset.
+    - `memory`, `timer_delay` and `timer_pulse` are the only nodes allowed to close a feedback loop
+      within one graph (memory outputs the previous tick's stored value, a timer what its timer
+      decided) — any other cycle is rejected, see `POST /graphs/validate`.
+
+    **Resolving `help_id` to full prose documentation** (English and German, one paragraph per
+    block with the exact intended behaviour): `GET /help/help-index.json`, then
+    `.helpIds[<help_id>].en` (or `.de`) is a ready-to-fetch URL under `/help/...`. Not every type
+    has a `help_id` yet (`null` if undocumented).
+
+    **Minimal `flow_data` example** — a `compare` block driving a `datapoint_write`:
+    ```json
+    {
+      "nodes": [
+        {"id": "n1", "type": "datapoint_read", "position": {"x": 0, "y": 0},
+         "data": {"datapoint_id": "<uuid>"}},
+        {"id": "n2", "type": "compare", "position": {"x": 200, "y": 0},
+         "data": {"operator": ">", "operand": 20}},
+        {"id": "n3", "type": "datapoint_write", "position": {"x": 400, "y": 0},
+         "data": {"datapoint_id": "<uuid>"}}
+      ],
+      "edges": [
+        {"id": "e1", "source": "n1", "target": "n2", "sourceHandle": "value", "targetHandle": "in1"},
+        {"id": "e2", "source": "n2", "target": "n3", "sourceHandle": "out", "targetHandle": "value"}
+      ]
+    }
+    ```
+    """
     return list_node_types()
 
 
@@ -626,7 +680,49 @@ async def validate_graph(
     body: FlowData,
     _user: str = Depends(get_current_user),
 ) -> dict:
-    return {"status": "ok", "warnings": topology_warnings(body)}
+    """Check `flow_data` for problems before saving it — advisory, does not persist anything.
+
+    Four checks, all returned as one flat `warnings` list (`{node_id, code, message}`). Every
+    warning code: `graph_cycle`, `graph_cycle_blocked`, `unknown_node_type`,
+    `config_schema_type_mismatch`, `config_schema_enum_invalid`, `config_schema_malformed_json`,
+    `config_schema_missing_required_field`, `unknown_config_field`, `ignored_config_field`,
+    `missing_node_type`.
+    - **Graph-cycle topology**: a cycle not broken by a `memory`, `timer_delay` or `timer_pulse`
+      node (see `GET /node-types` on closing a feedback loop). Codes: `graph_cycle`,
+      `graph_cycle_blocked`.
+    - **Config-schema conformance**: each node's `data` checked against its type's `config_schema`
+      from `GET /node-types` — unknown node types, values that don't match a declared `type` or
+      `enum`, and (for `type: array` fields such as `decision.conditions`) malformed JSON or a
+      missing required item field. Codes: `unknown_node_type`, `config_schema_type_mismatch`,
+      `config_schema_enum_invalid`, `config_schema_malformed_json`,
+      `config_schema_missing_required_field`. Deliberately narrow: no cross-entity checks (e.g.
+      whether a `datapoint_id` actually exists), and a key absent from `data` is never flagged
+      (it falls back to the schema default).
+    - **Unknown config keys**: a top-level `data` key that is not in the type's `config_schema`
+      (typically a typo such as `operater` for `operator`) is ignored by the block, which then
+      runs with the default — code `unknown_config_field`, with a "did you mean" hint where a
+      known key is close. Not flagged: `label` (the block name) on every type, and a few
+      type-specific keys the editor writes: `negate_in1`…`negate_in30` on `and`/`or`/`xor`/
+      `binary_stats` and `negate_out` on `and`/`or`/`xor` (per-port negation),
+      `string_concat.text_1`…`text_20`, `datapoint_read`/`datapoint_write.value_map`, and
+      `heating_circuit`'s legacy `temp_winter`/`temp_summer` — reported as
+      `ignored_config_field` where the block does not read them (`threshold_temp` set, or
+      `temp_summer` without `temp_winter`).
+    - **Import placeholders**: a `missing_node` stands in for a node type this server does not
+      know (e.g. from an import) and does nothing at run time — code `missing_node_type`, the
+      message names the original type from `data.original_type` (or, for older placeholders,
+      `data.label`).
+
+    `status` is always `"ok"` — an empty `warnings` list is the actual "nothing found" signal, not
+    `status`. This endpoint is **not** enforced anywhere else: `POST`/`PUT /graphs` persist a graph
+    with cycles or invalid config the same way regardless of whether this was called first, except
+    for timer duration bounds (`timer_delay`/`timer_pulse`/`api_client.timeout_s`), which those two
+    endpoints reject outright (422) at save time — independently of this endpoint.
+    """
+    # Checked in the shape the runtime loads: a key a migration moves (e.g. a timer duration
+    # under the sibling's key, #1377) is used at run time, so it is no unknown field.
+    _migrate_legacy_node_data(body)
+    return {"status": "ok", "warnings": topology_warnings(body) + config_schema_warnings(body)}
 
 
 @router.get("/graphs", response_model=list[LogicGraphOut])
@@ -648,6 +744,7 @@ async def create_graph(
     _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
+    """Create a Logic graph. See `GET /node-types` for the `flow_data` authoring contract."""
     _validate_timer_durations(body.flow_data)
     principal = _principal_from_mutation_dependency(_user)
     delegated = await _require_logic_graph_creation(
@@ -703,6 +800,7 @@ async def update_graph_full(
     _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
+    """Replace a Logic graph's `flow_data` (full save). See `GET /node-types` for the authoring contract."""
     now = datetime.now(UTC).isoformat()
     row = await db.fetchone("SELECT * FROM logic_graphs WHERE id=?", (graph_id,))
     if not row:
@@ -1028,9 +1126,13 @@ async def run_graph(
 
         started = time.perf_counter()
         overrides = body.input_overrides if body else {}
-        debug_requested = bool(body and body.debug) or bool(overrides)
+        fire_triggers = body.fire_triggers if body else []
+        debug_requested = bool(body and body.debug) or bool(overrides) or bool(fire_triggers)
         if debug_requested:
-            outputs, inputs = await get_logic_manager().execute_graph_debug(graph_id, overrides)
+            try:
+                outputs, inputs = await get_logic_manager().execute_graph_debug(graph_id, overrides, fire_triggers=fire_triggers)
+            except InvalidFireTriggerError as exc:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
         else:
             outputs = await get_logic_manager().execute_graph(graph_id)
             inputs = {}
@@ -1046,6 +1148,7 @@ async def run_graph(
                 "control_class": _row_control_class(row),
                 "output_count": len(outputs),
                 "warning_count": len(warnings),
+                "fire_triggers": fire_triggers,
             },
             commit=True,
         )
@@ -1060,6 +1163,8 @@ async def run_graph(
                 "inputs": inputs,
             },
         }
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception("Logic graph run failed for graph %s", graph_id)
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(exc)) from exc
@@ -1079,6 +1184,7 @@ async def run_graph(
 async def duplicate_graph(
     graph_id: str,
     request: Request = None,
+    body: LogicGraphDuplicate | None = None,
     _user: Principal | str = Depends(get_current_principal),
     db: Database = Depends(lambda: get_db()),
 ) -> LogicGraphOut:
@@ -1115,7 +1221,7 @@ async def duplicate_graph(
     new_flow = FlowData(nodes=new_nodes, edges=new_edges)
     _validate_timer_durations(new_flow)
 
-    new_name = f"Kopie von {row['name']}"
+    new_name = body.name.strip() if body and body.name and body.name.strip() else f"Kopie von {row['name']}"
     result = await _persist_created_graph(
         db,
         principal,
@@ -1172,7 +1278,7 @@ async def get_datapoint_logic_usages(
                 if node.data.get("datapoint_id") != dp_id:
                     continue
                 direction = "DEST"
-            elif node.type == "api_client":
+            elif node.type in _VARIABLE_BLOCK_TYPES:
                 variables = _normalise_api_client_variables(node.data.get("variables"))
                 if not any(variable["datapoint_id"] == dp_id for variable in variables.values()):
                     continue
@@ -1227,5 +1333,5 @@ async def export_graph(
     safe_name = row["name"].replace(" ", "_").replace("/", "_")
     return JSONResponse(
         content=export_data,
-        headers={"Content-Disposition": f'attachment; filename="{safe_name}.json"'},
+        headers={"Content-Disposition": attachment_header(f"{safe_name}.json")},
     )

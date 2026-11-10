@@ -2,6 +2,7 @@
 import { reactive, watch } from 'vue'
 import DataPointPicker from '@/components/DataPointPicker.vue'
 import { TIME_RANGE_PRESETS, DEFAULT_TIME_RANGE } from './timeRangePresets'
+import { COLORS } from './seriesDefs'
 
 type Axis      = 'left' | 'right'
 type ChartType = 'line' | 'bar'
@@ -23,8 +24,6 @@ interface Cfg {
   series: Series[]
 }
 
-const SERIES_COLORS = ['#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316']
-
 const props = defineProps<{ modelValue: Record<string, unknown> }>()
 const emit = defineEmits<{ (e: 'update:modelValue', val: Record<string, unknown>): void }>()
 
@@ -33,7 +32,7 @@ function normalizeSeries(raw: unknown): Series[] {
   return raw.map(s => ({
     dp_id:  (s as Record<string, unknown>).dp_id  as string ?? '',
     label:  (s as Record<string, unknown>).label  as string ?? '',
-    color:  (s as Record<string, unknown>).color  as string ?? SERIES_COLORS[0],
+    color:  (s as Record<string, unknown>).color  as string ?? COLORS[1],
     axis:   ((s as Record<string, unknown>).axis  as Axis)  ?? 'left',
   }))
 }
@@ -47,7 +46,7 @@ const cfg = reactive<Cfg>({
   label:         (props.modelValue.label         as string)    ?? '',
   time_range:    resolveTimeRange(props.modelValue),
   chart_type:    (props.modelValue.chart_type    as ChartType) ?? 'line',
-  primary_color: (props.modelValue.primary_color as string)    ?? '#3b82f6',
+  primary_color: (props.modelValue.primary_color as string)    ?? COLORS[0],
   primary_axis:  (props.modelValue.primary_axis  as Axis)      ?? 'left',
   primary_label: (props.modelValue.primary_label as string)    ?? '',
   series:        normalizeSeries(props.modelValue.series),
@@ -64,7 +63,8 @@ watch(cfg, () => emit('update:modelValue', {
 }), { deep: true })
 
 function addSeries() {
-  const color = SERIES_COLORS[cfg.series.length % SERIES_COLORS.length]
+  // Index 0 gehört der Primärreihe — gleiche Zuordnung wie der Fallback in buildSeriesDefs()
+  const color = COLORS[(cfg.series.length + 1) % COLORS.length]
   cfg.series.push({ dp_id: '', label: '', color, axis: 'left' })
 }
 
@@ -76,9 +76,9 @@ function removeSeries(i: number) {
 <template>
   <div class="space-y-3">
 
-    <!-- Beschriftung -->
+    <!-- Diagrammtitel -->
     <div>
-      <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.common.label') }}</label>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.chart.chartTitle') }}</label>
       <input
         v-model="cfg.label"
         type="text"
@@ -89,10 +89,10 @@ function removeSeries(i: number) {
 
     <!-- Diagramm-Typ -->
     <div>
-      <label class="block text-xs text-gray-400 mb-1">Diagramm-Typ</label>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.chart.chartType') }}</label>
       <div class="flex gap-1">
         <button
-          v-for="opt in [{ v: 'line', l: '〰 Linie' }, { v: 'bar', l: '▐ Balken' }]"
+          v-for="opt in [{ v: 'line', l: $t('widgets.chart.chartTypeLine') }, { v: 'bar', l: $t('widgets.chart.chartTypeBar') }]"
           :key="opt.v"
           type="button"
           :class="[
@@ -124,14 +124,15 @@ function removeSeries(i: number) {
         v-model="cfg.primary_label"
         type="text"
         :placeholder="$t('widgets.chart.primaryLabel')"
-        class="w-full mb-2 bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+        class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
       />
+      <p class="mt-1 mb-2 text-xs text-gray-500">{{ $t('widgets.chart.primaryLabelHint') }}</p>
       <div class="flex gap-2 items-center">
         <input
           v-model="cfg.primary_color"
           type="color"
           class="w-7 h-7 rounded cursor-pointer border border-gray-700 bg-transparent p-0.5 shrink-0"
-          title="Farbe"
+          :title="$t('widgets.chart.color')"
         />
         <!-- Achsen-Toggle -->
         <div class="flex gap-1 flex-1">
@@ -180,7 +181,7 @@ function removeSeries(i: number) {
               v-model="s.color"
               type="color"
               class="w-7 h-7 rounded cursor-pointer border border-gray-700 bg-transparent p-0.5 shrink-0"
-              title="Farbe"
+              :title="$t('widgets.chart.color')"
             />
             <button
               type="button"

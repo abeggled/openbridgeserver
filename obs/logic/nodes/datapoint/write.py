@@ -24,4 +24,5 @@ NODE_TYPE = NodeTypeDef(
         "throttle_unit": {"type": "string", "default": "s"},
     },
     color="#0f766e",
+    help_id="logic-block-datapoint-write",
 )

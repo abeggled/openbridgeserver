@@ -8,6 +8,7 @@
           <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100">{{ dp.name }}</h2>
           <p class="text-sm text-slate-500 font-mono mt-0.5">{{ dp.id }}</p>
         </div>
+        <Badge v-if="dp.system" variant="muted" :title="$t('datapoints.systemReadOnly')" data-testid="dp-system-badge">{{ $t('datapoints.system') }}</Badge>
         <Badge variant="info">{{ dp.data_type }}</Badge>
         <Badge :variant="qualityVariant(liveState?.quality ?? dp.quality)" dot>
           {{ qualityLabel(liveState?.quality ?? dp.quality) ?? '—' }}
@@ -18,7 +19,10 @@
     <div class="grid lg:grid-cols-3 gap-4">
       <!-- Current value card -->
       <div class="card p-5 flex flex-col gap-3">
-        <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide">{{ $t('datapoints.detail.currentValue') }}</div>
+        <div class="flex items-center justify-between">
+          <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide">{{ $t('datapoints.detail.currentValue') }}</div>
+          <HelpButton help-id="datapoints-detail" />
+        </div>
         <div class="text-4xl font-bold font-mono text-blue-600 dark:text-blue-300">
           {{ displayVal }}
         </div>
@@ -30,6 +34,9 @@
         <div class="border-t border-slate-200 dark:border-slate-700 pt-4 mt-1">
           <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">{{ $t('datapoints.detail.writeValue') }}</div>
           <div v-if="bindingsLoading" class="flex items-center py-1"><Spinner size="sm" /></div>
+          <div v-else-if="dp.system" class="text-xs text-slate-500" data-testid="dp-system-readonly">
+            {{ $t('datapoints.systemReadOnly') }}
+          </div>
           <div v-else-if="canWriteValue" class="flex flex-wrap items-center gap-2">
             <template v-if="dp.data_type === 'BOOLEAN'">
               <button
@@ -72,7 +79,10 @@
 
       <!-- Properties -->
       <div class="card p-5 col-span-2">
-        <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-4">{{ $t('datapoints.detail.properties') }}</div>
+        <div class="flex items-center justify-between mb-4">
+          <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide">{{ $t('datapoints.detail.properties') }}</div>
+          <HelpButton help-id="datapoints-detail-properties" />
+        </div>
         <dl class="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
           <dt class="text-slate-500">{{ $t('datapoints.table.name') }}</dt>       <dd class="text-slate-700 dark:text-slate-200">{{ dp.name }}</dd>
           <dt class="text-slate-500">{{ $t('datapoints.detail.datatype') }}</dt>   <dd><Badge variant="info" size="xs">{{ dp.data_type }}</Badge></dd>
@@ -94,7 +104,7 @@
           <dt class="text-slate-500">{{ $t('datapoints.detail.updatedAt') }}</dt>   <dd class="text-slate-400 text-xs">{{ fmtDateTime(dp.updated_at) }}</dd>
         </dl>
         <div class="flex gap-3 mt-5">
-          <button @click="showEdit = true" class="btn-secondary btn-sm">{{ $t('common.edit') }}</button>
+          <button v-if="!dp.system" @click="showEdit = true" class="btn-secondary btn-sm" data-testid="btn-edit-dp">{{ $t('common.edit') }}</button>
           <RouterLink :to="`/history?dp=${dp.id}`" class="btn-secondary btn-sm">{{ $t('datapoints.detail.historyLink') }}</RouterLink>
         </div>
       </div>
@@ -107,10 +117,13 @@
     <div class="card">
       <div class="card-header">
         <h3 class="font-semibold text-slate-800 dark:text-slate-100 text-sm">{{ $t('datapoints.detail.adapterBindings') }}</h3>
-        <button @click="showBindingForm = true" class="btn-primary btn-sm" data-testid="btn-add-binding">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-          {{ $t('datapoints.detail.addBinding') }}
-        </button>
+        <div class="flex items-center gap-2">
+          <HelpButton help-id="datapoints-detail-bindings" />
+          <button @click="openNewBinding" class="btn-primary btn-sm" data-testid="btn-add-binding">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            {{ $t('datapoints.detail.addBinding') }}
+          </button>
+        </div>
       </div>
       <div class="card-body">
         <div v-if="bindingsLoading" class="flex justify-center py-4"><Spinner /></div>
@@ -126,6 +139,7 @@
                 <Badge v-if="!b.enabled" variant="danger" size="xs">{{ $t('datapoints.detail.bindingDisabled') }}</Badge>
               </div>
               <div v-if="b.adapter_type?.toUpperCase() === 'KNX'" class="mt-2 flex flex-col gap-2" data-testid="datapoint-knx-context">
+                <GaStyleNotice />
                 <div v-if="knxContextLoading" class="text-xs text-slate-500">
                   {{ $t('common.loading') }}
                 </div>
@@ -135,7 +149,7 @@
                   class="rounded border border-slate-200 dark:border-slate-700 px-2 py-1.5"
                 >
                   <div class="flex flex-wrap items-center gap-2">
-                    <span class="font-mono text-xs text-blue-600 dark:text-blue-300">{{ ga.address }}</span>
+                    <span class="font-mono text-xs text-blue-600 dark:text-blue-300" data-testid="datapoint-knx-ga">{{ formatGa(ga.address, knxProject.groupAddressStyle) }}</span>
                     <Badge variant="muted" size="xs">{{ knxRoleLabel(ga.role) }}</Badge>
                     <span class="truncate text-xs text-slate-700 dark:text-slate-200">{{ knxGaLabel(ga.address) }}</span>
                     <span v-if="knxGaContext(ga.address)?.dpt" class="font-mono text-xs text-slate-500">{{ knxGaContext(ga.address).dpt }}</span>
@@ -144,11 +158,12 @@
                     <div
                       v-for="device in knxGaContext(ga.address).devices"
                       :key="`${ga.address}:${device.pa}`"
-                      class="text-xs text-slate-500"
+                      class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs text-slate-500"
+                      data-testid="datapoint-knx-device"
                     >
-                      <span class="font-mono text-slate-700 dark:text-slate-200">{{ device.pa }}</span>
-                      <span v-if="device.name" class="text-slate-700 dark:text-slate-200"> {{ device.name }}</span>
-                      <span v-if="device.comm_objects?.length">
+                      <span class="font-mono text-slate-700 dark:text-slate-200" data-testid="datapoint-knx-device-pa">{{ device.pa }}</span>
+                      <span v-if="device.name" class="text-slate-700 dark:text-slate-200" data-testid="datapoint-knx-device-name">{{ device.name }}</span>
+                      <span v-if="device.comm_objects?.length" data-testid="datapoint-knx-device-comm-objects">
                         · {{ device.comm_objects.map(co => [co.number, co.name].filter(Boolean).join(' ')).filter(Boolean).join(', ') }}
                       </span>
                     </div>
@@ -162,7 +177,7 @@
               <div v-else class="text-xs text-slate-500 font-mono mt-1 truncate">{{ JSON.stringify(b.config) }}</div>
             </div>
             <div class="flex gap-1 shrink-0">
-              <button @click="openEditBinding(b)" class="btn-icon" :title="$t('common.edit')">
+              <button @click="openEditBinding(b)" class="btn-icon" :title="$t('common.edit')" data-testid="btn-edit-binding">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
               </button>
               <button @click="confirmDeleteBinding(b)" class="btn-icon text-red-400" :title="$t('common.delete')">
@@ -178,6 +193,7 @@
     <div class="card">
       <div class="card-header">
         <h3 class="font-semibold text-slate-800 dark:text-slate-100 text-sm">{{ $t('datapoints.detail.logicBindings') }}</h3>
+        <HelpButton help-id="datapoints-detail-logic" />
       </div>
       <div class="card-body">
         <div v-if="logicUsagesLoading" class="flex justify-center py-4"><Spinner /></div>
@@ -208,12 +224,15 @@
 
     <!-- Edit Objekt Modal -->
     <Modal v-model="showEdit" :title="$t('datapoints.form.editTitle')">
+      <template #header-actions>
+        <HelpButton help-id="datapoints-form" />
+      </template>
       <DataPointForm :initial="dp" :datatypes="dpStore.datatypes" :save-handler="onEditSave" @cancel="showEdit = false" />
     </Modal>
 
     <!-- Binding form Modal -->
     <Modal v-model="showBindingForm" :title="editBinding ? $t('datapoints.detail.bindingModalEdit') : $t('datapoints.detail.bindingModalNew')" max-width="xl">
-      <BindingForm :dp-id="id" :initial="editBinding" :dp-persist-value="dp?.persist_value ?? false" :dp-data-type="dp?.data_type ?? 'UNKNOWN'" @save="onBindingSave" @cancel="showBindingForm = false" />
+      <BindingForm :dp-id="id" :initial="editBinding" :dp-persist-value="dp?.persist_value ?? false" :dp-data-type="dp?.data_type ?? 'UNKNOWN'" :dp-unit="dp?.unit ?? ''" :dp-system="dp?.system === true" @save="onBindingSave" @cancel="showBindingForm = false" />
     </Modal>
 
     <!-- Delete binding confirm -->
@@ -231,11 +250,15 @@ import { useI18n } from 'vue-i18n'
 import { dpApi, logicApi } from '@/api/client'
 import { useDatapointStore } from '@/stores/datapoints'
 import { useWebSocketStore } from '@/stores/websocket'
+import { useKnxProjectStore } from '@/stores/knxProject'
+import { formatGa } from '@/utils/groupAddress'
+import GaStyleNotice from '@/components/ui/GaStyleNotice.vue'
 import { useTz } from '@/composables/useTz'
 import { useRegionalFormat } from '@/composables/useRegionalFormat'
 import Badge          from '@/components/ui/Badge.vue'
 import Spinner        from '@/components/ui/Spinner.vue'
 import Modal          from '@/components/ui/Modal.vue'
+import HelpButton     from '@/components/ui/HelpButton.vue'
 import ConfirmDialog  from '@/components/ui/ConfirmDialog.vue'
 import DataPointForm          from '@/components/datapoints/DataPointForm.vue'
 import BindingForm            from '@/components/datapoints/BindingForm.vue'
@@ -248,6 +271,7 @@ const { fmtDateTime } = useTz()
 const { fmtNumber } = useRegionalFormat()
 const dpStore = useDatapointStore()
 const ws      = useWebSocketStore()
+const knxProject = useKnxProjectStore()
 
 const dp                  = ref(null)
 const bindings            = ref([])
@@ -295,7 +319,7 @@ onMounted(async () => {
   unsubWs = ws.onValue((id, value, quality) => {
     if (id === props.id && dp.value) { dp.value.value = value; dp.value.quality = quality }
   })
-  await Promise.all([loadBindings(), loadLogicUsages(), loadKnxContext()])
+  await Promise.all([loadBindings(), loadLogicUsages(), loadKnxContext(), knxProject.load()])
 })
 onUnmounted(() => unsubWs?.())
 
@@ -345,6 +369,8 @@ async function onEditSave(payload) {
   showEdit.value = false   // only reached if no error thrown
 }
 
+// Clear any binding left over from a previous edit, else the form would update it instead of creating one (#1312).
+function openNewBinding() { editBinding.value = null; showBindingForm.value = true }
 function openEditBinding(b) { editBinding.value = b; showBindingForm.value = true }
 async function onBindingSave() { showBindingForm.value = false; await Promise.all([loadBindings(), loadKnxContext()]) }
 

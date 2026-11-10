@@ -2,7 +2,7 @@
 title: Übersicht
 ---
 
-# Übersicht
+# Übersicht {#dashboard}
 
 Die Übersicht ist die Startseite des Admin-GUI und zeigt den aktuellen System-Status auf
 einen Blick. Die Live-Werte und der WS-Status aktualisieren sich live über die
@@ -70,6 +70,6 @@ Anzahl der Verknüpfungen (Bindings). Der Status-Punkt fasst zusammen:
 ## Live-Werte {#dashboard-values}
 
 Die zuletzt bekannten Werte der ersten zehn Objekte (DataPoints), inklusive MQTT-Topic
-und Qualitätsangabe (`good` / `uncertain` / `bad`). Werte, die seit dem Laden der Seite
+und Qualitätsangabe (**Gut** / **Unbekannt** / **Schlecht**). Werte, die seit dem Laden der Seite
 über die WebSocket-Verbindung aktualisiert wurden, sind farblich hervorgehoben. „Alle →"
 führt zur vollständigen, durchsuch- und filterbaren Objektliste unter **Objekte**.

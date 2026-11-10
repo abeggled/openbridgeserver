@@ -23,6 +23,27 @@ sich wie beim AND-Block einzeln über Klick auf den Port-Namen negieren.
 Ausgang ist **true**, wenn GENAU EIN Eingang true ist (bei mehr als zwei Eingängen: eine ungerade
 Anzahl true). Eingänge (2–30) und Ausgang lassen sich einzeln negieren.
 
+## Binärstatistik {#logic-block-binary-stats}
+
+Zählt, wie viele der Binäreingänge TRUE und FALSE sind — etwa „wie viele Fenster sind offen?" oder
+„mindestens 2 von 3 Rauchmeldern". Die Anzahl der Eingänge (2–30) und die Negation je Eingang
+funktionieren wie bei AND/OR; die Negation wird **vor** der Zählung angewendet. Der Block ist rein
+kombinatorisch, hat keinen Zustand und sendet bei jedem Lauf alle Ausgänge.
+
+- **Anzahl TRUE / Anzahl FALSE** — Zahl der Eingänge mit TRUE bzw. FALSE.
+- **Mehrheit TRUE** — true, wenn mehr Eingänge TRUE als FALSE sind (echtes „größer").
+- **Gesamt** — Zahl der ausgewerteten Eingänge.
+- **Anteil TRUE %** — Anteil TRUE in Prozent (eine Nachkommastelle, kaufmännisch gerundet).
+- **Gleichstand** — true bei gleich vielen TRUE und FALSE (nur bei Gesamt > 0).
+- **Schwelle erreicht** — true, wenn Anzahl TRUE ≥ „Schwelle". Bei Schwelle 0 ist die Funktion
+  aus und der Ausgang immer false.
+
+**Unverbundene Eingänge** legt die gleichnamige Einstellung fest. Bei *Ignorieren* (Standard)
+zählen nur tatsächlich verdrahtete Eingänge; bei *Als FALSE zählen* gilt das Verhalten von AND/OR
+(unverbunden = FALSE). Ein verbundener Eingang, der in diesem Lauf keinen Wert liefert, zählt
+immer als FALSE. Ist kein Eingang verdrahtet, sind alle Zähl- und Prozentwerte 0 und alle
+Boolean-Ausgänge false.
+
 ## NOT {#logic-block-not}
 
 Invertiert den Eingang — ein einzelner Ein- und Ausgang, keine weitere Konfiguration.
@@ -40,9 +61,9 @@ Signal-Tor: lässt den Eingang durch, solange „Freigabe" true ist, und sperrt 
 ## Speicher {#logic-block-memory}
 
 Gibt den beim vorherigen Logiklauf gespeicherten Wert aus und speichert den aktuellen Eingangswert
-für den nächsten Lauf. Dieser Baustein ist die **explizite Tick-Grenze** für kontrollierte
-Rückkopplungen — ohne ihn würde ein rückgekoppelter Graph in einem einzigen Lauf in eine Endlosschleife
-laufen. Der **Reset**-Eingang setzt den gespeicherten Wert auf den konfigurierten Initialwert zurück.
+für den nächsten Lauf. Dieser Baustein ist eine **explizite Tick-Grenze** für kontrollierte
+Rückkopplungen (wie auch **Verzögerung** und **Impuls**) — ohne eine solche Grenze würde ein
+rückgekoppelter Graph in einem einzigen Lauf in eine Endlosschleife laufen. Der **Reset**-Eingang setzt den gespeicherten Wert auf den konfigurierten Initialwert zurück.
 „Zustand nach Neustart wiederherstellen" bestimmt, ob der Speicherinhalt einen Server-Neustart übersteht.
 
 ## Änderungsfilter {#logic-block-change-filter}
@@ -51,6 +72,27 @@ Gibt den Eingangswert unverändert aus, setzt den **Geändert**-Trigger-Ausgang 
 der Wert vom zuletzt empfangenen unterscheidet — wiederholt gleiche Werte lösen keinen neuen
 Trigger aus (entspricht Edomis „SendByChange"). Nützlich, um nachgelagerte Aktionen (z. B.
 Benachrichtigungen) nicht bei jedem identischen Update erneut auszulösen.
+
+## Flankenerkennung {#logic-block-edge-detect}
+
+Wertet den Eingang boolesch aus und reagiert nur auf den **Wechsel** des Pegels, nicht auf den
+Wert selbst. Bei einer steigenden Flanke (falsch → wahr) pulst **Trigger-Steigend**, bei
+einer fallenden (wahr → falsch) **Trigger-Fallend**. Ohne Flanke wird auf **Ausgang** nichts
+gesendet — der letzte Wert wird also nicht wiederholt.
+
+Pro Richtung legt „Steigende Flanke"/„Fallende Flanke" fest, was passieren soll:
+
+- **Trigger + Wert** — der Trigger pulst und der konfigurierte Wert dieser Richtung geht auf
+  **Ausgang**. „Datentyp" bestimmt, wie die beiden Werte eingegeben werden (Boolean, Zahl, Text).
+- **Nur Trigger** — der Trigger pulst, **Ausgang** bleibt still.
+- **Aus** — diese Richtung bleibt komplett still. Der Pegel wird trotzdem mitgeführt, die nächste
+  Flanke in der Gegenrichtung wird also weiterhin erkannt.
+
+Der **erste** Wert nach Start oder Reset erzeugt bewusst keine Flanke: er legt nur den
+Ausgangspegel fest. Der **Reset**-Eingang verwirft den gemerkten Pegel — der nächste Wert setzt
+ihn neu, wieder ohne Flanke. Trifft im selben Lauf ein Reset und ein Wert ein, gewinnt der Reset.
+„Zustand nach Neustart wiederherstellen" bestimmt, ob der gemerkte Pegel einen Server-Neustart
+übersteht; ohne ihn beginnt der Baustein nach dem Neustart wieder ohne Ausgangspegel.
 
 ## Vergleich {#logic-block-compare}
 

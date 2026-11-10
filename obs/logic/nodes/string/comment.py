@@ -22,4 +22,5 @@ NODE_TYPE = NodeTypeDef(
         "height": {"type": "number", "default": 140, "label": "Höhe"},
     },
     color="#ca8a04",
+    help_id="logic-block-comment",
 )

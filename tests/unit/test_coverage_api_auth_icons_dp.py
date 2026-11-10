@@ -24,6 +24,7 @@ import pytest
 from fastapi import HTTPException
 from jose import jwt
 
+import obs.adapters.knx.adapter  # noqa: F401 — registers KNX and its direction check (#1402)
 import obs.api.auth as auth_module
 import obs.api.v1.bindings as bindings_api
 import obs.api.v1.datapoints as dp_api
@@ -32,6 +33,7 @@ import obs.api.v1.search as search_api
 from obs.api.auth import (
     ChangePasswordRequest,
     LoginRequest,
+    Principal,
     RefreshRequest,
     SetMqttPasswordRequest,
     UserCreate,
@@ -41,7 +43,6 @@ from obs.api.auth import (
     create_refresh_token,
     decode_token,
     hash_password,
-    require_configured_owner,
 )
 from obs.api.v1.icons import (
     DeleteRequest,
@@ -57,6 +58,9 @@ from obs.models.datapoint import DataPointCreate, DataPointUpdate
 # ---------------------------------------------------------------------------
 # Helpers / Stubs
 # ---------------------------------------------------------------------------
+
+
+_ADMIN_PRINCIPAL = Principal(subject="admin", type="user", is_admin=True)
 
 
 def _make_row(**kwargs) -> dict:
@@ -370,32 +374,6 @@ class TestGetAdminUser:
         with pytest.raises(HTTPException) as exc:
             await auth_module.get_admin_user(current_user="ghost", db=db)
         assert exc.value.status_code == 403
-
-
-# ---------------------------------------------------------------------------
-# auth.py — ensure_default_user
-# ---------------------------------------------------------------------------
-
-
-class TestRequireConfiguredOwner:
-    @pytest.mark.asyncio
-    async def test_fails_closed_when_no_administrator_exists(self):
-        db = _DbStub(fetchone_result=_make_row(c=0))
-        with pytest.raises(RuntimeError, match="obs-admin auth first-owner"):
-            await require_configured_owner(db)
-        assert len(db.executed) == 0
-
-    @pytest.mark.asyncio
-    async def test_fails_closed_when_admin_count_cannot_be_read(self):
-        db = _DbStub(fetchone_result=None)
-        with pytest.raises(RuntimeError, match="obs-admin auth first-owner"):
-            await require_configured_owner(db)
-
-    @pytest.mark.asyncio
-    async def test_skips_when_users_exist(self):
-        db = _DbStub(fetchone_result=_make_row(c=1))
-        await require_configured_owner(db)
-        assert len(db.executed) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1137,7 +1115,7 @@ class TestListIcons:
     @pytest.mark.asyncio
     async def test_empty_dir_returns_empty(self, tmp_path, monkeypatch):
         monkeypatch.setattr(icons_api, "_icons_dir", lambda: tmp_path)
-        result = await icons_api.list_icons(_user="admin")
+        result = await icons_api.list_icons(request=None, principal=_ADMIN_PRINCIPAL, db=None)
         assert result.total == 0
         assert result.icons == []
 
@@ -1146,7 +1124,7 @@ class TestListIcons:
         monkeypatch.setattr(icons_api, "_icons_dir", lambda: tmp_path)
         svg = b'<svg xmlns="http://www.w3.org/2000/svg"><path d="M1 1"/></svg>'
         (tmp_path / "home.svg").write_bytes(svg)
-        result = await icons_api.list_icons(_user="admin")
+        result = await icons_api.list_icons(request=None, principal=_ADMIN_PRINCIPAL, db=None)
         assert result.total == 1
         assert result.icons[0].name == "home"
 
@@ -1157,7 +1135,7 @@ class TestListIcons:
         # but that might produce empty bytes — use an SVG that passes
         svg = b'<svg xmlns="http://www.w3.org/2000/svg"><path d="M1 1"/></svg>'
         (tmp_path / "good.svg").write_bytes(svg)
-        result = await icons_api.list_icons(_user="admin")
+        result = await icons_api.list_icons(request=None, principal=_ADMIN_PRINCIPAL, db=None)
         assert result.total == 1
 
 
@@ -1360,21 +1338,21 @@ class TestGetIcon:
         monkeypatch.setattr(icons_api, "_icons_dir", lambda: tmp_path)
         svg = b'<svg xmlns="http://www.w3.org/2000/svg"><path d="M1 1"/></svg>'
         (tmp_path / "home.svg").write_bytes(svg)
-        response = await icons_api.get_icon(name="home", _user="admin")
+        response = await icons_api.get_icon(name="home", request=None, principal=_ADMIN_PRINCIPAL, db=None)
         assert response.media_type == "image/svg+xml"
 
     @pytest.mark.asyncio
     async def test_get_nonexistent_icon_raises_404(self, tmp_path, monkeypatch):
         monkeypatch.setattr(icons_api, "_icons_dir", lambda: tmp_path)
         with pytest.raises(HTTPException) as exc:
-            await icons_api.get_icon(name="missing", _user="admin")
+            await icons_api.get_icon(name="missing", request=None, principal=_ADMIN_PRINCIPAL, db=None)
         assert exc.value.status_code == 404
 
     @pytest.mark.asyncio
     async def test_get_icon_invalid_name_raises_400(self, tmp_path, monkeypatch):
         monkeypatch.setattr(icons_api, "_icons_dir", lambda: tmp_path)
         with pytest.raises(HTTPException) as exc:
-            await icons_api.get_icon(name="../evil", _user="admin")
+            await icons_api.get_icon(name="../evil", request=None, principal=_ADMIN_PRINCIPAL, db=None)
         assert exc.value.status_code == 400
 
 
@@ -1923,6 +1901,32 @@ class TestCreateBinding:
 
         assert exc.value.status_code == 422
 
+    def test_validate_knx_binding_rejects_read_interval_on_dest(self):
+        """Issue #1402: only SOURCE/BOTH poll, so DEST would store an interval that never reads."""
+        with pytest.raises(HTTPException) as exc:
+            bindings_api._validate_adapter_binding("KNX", "DEST", {"group_address": "1/1/1", "read_interval_s": 60})
+
+        assert exc.value.status_code == 422
+        assert "read_interval_s" in exc.value.detail
+
+    @pytest.mark.parametrize(
+        ("direction", "config"),
+        [
+            ("SOURCE", {"group_address": "1/1/1", "read_interval_s": 60}),
+            ("BOTH", {"group_address": "1/1/1", "read_interval_s": 60}),
+            ("DEST", {"group_address": "1/1/1"}),
+            ("DEST", {"group_address": "1/1/1", "read_interval_s": 0}),
+            # pydantic coerces "0" to 0 (= off) before the direction check sees it
+            ("DEST", {"group_address": "1/1/1", "read_interval_s": "0"}),
+        ],
+    )
+    def test_validate_knx_binding_accepts_read_interval_where_it_polls(self, direction, config):
+        bindings_api._validate_adapter_binding("KNX", direction, config)
+
+    def test_validate_knx_binding_skips_direction_check_when_config_is_not_validated(self):
+        """A PATCH touching neither config nor direction must not trip over the stored config."""
+        bindings_api._validate_adapter_binding("KNX", "DEST", {"group_address": "1/1/1", "read_interval_s": 60}, validate_schema=False)
+
 
 # ---------------------------------------------------------------------------
 # bindings.py — update_binding endpoint
@@ -1930,6 +1934,37 @@ class TestCreateBinding:
 
 
 class TestUpdateBinding:
+    @pytest.mark.asyncio
+    async def test_direction_only_patch_to_dest_rejects_a_stored_read_interval(self, monkeypatch):
+        """Issue #1402: switching a polling KNX binding to DEST must not keep an interval that never reads."""
+        assert bindings_api._has_direction_check("KNX") is True
+        current_row = _make_row(
+            id=str(uuid.uuid4()),
+            datapoint_id=str(uuid.uuid4()),
+            adapter_type="KNX",
+            adapter_instance_id=str(uuid.uuid4()),
+            direction="SOURCE",
+            config='{"group_address": "1/2/3", "read_interval_s": 60}',
+            enabled=1,
+            send_throttle_ms=None,
+            send_on_change=0,
+            send_min_delta=None,
+            send_min_delta_pct=None,
+            value_formula=None,
+            value_map=None,
+        )
+        db = _DbStub(fetchone_result=current_row)
+        monkeypatch.setattr(bindings_api, "_reload_adapter_instance", AsyncMock())
+
+        with pytest.raises(HTTPException) as exc:
+            await bindings_api.update_binding(
+                dp_id=uuid.uuid4(), binding_id=uuid.uuid4(), body=AdapterBindingUpdate(direction="DEST"), _user="admin", db=db
+            )
+
+        assert exc.value.status_code == 422
+        assert "read_interval_s" in exc.value.detail
+        bindings_api._reload_adapter_instance.assert_not_awaited()
+
     @pytest.mark.asyncio
     async def test_update_binding_not_found_raises_404(self, monkeypatch):
         db = _DbStub(fetchone_result=None)

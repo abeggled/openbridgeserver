@@ -54,6 +54,7 @@ node_modules/
 gui/node_modules
 gui/coverage/
 matter/coverage/
+frontend/coverage/
 
 # Node.js dependencies
 node_modules

@@ -156,7 +156,9 @@ test('Verlauf-Widget: Balkendiagramm mit zwei Reihen bleibt stabil', async ({ pa
     const canvas = page.locator('canvas').first()
     await expect(canvas).toBeVisible({ timeout: 8000 })
 
-    await expect(page.getByText('E2E Balken')).toBeVisible()
+    // Der Titel steht auch in der HTML-Legende (Reihe ohne eigenes Label, #1361)
+    await expect(page.locator('span', { hasText: 'E2E Balken' })).toBeVisible()
+    await expect(page.locator('.chart-legend-item')).toHaveCount(2)
 
     const chartErrors = errors.filter(e => e.toLowerCase().includes('chart') || e.toLowerCase().includes('cannot'))
     expect(chartErrors).toHaveLength(0)

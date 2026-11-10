@@ -91,7 +91,7 @@ async def db() -> Database:
         await database.disconnect()
 
 
-def test_all_41_infrastructure_mutations_have_exactly_one_literal_audit_binding() -> None:
+def test_all_46_infrastructure_mutations_have_exactly_one_literal_audit_binding() -> None:
     live = collect_live_routes()
     infrastructure = {
         signature: route
@@ -101,15 +101,15 @@ def test_all_41_infrastructure_mutations_have_exactly_one_literal_audit_binding(
         and ROUTE_CLASSIFICATIONS[signature] == "config_mutation"
     }
 
-    assert len(infrastructure) == 41
+    assert len(infrastructure) == 46
     assert {module: sum(route.endpoint.__module__ == module for route in infrastructure.values()) for module in _INFRASTRUCTURE_MODULES} == {
-        "obs.api.v1.adapters": 12,
+        "obs.api.v1.adapters": 15,
         "obs.api.v1.bindings": 3,
         "obs.api.v1.datapoints": 4,
-        "obs.api.v1.hierarchy": 10,
+        "obs.api.v1.hierarchy": 13,
         "obs.api.v1.icons": 6,
         "obs.api.v1.knxkeyfile": 2,
-        "obs.api.v1.knxproj": 4,
+        "obs.api.v1.knxproj": 3,
     }
     for signature, route in infrastructure.items():
         assert _audit_contracts(route) == [signature]
@@ -235,10 +235,10 @@ def test_runtime_side_effect_contracts_are_result_external_mutations() -> None:
         ("DELETE", "/api/v1/adapters/instances/{instance_id}"),
         ("POST", "/api/v1/adapters/instances/{source_instance_id}/bindings/migrate"),
         ("POST", "/api/v1/adapters/instances/{instance_id}/iobroker/import"),
+        ("POST", "/api/v1/adapters/instances/{instance_id}/homeassistant/import"),
         ("POST", "/api/v1/adapters/instances/{instance_id}/anwesenheit/sync-bindings"),
         ("DELETE", "/api/v1/config/reset/adapters"),
         ("POST", "/api/v1/knxproj/import"),
-        ("POST", "/api/v1/knxproj/import-csv"),
     }
 
     for signature in signatures:
@@ -404,7 +404,7 @@ def test_bulk_contract_fields_are_allowlisted_without_secrets() -> None:
         if signature[1].startswith(("/api/v1/adapters/", "/api/v1/icons", "/api/v1/knxproj", "/api/v1/hierarchy"))
         and "resource_count" in contract.allowed_detail_fields
     }
-    assert len(bulk_contracts) >= 14
+    assert len(bulk_contracts) >= 13
     for contract in bulk_contracts.values():
         assert {"resource_count", "payload_sha256"} <= contract.allowed_detail_fields
 

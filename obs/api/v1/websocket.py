@@ -879,6 +879,12 @@ async def _authenticate_visu_page_scope(ws: WebSocket) -> tuple[bool, str]:
 async def _authenticate_ws_request(ws: WebSocket) -> tuple[bool, str]:
     """Validate auth for websocket handshake."""
     from obs.api.auth import decode_token, hash_api_key
+    from obs.api.setup import setup_required
+
+    if setup_required():
+        # HTTP middleware cannot see websocket handshakes, so setup mode is
+        # enforced here too — including the anonymous visu page scope below.
+        return False, "Setup required"
 
     auth_header = ws.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):

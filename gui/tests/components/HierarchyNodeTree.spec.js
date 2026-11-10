@@ -60,6 +60,32 @@ describe('HierarchyNodeTree — rendering', () => {
   })
 })
 
+describe('HierarchyNodeTree — child count', () => {
+  it('shows the direct child count next to a node with children', () => {
+    const w = mk(TREE_NODES)
+    expect(w.find('[data-testid="child-count-root"]').text()).toBe('(1)')
+  })
+
+  it('omits the count for a leaf node', () => {
+    const w = mk(FLAT_NODES)
+    expect(w.find('[data-testid="child-count-a"]').exists()).toBe(false)
+    expect(w.find('[data-testid="child-count-b"]').exists()).toBe(false)
+  })
+
+  it('counts only direct children, not grandchildren', () => {
+    const nested = [
+      {
+        id: 'root', name: 'Root', description: '',
+        children: [
+          { id: 'mid', name: 'Mid', description: '', children: [{ id: 'leaf', name: 'Leaf', description: '', children: [] }] },
+        ],
+      },
+    ]
+    const w = mk(nested)
+    expect(w.find('[data-testid="child-count-root"]').text()).toBe('(1)')
+  })
+})
+
 describe('HierarchyNodeTree — expand / collapse', () => {
   it('children are hidden before expanding', () => {
     const w = mk(TREE_NODES)

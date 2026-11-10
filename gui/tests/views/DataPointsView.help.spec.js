@@ -49,7 +49,7 @@ async function mountDataPointsView() {
         Badge: { template: '<span><slot /></span>' },
         ConfirmDialog: true,
         DataPointForm: true,
-        Modal: { template: '<div><slot /></div>', props: ['modelValue', 'title', 'dismissible'] },
+        Modal: { template: '<div><slot name="header-actions" /><slot /></div>', props: ['modelValue', 'title', 'dismissible'] },
         RouterLink: { props: ['to'], template: '<a><slot /></a>' },
         Spinner: { template: '<span />' },
       },
@@ -87,4 +87,22 @@ describe('DataPointsView — help buttons (#896)', () => {
       expect(helpStore.currentHelpId).toBe(helpId)
     }
   )
+})
+
+describe('DataPointsView — create/edit modal help button (#1197)', () => {
+  it('renders a help button in the create/edit modal header', async () => {
+    const wrapper = await mountDataPointsView()
+    expect(helpButton(wrapper, 'datapoints-form').exists()).toBe(true)
+  })
+
+  it('opens the help store with datapoints-form when its button is clicked', async () => {
+    const wrapper = await mountDataPointsView()
+    const { useHelpStore } = await import('@/stores/help')
+    const helpStore = useHelpStore()
+
+    await helpButton(wrapper, 'datapoints-form').trigger('click')
+
+    expect(helpStore.isOpen).toBe(true)
+    expect(helpStore.currentHelpId).toBe('datapoints-form')
+  })
 })
