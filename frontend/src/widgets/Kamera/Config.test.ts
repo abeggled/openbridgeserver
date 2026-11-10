@@ -1,7 +1,16 @@
 // @vitest-environment jsdom
 import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import KameraConfig from './Config.vue'
+
+vi.mock('@/stores/visu', () => ({
+  useVisuStore: () => ({
+    treeLoaded: true,
+    loadTree: vi.fn(),
+    nodes: [],
+    getNode: () => undefined,
+  }),
+}))
 
 const messages: Record<string, string> = {
   'widgets.common.label': 'Label',
@@ -128,6 +137,53 @@ describe('Kamera Config.vue', () => {
       aspectRatio: '16/9',
       objectFit: 'contain',
       useProxy: false,
+    })
+  })
+
+  describe('click action', () => {
+    function lastPayload(wrapper: ReturnType<typeof mountConfig>) {
+      const emitted = wrapper.emitted('update:modelValue') ?? []
+      return emitted[emitted.length - 1][0] as Record<string, unknown>
+    }
+
+    it('defaults to no action and hides the page picker', () => {
+      const wrapper = mountConfig()
+      const select = wrapper.get('[data-testid="kamera-config-click-action"]')
+      expect((select.element as HTMLSelectElement).value).toBe('none')
+      expect(wrapper.text()).toContain('widgets.kamera.clickAction')
+      expect(wrapper.find('[data-testid="kamera-config-click-target"]').exists()).toBe(false)
+    })
+
+    it('shows the target page picker for "open page" and emits the action', async () => {
+      const wrapper = mountConfig()
+      await wrapper.get('[data-testid="kamera-config-click-action"]').setValue('navigate')
+
+      const target = wrapper.get('[data-testid="kamera-config-click-target"]')
+      expect(target.text()).toContain('widgets.kamera.clickTargetPage')
+      expect(target.text()).not.toContain('widgets.kamera.clickFallbackHint')
+      expect(lastPayload(wrapper)).toMatchObject({ clickAction: 'navigate', targetNodeId: '' })
+    })
+
+    it('labels the picker as optional fallback for "back"', async () => {
+      const wrapper = mountConfig({ clickAction: 'back' })
+      const target = wrapper.get('[data-testid="kamera-config-click-target"]')
+      expect(target.text()).toContain('widgets.kamera.clickFallbackPage')
+      expect(target.text()).toContain('widgets.kamera.clickFallbackHint')
+    })
+
+    it('loads a stored target page and emits it with the config', async () => {
+      const wrapper = mountConfig({ clickAction: 'navigate', targetNodeId: 'big-cam' })
+      await wrapper.get('[data-testid="kamera-config-click-action"]').setValue('back')
+
+      expect(lastPayload(wrapper)).toMatchObject({ clickAction: 'back', targetNodeId: 'big-cam' })
+    })
+
+    it('emits the page chosen in the picker', async () => {
+      const wrapper = mountConfig({ clickAction: 'navigate' })
+      wrapper.findComponent({ name: 'PagePicker' }).vm.$emit('update:modelValue', 'big-cam')
+      await wrapper.vm.$nextTick()
+
+      expect(lastPayload(wrapper)).toMatchObject({ clickAction: 'navigate', targetNodeId: 'big-cam' })
     })
   })
 })

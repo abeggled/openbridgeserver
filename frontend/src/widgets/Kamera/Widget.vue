@@ -2,6 +2,7 @@
 import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { getJwt } from '@/api/client'
 import { AUTH_TOKEN_REFRESHED_EVENT } from '@/utils/authEvents'
+import { usePageNavigation } from '@/composables/usePageNavigation'
 import type { DataPointValue } from '@/types'
 
 const props = defineProps<{
@@ -36,6 +37,21 @@ const refreshInterval = computed(() => (props.config.refreshInterval as number) 
 const aspectRatio     = computed(() => (props.config.aspectRatio     as string) ?? '16/9')
 const objectFit       = computed(() => (props.config.objectFit       as string) ?? 'contain')
 const useProxy        = computed(() => (props.config.useProxy        as boolean) ?? false)
+
+// ── Antippen: Seite öffnen oder zurück ──────────────────────────────────────
+// 'navigate' öffnet targetNodeId; 'back' springt zur zuvor besuchten Seite und
+// nimmt targetNodeId nur, wenn es keinen Verlauf gibt.
+type ClickAction = 'none' | 'navigate' | 'back'
+const clickAction = computed((): ClickAction => {
+  const v = props.config.clickAction
+  return v === 'navigate' || v === 'back' ? v : 'none'
+})
+const { navigate, hasDestination } = usePageNavigation({
+  targetId:    () => (clickAction.value === 'none' ? '' : (props.config.targetNodeId as string | undefined) ?? ''),
+  historyBack: () => clickAction.value === 'back',
+  editorMode:  () => props.editorMode,
+})
+const clickable = computed(() => !props.editorMode && hasDestination.value)
 
 // Der JWT steckt als Query-Parameter in der Proxy-URL. Nach einem Token-Refresh
 // muss die URL neu gebaut werden, sonst zieht ein Reconnect des Streams noch den
@@ -172,7 +188,12 @@ const imgSrc = computed(() =>
 </script>
 
 <template>
-  <div class="h-full w-full flex flex-col overflow-hidden bg-black rounded relative">
+  <div
+    class="h-full w-full flex flex-col overflow-hidden bg-black rounded relative"
+    :class="clickable ? 'cursor-pointer' : ''"
+    data-testid="kamera-widget"
+    @click="navigate"
+  >
 
     <!-- Label -->
     <div
@@ -243,7 +264,8 @@ const imgSrc = computed(() =>
       <span class="text-xs text-gray-500 text-center px-4">{{ $t('widgets.kamera.autoRetry') }}</span>
       <button
         class="mt-1 px-3 py-1 rounded bg-gray-700 hover:bg-gray-600 text-xs text-gray-200 transition-colors"
-        @click="reload"
+        data-testid="kamera-reload"
+        @click.stop="reload"
       >
         {{ $t('widgets.kamera.reloadNow') }}
       </button>

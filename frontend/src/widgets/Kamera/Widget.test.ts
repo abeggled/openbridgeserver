@@ -1,8 +1,25 @@
 // @vitest-environment jsdom
 import { mount } from '@vue/test-utils'
+import { reactive } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import KameraWidget from './Widget.vue'
 import { AUTH_TOKEN_REFRESHED_EVENT, notifyAuthTokenRefreshed } from '@/utils/authEvents'
+
+const router = vi.hoisted(() => ({ push: vi.fn(), back: vi.fn() }))
+const route = reactive({ params: { id: 'overview' }, fullPath: '/overview' })
+
+vi.mock('vue-router', () => ({
+  useRouter: () => router,
+  useRoute: () => route,
+}))
+vi.mock('@/stores/visu', () => ({
+  useVisuStore: () => ({
+    getNode: (id: string) => (id === 'big-cam' ? { id, type: 'PAGE', parent_id: null, access: null } : undefined),
+    getChildren: () => [],
+    hasSessionToken: () => false,
+    isLoggedIn: false,
+  }),
+}))
 
 function mountWidget(
   config: Record<string, unknown> = {
@@ -35,6 +52,9 @@ beforeEach(() => {
 
 afterEach(() => {
   localStorage.clear()
+  window.history.replaceState(null, '')
+  router.push.mockReset()
+  router.back.mockReset()
 })
 
 describe('Kamera Widget.vue', () => {
@@ -206,5 +226,103 @@ describe('Kamera Widget.vue', () => {
     const img = wrapper.find('img')
     expect(img.attributes('style')).toContain('aspect-ratio: 4/3')
     expect(img.attributes('style')).toContain('object-fit: cover')
+  })
+})
+
+describe('Kamera Widget.vue — click action', () => {
+  const cam = { url: 'http://camera.local/stream.mjpeg', streamType: 'mjpeg' }
+
+  function setHistoryBack(back: string | null) {
+    window.history.replaceState({ back }, '')
+  }
+
+  it('does nothing on tap by default and shows no pointer cursor', async () => {
+    setHistoryBack('/previous')
+    const wrapper = mountWidget({ ...cam, targetNodeId: 'big-cam' })
+
+    await wrapper.get('[data-testid="kamera-widget"]').trigger('click')
+
+    expect(router.push).not.toHaveBeenCalled()
+    expect(router.back).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="kamera-widget"]').classes()).not.toContain('cursor-pointer')
+  })
+
+  it('ignores an unknown click action', async () => {
+    const wrapper = mountWidget({ ...cam, clickAction: 'bogus', targetNodeId: 'big-cam' })
+
+    await wrapper.get('img').trigger('click')
+
+    expect(router.push).not.toHaveBeenCalled()
+  })
+
+  it('opens the configured page when the image is tapped', async () => {
+    const wrapper = mountWidget({ ...cam, clickAction: 'navigate', targetNodeId: 'big-cam' })
+
+    expect(wrapper.get('[data-testid="kamera-widget"]').classes()).toContain('cursor-pointer')
+    await wrapper.get('img').trigger('click')
+
+    expect(router.push).toHaveBeenCalledWith({ name: 'viewer', params: { id: 'big-cam' } })
+  })
+
+  it('is not clickable to open a page while no page is chosen', async () => {
+    const wrapper = mountWidget({ ...cam, clickAction: 'navigate' })
+
+    expect(wrapper.get('[data-testid="kamera-widget"]').classes()).not.toContain('cursor-pointer')
+    await wrapper.get('img').trigger('click')
+
+    expect(router.push).not.toHaveBeenCalled()
+  })
+
+  it('goes back to the previous page when tapped', async () => {
+    setHistoryBack('/overview')
+    const wrapper = mountWidget({ ...cam, clickAction: 'back' })
+
+    expect(wrapper.get('[data-testid="kamera-widget"]').classes()).toContain('cursor-pointer')
+    await wrapper.get('img').trigger('click')
+
+    expect(router.back).toHaveBeenCalledTimes(1)
+    expect(router.push).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the configured page without history', async () => {
+    setHistoryBack(null)
+    const wrapper = mountWidget({ ...cam, clickAction: 'back', targetNodeId: 'big-cam' })
+
+    await wrapper.get('img').trigger('click')
+
+    expect(router.back).not.toHaveBeenCalled()
+    expect(router.push).toHaveBeenCalledWith({ name: 'viewer', params: { id: 'big-cam' } })
+  })
+
+  it('is not clickable without history and without a fallback page', async () => {
+    setHistoryBack(null)
+    const wrapper = mountWidget({ ...cam, clickAction: 'back' })
+
+    expect(wrapper.get('[data-testid="kamera-widget"]').classes()).not.toContain('cursor-pointer')
+    await wrapper.get('img').trigger('click')
+
+    expect(router.back).not.toHaveBeenCalled()
+    expect(router.push).not.toHaveBeenCalled()
+  })
+
+  it('never navigates in the editor', async () => {
+    setHistoryBack('/overview')
+    const wrapper = mountWidget({ ...cam, clickAction: 'navigate', targetNodeId: 'big-cam' }, true)
+
+    expect(wrapper.get('[data-testid="kamera-widget"]').classes()).not.toContain('cursor-pointer')
+    await wrapper.get('img').trigger('click')
+
+    expect(router.push).not.toHaveBeenCalled()
+  })
+
+  it('reloads the stream from the error overlay without navigating', async () => {
+    const wrapper = mountWidget({ ...cam, clickAction: 'navigate', targetNodeId: 'big-cam' })
+    await wrapper.get('img').trigger('error')
+
+    await wrapper.get('[data-testid="kamera-reload"]').trigger('click')
+
+    expect(router.push).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="kamera-reload"]').exists()).toBe(false)
+    wrapper.unmount()
   })
 })
