@@ -4,6 +4,7 @@ import { TemperatureMeasurement } from 'matterbridge/matter/clusters';
 
 import type { MatterMapping } from '../deviceTypeRegistry.js';
 import type { ObsMqttClient } from '../mqttClient.js';
+import { toMeasuredTemperature } from '../temperature.js';
 
 // Matter's reserved test-vendor range — this plugin is uncertified for now (see discussion #357).
 const VENDOR_ID = 0xfff1;
@@ -26,8 +27,8 @@ export async function createTemperatureSensor(platform: MatterbridgePlatform, mq
   await platform.registerDevice(endpoint);
 
   mqtt.subscribeToValue(dataPoint.id, (_id, payload) => {
-    const celsius = typeof payload.v === 'number' ? payload.v : Number(payload.v);
-    if (Number.isNaN(celsius)) return;
-    void endpoint.updateAttribute(TemperatureMeasurement.Cluster, 'measuredValue', Math.round(celsius * 100), log);
+    const measuredValue = toMeasuredTemperature(payload.v);
+    if (measuredValue === undefined) return;
+    void endpoint.updateAttribute(TemperatureMeasurement.Cluster, 'measuredValue', measuredValue, log);
   });
 }
