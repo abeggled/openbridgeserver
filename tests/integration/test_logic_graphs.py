@@ -189,6 +189,38 @@ async def test_validate_graph_accepts_a_usable_timer_duration_under_the_sibling_
     assert [(w["node_id"], w["code"]) for w in resp.json()["warnings"]] == [("pulse", "unknown_config_field")]
 
 
+async def test_api_client_file_fields_use_the_names_the_runtime_reads(client, auth_headers):
+    """#1445: GET /node-types and /graphs/validate agree on the current names; legacy ones still validate."""
+    resp = await client.get("/api/v1/logic/node-types", headers=auth_headers)
+    assert resp.status_code == 200
+    schema = next(nt for nt in resp.json() if nt["type"] == "api_client")["config_schema"]
+    assert {"headers_value_file", "auth_value_file"} <= schema.keys()
+    assert not {"headers_secret_file", "auth_token_file"} & schema.keys()
+
+    flow_data = {
+        "nodes": [
+            {
+                "id": "current",
+                "type": "api_client",
+                "position": {"x": 0, "y": 0},
+                "data": {"headers_value_file": "/run/secrets/h", "auth_value_file": "/run/secrets/t"},
+            },
+            {
+                "id": "legacy",
+                "type": "api_client",
+                "position": {"x": 200, "y": 0},
+                "data": {"headers_secret_file": "/run/secrets/h", "auth_token_file": "/run/secrets/t"},
+            },
+        ],
+        "edges": [],
+    }
+
+    resp = await client.post("/api/v1/logic/graphs/validate", json=flow_data, headers=auth_headers)
+
+    assert resp.status_code == 200
+    assert resp.json()["warnings"] == []
+
+
 async def test_validate_graph_reports_unknown_config_field_and_missing_node_placeholder(client, auth_headers):
     flow_data = {
         "nodes": [

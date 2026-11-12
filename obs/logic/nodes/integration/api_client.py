@@ -51,10 +51,13 @@ NODE_TYPE = NodeTypeDef(
             "label": "Header (JSON-Objekt, optional)",
             "description": 'Flat JSON object of extra request headers, e.g. \'{"X-Api-Key": "..."}\'.',
         },
-        "headers_secret_file": {
+        "headers_value_file": {
             "type": "string",
             "default": "",
             "label": "Header-Datei (/run/secrets)",
+            "description": (
+                "Path of a file below /run/secrets (OBS_SECRET_FILE_DIR) holding a flat JSON object of extra request headers; merged over 'headers'."
+            ),
         },
         "variables": {
             "type": "array",
@@ -95,10 +98,11 @@ NODE_TYPE = NodeTypeDef(
             "label": "Bearer Token",
             "subtype": "password",
         },
-        "auth_token_file": {
+        "auth_value_file": {
             "type": "string",
             "default": "",
             "label": "Bearer-Token-Datei (/run/secrets)",
+            "description": "Path of a file below /run/secrets (OBS_SECRET_FILE_DIR) holding the bearer token; used when 'auth_token' is empty.",
         },
     },
     color="#0e7490",
