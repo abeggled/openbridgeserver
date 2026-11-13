@@ -89,3 +89,40 @@ jobs:
           flags: gui
           name: codecov-gui-vitest
           fail_ci_if_error: false
+
+  frontend-vitest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Visu dependencies
+        working-directory: frontend
+        run: npm ci
+
+      # The production build runs vue-tsc and resolves the real imports; this
+      # catches type and module-resolution errors that Vitest mocks can hide.
+      # Without it they would only surface at the release tag (lxc-template.yml).
+      - name: Build Visu (vue-tsc + vite build)
+        working-directory: frontend
+        run: npm run build
+
+      - name: Run Visu tests with coverage
+        working-directory: frontend
+        run: npm run test:coverage
+
+      - name: Upload Visu coverage to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./frontend/coverage/lcov.info
+          flags: frontend
+          name: codecov-frontend-vitest
+          fail_ci_if_error: false

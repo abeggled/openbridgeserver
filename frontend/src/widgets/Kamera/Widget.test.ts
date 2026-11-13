@@ -204,7 +204,8 @@ describe('Kamera Widget.vue', () => {
       objectFit: 'cover',
     })
     const img = wrapper.find('img')
-    expect(img.attributes('style')).toContain('aspect-ratio: 4/3')
+    // jsdom >= 31.0.1 serialises the ratio as `4 / 3`, older versions as `4/3`.
+    expect(img.attributes('style')).toMatch(/aspect-ratio: 4\s*\/\s*3/)
     expect(img.attributes('style')).toContain('object-fit: cover')
   })
 })
