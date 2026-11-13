@@ -316,7 +316,8 @@ describe('Chart Widget.vue — grid colour follows the Visu theme (#1361)', () =
     wrapper = null
   })
 
-  const gridColors = (scales: any) => [scales.x.grid.color, scales.y.grid.color, scales.y1.grid.color]
+  // Die Zeitachse färbt ihre Linien per Funktion (Tageswechsel hervorgehoben, #1430)
+  const gridColors = (scales: any) => [scales.x.grid.color({ tick: { major: false } }), scales.y.grid.color, scales.y1.grid.color]
 
   it('uses the dark grid colour in dark mode', async () => {
     const config = await mountChart()
@@ -389,5 +390,129 @@ describe('Chart Widget.vue — closed while loading', () => {
       vi.mocked(history.query).mockResolvedValue([])
       vi.mocked(history.aggregate).mockResolvedValue([])
     }
+  })
+})
+
+describe('Chart Widget.vue — calendar-aligned time axis (#1430)', () => {
+  const HOUR = 3_600_000
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    chartConfigs.length = 0
+    chartInstances.length = 0
+    useFormatStore().timezone = 'Europe/Zurich'
+  })
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
+    vi.mocked(history.aggregate).mockResolvedValue([])
+  })
+
+  const fakeScale = (min: number, max: number) => ({ min, max, width: 1200, ticks: [] as { value: number; major?: boolean }[] })
+
+  it('puts the 7-day line ticks on midnight and noon instead of millisecond steps', async () => {
+    const config = await mountChart()
+    const x = config.options.scales.x
+    // Screenshot range: 10/27 21:47 → 11/03 21:47 CET
+    const from = Date.UTC(2026, 9, 27, 20, 47)
+    const scale = fakeScale(from, from + 168 * HOUR)
+
+    x.afterBuildTicks(scale)
+
+    expect(scale.ticks).toHaveLength(14)
+    expect(scale.ticks[0]).toEqual({ value: Date.UTC(2026, 9, 27, 23), major: true })
+    expect(x.ticks.callback(scale.ticks[0].value)).toBe('Mi 28.10.')
+    expect(x.ticks.callback(scale.ticks[1].value)).toBe('12:00')
+    // Ein Wert, der kein berechneter Tick ist, bleibt unbeschriftet
+    expect(x.ticks.callback(from)).toBe('')
+  })
+
+  it('draws day changes with a stronger grid line', async () => {
+    const config = await mountChart()
+    const color = config.options.scales.x.grid.color
+
+    expect(color({ tick: { major: true } })).toBe('#4b5563')
+    expect(color({ tick: { major: false } })).toBe('#374151')
+    expect(color({})).toBe('#374151')
+  })
+
+  it('redraws when the server timezone arrives after mount', async () => {
+    await mountChart()
+    const chart = chartInstances[chartInstances.length - 1]
+    chart.update.mockClear()
+
+    useFormatStore().timezone = 'America/New_York'
+    await nextTick()
+
+    expect(chart.update).toHaveBeenCalled()
+  })
+
+  it('leaves the bar axis empty until buckets are loaded', async () => {
+    const config = await mountChart({ label: 'Verlauf', chart_type: 'bar' })
+    const scale = fakeScale(0, 0)
+
+    config.options.scales.x.afterBuildTicks(scale)
+
+    expect(scale.ticks).toEqual([])
+    expect(config.options.scales.x.grid.offset).toBe(false)
+  })
+
+  it('labels the aggregated bar bucket that contains a calendar boundary', async () => {
+    // 1-h-Buckets 22:00Z–01:00Z = 23:00–02:00 CET; Mitternacht liegt im zweiten
+    vi.mocked(history.aggregate).mockResolvedValue([
+      { bucket: '2026-11-02T22:00:00Z', v: 1, n: 1 },
+      { bucket: '2026-11-02T23:00:00Z', v: 2, n: 1 },
+      { bucket: '2026-11-03T00:00:00Z', v: 3, n: 1 },
+    ] as never)
+    const config = await mountChart({ label: 'Verlauf', chart_type: 'bar', time_range: 'last_7d' })
+    await flushPromises()
+    const x = config.options.scales.x
+    const scale = fakeScale(0, 0)
+
+    x.afterBuildTicks(scale)
+
+    // Je Bucket höchstens ein Tick; die Grenze am Ende (02:00) gehört zu keinem Bucket mehr
+    expect(scale.ticks).toEqual([
+      { value: 0, major: false },
+      { value: 1, major: true },
+      { value: 2, major: false },
+    ])
+    expect(x.ticks.callback(0)).toBe('23:00')
+    expect(x.ticks.callback(1)).toBe('Di 03.11.')
+    expect(x.ticks.callback(5)).toBe('')
+  })
+
+  it('keeps an aggregated bar bucket at its interval length across a data gap (#1431)', async () => {
+    // Zwei 1-h-Buckets 10:00–11:00 CET an aufeinanderfolgenden Tagen; der Tag dazwischen fehlt
+    vi.mocked(history.aggregate).mockResolvedValue([
+      { bucket: '2026-11-02T09:00:00Z', v: 1, n: 1 },
+      { bucket: '2026-11-03T09:00:00Z', v: 2, n: 1 },
+    ] as never)
+    const config = await mountChart({ label: 'Verlauf', chart_type: 'bar', time_range: 'last_7d' })
+    await flushPromises()
+    const x = config.options.scales.x
+    const scale = { ...fakeScale(0, 0), width: 400 }
+
+    x.afterBuildTicks(scale)
+
+    // 6-h-Ticks (12:00, 18:00, …) liegen in der Lücke, nicht im ersten Bucket
+    expect(scale.ticks).toEqual([])
+    expect(x.ticks.callback(0)).toBe('')
+  })
+
+  it('labels raw bar buckets on calendar boundaries', async () => {
+    const config = await mountChart({ label: 'Verlauf', chart_type: 'bar', time_range: 'last_24h' })
+    await flushPromises()
+    const x = config.options.scales.x
+    const scale = fakeScale(0, 0)
+
+    x.afterBuildTicks(scale)
+
+    expect(scale.ticks.length).toBeGreaterThan(0)
+    const indices = scale.ticks.map(t => t.value)
+    expect(indices).toEqual([...indices].sort((a, b) => a - b))
+    // 24 h auf 1200 px → 2-h-Schritt, also volle Stunden oder Datum am Tageswechsel
+    for (const index of indices) expect(x.ticks.callback(index)).toMatch(/^\d{2}:00$|^\p{L}{2} \d{2}\.\d{2}\.$/u)
   })
 })
