@@ -92,6 +92,8 @@ jobs:
 
   frontend-vitest:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - uses: actions/checkout@v7
