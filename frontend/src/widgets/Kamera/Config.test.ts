@@ -178,6 +178,25 @@ describe('Kamera Config.vue', () => {
       expect(lastPayload(wrapper)).toMatchObject({ clickAction: 'back', targetNodeId: 'big-cam' })
     })
 
+    it('drops the target page when the action is set to "nothing"', async () => {
+      const wrapper = mountConfig({ clickAction: 'navigate', targetNodeId: 'big-cam' })
+      const select = wrapper.get('[data-testid="kamera-config-click-action"]')
+
+      await select.setValue('none')
+      expect(lastPayload(wrapper)).toMatchObject({ clickAction: 'none', targetNodeId: '' })
+
+      // Later switching to "back" must not bring the hidden page back as fallback.
+      await select.setValue('back')
+      expect(lastPayload(wrapper)).toMatchObject({ clickAction: 'back', targetNodeId: '' })
+    })
+
+    it('ignores a target page stored together with "nothing"', async () => {
+      const wrapper = mountConfig({ clickAction: 'none', targetNodeId: 'big-cam' })
+      await wrapper.get('[data-testid="kamera-config-click-action"]').setValue('back')
+
+      expect(lastPayload(wrapper)).toMatchObject({ clickAction: 'back', targetNodeId: '' })
+    })
+
     it('emits the page chosen in the picker', async () => {
       const wrapper = mountConfig({ clickAction: 'navigate' })
       wrapper.findComponent({ name: 'PagePicker' }).vm.$emit('update:modelValue', 'big-cam')

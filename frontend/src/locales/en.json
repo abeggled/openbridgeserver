@@ -440,7 +440,8 @@
       "selectPage": "Select page …",
       "type": "Type",
       "qualityBad": "Quality: bad",
-      "qualityUncertain": "Quality: uncertain"
+      "qualityUncertain": "Quality: uncertain",
+      "pageNotFound": "Page not found"
     },
     "chart": {
       "title": "History",

@@ -29,6 +29,10 @@ const pickerEl     = ref<HTMLElement | null>(null)
 
 const selectedNode = computed(() => (model.value ? store.getNode(model.value) : null))
 
+// Gespeicherte ID ohne Knoten im (geladenen) Baum, z. B. eine gelöschte Seite.
+// Sie bleibt sichtbar und lässt sich leeren, statt still weiterzuwirken.
+const missingNode = computed(() => !!model.value && store.treeLoaded && !selectedNode.value)
+
 const selectedNodeTitle = computed(() =>
   selectedNode.value ? nodePath(selectedNode.value) : undefined,
 )
@@ -82,6 +86,15 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocClick))
         <VisuIcon :icon="selectedNode.icon ?? (selectedNode.type === 'PAGE' ? '📄' : '📁')" />
       </span>
       <span
+        v-if="missingNode"
+        class="flex-1 text-sm truncate text-amber-600 dark:text-amber-400"
+        :title="model"
+        data-testid="page-picker-missing"
+      >
+        ⚠ {{ $t('widgets.common.pageNotFound') }}
+      </span>
+      <span
+        v-else
         class="flex-1 text-sm truncate"
         :class="selectedNode ? 'text-gray-900 dark:text-gray-100' : 'text-gray-400 dark:text-gray-500'"
         :title="selectedNodeTitle"
@@ -89,7 +102,7 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocClick))
         {{ selectedNode ? nodePath(selectedNode) : $t('widgets.common.selectPage') }}
       </span>
       <button
-        v-if="selectedNode"
+        v-if="model"
         class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 text-xs flex-shrink-0"
         data-testid="page-picker-clear"
         @click.stop="clearNode"

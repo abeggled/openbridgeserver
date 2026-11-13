@@ -143,4 +143,24 @@ describe('PagePicker', () => {
     expect(remove).toHaveBeenCalledWith('mousedown', expect.any(Function))
     remove.mockRestore()
   })
+
+  it('shows a hint for a page that no longer exists and still lets the selection be cleared', async () => {
+    const w = mountPicker('deleted-page')
+    const display = w.get('[data-testid="page-picker-display"]')
+    expect(display.text()).toContain('widgets.common.pageNotFound')
+    expect(display.text()).not.toContain('widgets.common.selectPage')
+    expect(w.get('[data-testid="page-picker-missing"]').attributes('title')).toBe('deleted-page')
+
+    await w.get('[data-testid="page-picker-clear"]').trigger('click')
+
+    expect(lastValue(w)).toBe('')
+  })
+
+  it('does not call a page missing while the tree is still loading', () => {
+    store.treeLoaded = false
+    const w = mountPicker('deleted-page')
+    expect(w.find('[data-testid="page-picker-missing"]').exists()).toBe(false)
+    expect(w.get('[data-testid="page-picker-display"]').text()).toContain('widgets.common.selectPage')
+    expect(w.find('[data-testid="page-picker-clear"]').exists()).toBe(true)
+  })
 })

@@ -39,7 +39,10 @@ const aspectRatio     = ref((r.aspectRatio     as string)  ?? '16/9')
 const objectFit       = ref((r.objectFit       as string)  ?? 'contain')
 const useProxy        = ref((r.useProxy        as boolean) ?? false)
 const clickAction     = ref((r.clickAction     as string)  ?? 'none')
-const targetNodeId    = ref((r.targetNodeId    as string)  ?? '')
+// Ohne Aktion gibt es kein Ziel: eine versteckt mitgespeicherte Seite würde
+// sonst beim späteren Wechsel auf „Zurück“ unbemerkt zur Ersatz-Seite.
+const targetNodeId    = ref(clickAction.value === 'none' ? '' : (r.targetNodeId as string) ?? '')
+watch(clickAction, (action) => { if (action === 'none') targetNodeId.value = '' })
 
 watch(
   [label, url, streamType, authType, username, password, apiKeyParam, apiKeyValue, refreshInterval, aspectRatio, objectFit, useProxy, clickAction, targetNodeId],

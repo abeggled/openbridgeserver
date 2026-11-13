@@ -440,7 +440,8 @@
       "selectPage": "Seite wählen …",
       "type": "Typ",
       "qualityBad": "Qualität: schlecht",
-      "qualityUncertain": "Qualität: undefiniert"
+      "qualityUncertain": "Qualität: undefiniert",
+      "pageNotFound": "Seite nicht gefunden"
     },
     "chart": {
       "title": "Verlauf",
