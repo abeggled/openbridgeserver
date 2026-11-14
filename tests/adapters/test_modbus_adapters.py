@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -2078,6 +2079,347 @@ class TestModbusTcpSharedBus:
         from obs.adapters.modbus_tcp.adapter import ModbusTcpAdapterConfig
 
         assert ModbusTcpAdapterConfig().shared_bus is False
+
+
+# ---------------------------------------------------------------------------
+# Codex review follow-ups on PR#1105 (inter_read_delay_ms)
+# ---------------------------------------------------------------------------
+
+
+class TestSpaceOutBus:
+    """Coverage for _space_out_bus() (Codex P1, 2026-08-05 review: the delay
+    helper and its branches had no dedicated tests)."""
+
+    async def test_no_client_skips_delay(self):
+        adapter, _ = _make_tcp()
+        adapter._adp_cfg = ModbusTcpAdapterConfig(inter_read_delay_ms=50)
+        with patch("asyncio.sleep", new=AsyncMock()) as sleep_mock:
+            await adapter._space_out_bus(None)
+        sleep_mock.assert_not_called()
+
+    async def test_zero_delay_is_a_noop(self):
+        adapter, _ = _make_tcp()
+        adapter._adp_cfg = ModbusTcpAdapterConfig(inter_read_delay_ms=0)
+        client = _make_client(connected=True)
+        with patch("asyncio.sleep", new=AsyncMock()) as sleep_mock:
+            await adapter._space_out_bus(client)
+        sleep_mock.assert_not_called()
+
+    async def test_positive_delay_sleeps_for_configured_duration(self):
+        adapter, _ = _make_tcp()
+        adapter._adp_cfg = ModbusTcpAdapterConfig(inter_read_delay_ms=250)
+        client = _make_client(connected=True)
+        with patch("asyncio.sleep", new=AsyncMock()) as sleep_mock:
+            await adapter._space_out_bus(client)
+        sleep_mock.assert_awaited_once_with(0.25)
+
+    async def test_delay_runs_in_cleanup_even_when_body_raises(self):
+        """_modbus_io_context must still invoke _space_out_bus after an exception
+        raised inside the `async with` block (e.g. a pymodbus timeout)."""
+        adapter, _ = _make_tcp({"host": "127.0.0.1", "port": 502, "timeout": 1.0, "inter_read_delay_ms": 10})
+        client = _make_client(connected=True)
+        fake_mod = MagicMock()
+        fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
+        with patch.dict("sys.modules", {"pymodbus.client": fake_mod}):
+            await adapter.connect()
+        adapter._client = client
+
+        with patch.object(adapter, "_space_out_bus", new=AsyncMock()) as spacer, pytest.raises(RuntimeError):
+            async with adapter._modbus_io_context():
+                raise RuntimeError("simulated transaction failure")
+        spacer.assert_awaited_once_with(client)
+
+
+class TestInterReadDelaySerialization:
+    """Codex P2 (2026-08-04 review): when serialize_reads=False and
+    shared_bus=False (_io_sem is None), inter_read_delay_ms must still
+    enforce a minimum gap between bus transactions — concurrent poll tasks
+    must not run their transactions back-to-back with overlapping sleeps.
+    """
+
+    async def test_delay_serializes_concurrent_calls_when_io_sem_is_none(self):
+        adapter, _ = _make_tcp(
+            {
+                "host": "127.0.0.1",
+                "port": 502,
+                "timeout": 1.0,
+                "serialize_reads": False,
+                "shared_bus": False,
+                "inter_read_delay_ms": 20,
+            }
+        )
+        client = _make_client(connected=True)
+        fake_mod = MagicMock()
+        fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
+        with patch.dict("sys.modules", {"pymodbus.client": fake_mod}):
+            await adapter.connect()
+        adapter._client = client
+        assert adapter._io_sem is None  # sanity: this is the "no semaphore" path
+
+        active = 0
+        max_active = 0
+
+        async def run_transaction():
+            nonlocal active, max_active
+            async with adapter._modbus_io_context():
+                active += 1
+                max_active = max(max_active, active)
+                await asyncio.sleep(0.01)
+                active -= 1
+
+        await asyncio.gather(run_transaction(), run_transaction())
+
+        assert max_active == 1, "transactions overlapped even though inter_read_delay_ms > 0"
+
+    async def test_zero_delay_leaves_full_concurrency_when_io_sem_is_none(self):
+        """Regression guard: without a configured delay, the no-semaphore path
+        must keep its original unlimited concurrency (no serialization cost)."""
+        adapter, _ = _make_tcp({"host": "127.0.0.1", "port": 502, "timeout": 1.0, "serialize_reads": False, "shared_bus": False})
+        client = _make_client(connected=True)
+        fake_mod = MagicMock()
+        fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
+        with patch.dict("sys.modules", {"pymodbus.client": fake_mod}):
+            await adapter.connect()
+        adapter._client = client
+        assert adapter._adp_cfg.inter_read_delay_ms == 0
+
+        active = 0
+        max_active = 0
+        both_entered = asyncio.Event()
+
+        async def run_transaction():
+            nonlocal active, max_active
+            async with adapter._modbus_io_context():
+                active += 1
+                max_active = max(max_active, active)
+                if active == 2:
+                    both_entered.set()
+                await asyncio.wait_for(both_entered.wait(), timeout=1.0)
+                active -= 1
+
+        await asyncio.gather(run_transaction(), run_transaction())
+
+        assert max_active == 2, "expected both transactions to run concurrently when no delay is configured"
+
+
+class TestSpaceOutBusCancellation:
+    """Codex P2 (2026-08-11 review): a disconnect / binding reload that cancels
+    a poller mid-transaction must not stall on the inter-read turnaround sleep."""
+
+    async def test_cancellation_skips_turnaround_sleep(self):
+        adapter, _ = _make_tcp({"host": "127.0.0.1", "port": 502, "timeout": 1.0, "inter_read_delay_ms": 5000})
+        client = _make_client(connected=True)
+        fake_mod = MagicMock()
+        fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
+        with patch.dict("sys.modules", {"pymodbus.client": fake_mod}):
+            await adapter.connect()
+        adapter._client = client
+
+        started = asyncio.Event()
+
+        async def blocked_transaction():
+            async with adapter._modbus_io_context():
+                started.set()
+                await asyncio.Event().wait()  # block until cancelled
+
+        with patch("asyncio.sleep", new=AsyncMock()) as sleep_mock:
+            task = asyncio.create_task(blocked_transaction())
+            await started.wait()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        # A cancelled poller must not wait out the 5 s turnaround delay.
+        sleep_mock.assert_not_awaited()
+
+    async def test_ordinary_failure_still_delays(self):
+        """The cancellation skip must not disable the delay for a normal
+        transaction failure (pymodbus timeout / socket error)."""
+        adapter, _ = _make_tcp({"host": "127.0.0.1", "port": 502, "timeout": 1.0, "inter_read_delay_ms": 40})
+        client = _make_client(connected=True)
+        fake_mod = MagicMock()
+        fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
+        with patch.dict("sys.modules", {"pymodbus.client": fake_mod}):
+            await adapter.connect()
+        adapter._client = client
+
+        with patch("asyncio.sleep", new=AsyncMock()) as sleep_mock, pytest.raises(RuntimeError):
+            async with adapter._modbus_io_context():
+                raise RuntimeError("simulated transaction failure")
+        sleep_mock.assert_awaited_once_with(0.04)
+
+
+class TestSharedEndpointDelayPolicy:
+    """Codex P2 (2026-08-11 review): one inter-read delay policy must hold across
+    all instances sharing a host:port, so a zero-delay sibling cannot release the
+    shared bus without the configured turnaround gap."""
+
+    async def _connect(self, adapter):
+        client = _make_client(connected=True)
+        fake_mod = MagicMock()
+        fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
+        with patch.dict("sys.modules", {"pymodbus.client": fake_mod}):
+            await adapter.connect()
+        adapter._client = client
+        return client
+
+    async def test_shared_endpoint_adopts_largest_sibling_delay(self):
+        from obs.adapters.modbus_tcp.adapter import _SHARED_BUS_DELAYS
+
+        host, port = "10.9.9.7", 502
+        _SHARED_BUS_DELAYS.pop((host, port), None)
+        base = {"host": host, "port": port, "timeout": 1.0, "shared_bus": True}
+        a_delayed, _ = _make_tcp({**base, "inter_read_delay_ms": 200})
+        a_zero, _ = _make_tcp({**base, "inter_read_delay_ms": 0})
+        await self._connect(a_delayed)
+        await self._connect(a_zero)
+
+        assert _SHARED_BUS_DELAYS[(host, port)] == 200
+        # both instances — including the zero-delay one — enforce 200 ms
+        assert a_delayed._effective_delay() == 200
+        assert a_zero._effective_delay() == 200
+
+    async def test_zero_delay_sibling_spaces_out_by_endpoint_delay(self):
+        from obs.adapters.modbus_tcp.adapter import _SHARED_BUS_DELAYS
+
+        host, port = "10.9.9.8", 502
+        _SHARED_BUS_DELAYS.pop((host, port), None)
+        base = {"host": host, "port": port, "timeout": 1.0, "shared_bus": True}
+        a_delayed, _ = _make_tcp({**base, "inter_read_delay_ms": 200})
+        a_zero, _ = _make_tcp({**base, "inter_read_delay_ms": 0})
+        await self._connect(a_delayed)
+        client = await self._connect(a_zero)
+
+        with patch("asyncio.sleep", new=AsyncMock()) as sleep_mock:
+            await a_zero._space_out_bus(client)
+        # the zero-delay sibling now honours the endpoint-wide 200 ms gap
+        sleep_mock.assert_awaited_once_with(0.2)
+
+    async def test_non_shared_instance_uses_own_delay(self):
+        adapter, _ = _make_tcp({"host": "127.0.0.1", "port": 502, "timeout": 1.0, "shared_bus": False, "inter_read_delay_ms": 30})
+        await self._connect(adapter)
+        assert adapter._shared_bus_key is None
+        assert adapter._effective_delay() == 30
+
+    async def test_disconnect_drops_stale_endpoint_delay(self):
+        """Codex P2 (2026-08-25): a high-delay instance that disconnects must stop
+        throttling the endpoint, so a zero-delay replacement sees no turnaround gap."""
+        from obs.adapters.modbus_tcp.adapter import _SHARED_BUS_DELAYS, _SHARED_BUS_MEMBERS
+
+        host, port = "10.9.9.9", 502
+        _SHARED_BUS_DELAYS.pop((host, port), None)
+        _SHARED_BUS_MEMBERS.pop((host, port), None)
+        base = {"host": host, "port": port, "timeout": 1.0, "shared_bus": True}
+
+        old, _ = _make_tcp({**base, "inter_read_delay_ms": 5000})
+        await self._connect(old)
+        assert _SHARED_BUS_DELAYS[(host, port)] == 5000
+
+        await old.disconnect()
+
+        replacement, _ = _make_tcp({**base, "inter_read_delay_ms": 0})
+        await self._connect(replacement)
+        # the stale 5000 ms throttle must be gone
+        assert replacement._effective_delay() == 0
+        assert _SHARED_BUS_DELAYS.get((host, port)) == 0
+
+    async def test_last_disconnect_removes_endpoint_entirely(self):
+        from obs.adapters.modbus_tcp.adapter import _SHARED_BUS_DELAYS, _SHARED_BUS_MEMBERS
+
+        host, port = "10.9.9.10", 502
+        _SHARED_BUS_DELAYS.pop((host, port), None)
+        _SHARED_BUS_MEMBERS.pop((host, port), None)
+        base = {"host": host, "port": port, "timeout": 1.0, "shared_bus": True, "inter_read_delay_ms": 100}
+
+        a, _ = _make_tcp(base)
+        b, _ = _make_tcp(base)
+        await self._connect(a)
+        await self._connect(b)
+        assert _SHARED_BUS_DELAYS[(host, port)] == 100
+
+        await a.disconnect()
+        assert _SHARED_BUS_DELAYS[(host, port)] == 100  # one sibling left
+        await b.disconnect()
+        assert (host, port) not in _SHARED_BUS_DELAYS  # last gone -> dropped
+        assert (host, port) not in _SHARED_BUS_MEMBERS
+
+
+class TestSharedBusAcquireTimeout:
+    """A wedged cross-instance shared_bus semaphore must not block reads forever:
+    the acquire is bounded and a timeout skips the read (yield None) with a
+    warning, instead of hanging silently. Writes are never dropped: they wait
+    for the bus unbounded."""
+
+    def test_default_timeout_is_30s(self):
+        assert ModbusTcpAdapterConfig().shared_bus_acquire_timeout_s == 30.0
+
+    async def _connect_shared(self, host, timeout_s):
+        adapter, _ = _make_tcp({"host": host, "port": 502, "timeout": 1.0, "shared_bus": True, "shared_bus_acquire_timeout_s": timeout_s})
+        client = _make_client(connected=True)
+        fake_mod = MagicMock()
+        fake_mod.AsyncModbusTcpClient = MagicMock(return_value=client)
+        with patch.dict("sys.modules", {"pymodbus.client": fake_mod}):
+            await adapter.connect()
+        adapter._client = client
+        return adapter, client
+
+    async def test_timeout_skips_transaction_when_semaphore_held(self):
+        adapter, _ = await self._connect_shared("10.9.9.20", 0.2)
+        assert adapter._shared_bus_key == ("10.9.9.20", 502)
+        # Simulate a sibling holding the shared bus and never releasing it.
+        await adapter._io_sem.acquire()
+        try:
+            async with adapter._modbus_io_context() as client:
+                assert client is None  # acquire timed out -> transaction skipped
+        finally:
+            adapter._io_sem.release()
+
+    async def test_acquires_and_yields_client_when_free(self):
+        adapter, client = await self._connect_shared("10.9.9.21", 0.2)
+        async with adapter._modbus_io_context() as c:
+            assert c is client  # free semaphore -> normal transaction
+        # semaphore released again after the context
+        assert adapter._io_sem.locked() is False
+
+    @staticmethod
+    def _release_later(sem, delay):
+        async def _release():
+            await asyncio.sleep(delay)
+            sem.release()
+
+        return asyncio.create_task(_release())
+
+    async def test_zero_timeout_disables_bounding(self):
+        """With shared_bus_acquire_timeout_s=0 a read waits for a held bus
+        (unbounded) instead of timing out immediately."""
+        adapter, client = await self._connect_shared("10.9.9.22", 0.0)
+        await adapter._io_sem.acquire()
+        releaser = self._release_later(adapter._io_sem, 0.3)
+        async with adapter._modbus_io_context() as c:
+            assert c is client  # waited for the release, not skipped
+        await releaser
+
+    async def test_read_timeout_skips_and_warns(self, caplog):
+        adapter, client = await self._connect_shared("10.9.9.23", 0.2)
+        await adapter._io_sem.acquire()
+        try:
+            with caplog.at_level(logging.WARNING, logger="obs.adapters.modbus_tcp.adapter"):
+                result = await adapter._read_register(ModbusBindingConfig(**_HOLDING_CFG))
+        finally:
+            adapter._io_sem.release()
+        assert result is None
+        client.read_holding_registers.assert_not_awaited()
+        assert "timed out after 0.2s" in caplog.text
+
+    async def test_write_waits_for_busy_shared_bus(self):
+        """A write queued behind a busy shared bus is delivered once the bus
+        frees up, even past the acquire timeout (it must not be dropped)."""
+        adapter, client = await self._connect_shared("10.9.9.24", 0.2)
+        await adapter._io_sem.acquire()
+        releaser = self._release_later(adapter._io_sem, 0.5)  # longer than the 0.2 s timeout
+        await adapter.write(make_binding(_HOLDING_CFG, direction="DEST"), 42)
+        await releaser
+        client.write_register.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
