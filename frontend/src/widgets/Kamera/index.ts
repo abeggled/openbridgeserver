@@ -24,6 +24,8 @@ WidgetRegistry.register({
     aspectRatio: '16/9',
     objectFit: 'contain',
     useProxy: false,
+    clickAction: 'none',
+    targetNodeId: '',
   },
   compatibleTypes: ['*'],
   noDatapoint: true,

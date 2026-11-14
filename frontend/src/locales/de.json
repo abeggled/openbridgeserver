@@ -440,7 +440,8 @@
       "selectPage": "Seite wählen …",
       "type": "Typ",
       "qualityBad": "Qualität: schlecht",
-      "qualityUncertain": "Qualität: undefiniert"
+      "qualityUncertain": "Qualität: undefiniert",
+      "pageNotFound": "Seite nicht gefunden"
     },
     "chart": {
       "title": "Verlauf",
@@ -606,7 +607,14 @@
       "fitFill": "Strecken (fill)",
       "streamUnavailable": "Stream nicht erreichbar",
       "autoRetry": "Automatischer Neuversuch in 10 s",
-      "reloadNow": "Jetzt neu laden"
+      "reloadNow": "Jetzt neu laden",
+      "clickAction": "Beim Antippen",
+      "clickActionNone": "Nichts",
+      "clickActionNavigate": "Seite öffnen",
+      "clickActionBack": "Zurück zur zuvor besuchten Seite",
+      "clickTargetPage": "Ziel-Seite",
+      "clickFallbackPage": "Ersatz-Seite (optional)",
+      "clickFallbackHint": "Wird geöffnet, wenn es keine vorherige Seite gibt, z. B. nach direktem Aufruf per Lesezeichen."
     },
     "licht": {
       "brightness": "Helligkeit (0–100 %)",
