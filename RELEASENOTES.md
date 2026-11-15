@@ -1,7 +1,7 @@
 # Changes
 ## 2026.12.0
 ### Breaking changes 🚨
-* none
+* Logic Engine: The **Trigger** block (`timer_cron`) now uses croniter 7, which changes the meaning of some valid cron expressions. A field that starts at its maximum followed by `/` now means that maximum only, no longer the whole field: `59/15 * * * *` fires at minute 59 instead of :00/:15/:30/:45, `* * * * 6/1` on Saturdays only instead of every day, `0 23/6 * * *` at 23:00 only instead of 0/6/12/18 h (the maxima are 59 for minutes, 23 for hours, 31 for the day, `12`/`DEC` for the month and `6`/`7`/`SAT` for the weekday). Write `*` or `*/<step>` for "every", e.g. `*/15 * * * *`. Some expressions are no longer accepted at all (day `0` in the 6-field form, non-ASCII digits), and some have no matching date any more (`0 0 31/5 2 *`). The presets of the cron builder are not affected. Migration: when OBS starts or a graph is saved, it logs one warning per Trigger block that uses the changed form (with graph name, block id and expression), and a Trigger block whose expression is invalid or has no future date is no longer scheduled but reported once instead of failing every minute. Check the log after the update, or list all Trigger expressions with `SELECT g.name, json_extract(n.value,'$.data.cron') FROM logic_graphs g, json_each(g.flow_data,'$.nodes') n WHERE json_extract(n.value,'$.type')='timer_cron';`. https://github.com/abeggled/openbridgeserver/pull/1444
 
 ### New features ✨
 * none
