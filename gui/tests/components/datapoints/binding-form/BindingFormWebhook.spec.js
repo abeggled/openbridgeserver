@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { reactive } from 'vue'
 import { mount } from '@vue/test-utils'
 import BindingFormWebhook from '@/components/datapoints/binding-form/BindingFormWebhook.vue'
 
@@ -29,7 +30,7 @@ const ENTRY = {
 
 function mk(props = {}, cfg = null) {
   return mount(BindingFormWebhook, {
-    props: { cfg: cfg ?? { ...BASE_CFG }, ...props },
+    props: { cfg: reactive(cfg ?? { ...BASE_CFG }), ...props },
   })
 }
 
