@@ -55,8 +55,9 @@ cd help && npm run build                       # the integrated help site. `help
 Beide Gates dieser Datei existieren gegen **Grün-Fallen**: ein Lauf ist grün, ohne die Eigenschaft
 geprüft zu haben, auf die es ankommt.
 
-Die erste: CI im PR-Workflow baut das Frontend **nicht**, `npm run build` läuft erst beim
-Release-Tag. Erst der Production-Build prüft Module-Resolution, Import-Pfade und Typen gegen die
+Die erste: CI im PR-Workflow baut die Admin GUI (`gui/`) **nicht**, ihr `npm run build` läuft
+erst beim Release-Tag; nur die Visu (`frontend/`) wird im Job `frontend-vitest` auch gebaut.
+Erst der Production-Build prüft Module-Resolution, Import-Pfade und Typen gegen die
 echten Abhängigkeiten; Vitest-Mocks können genau diese Schwächen verdecken. Vor **jedem** Push,
 der Frontend-Code berührt, alle Stufen lokal grün laufen lassen:
 
@@ -66,6 +67,12 @@ tools/with-venv ./tools/lint.sh --check
   cd gui
   npm run build          # validiert reale Abhängigkeiten/Imports, was Vitest nicht tut
   npm run test
+  npm run test:coverage
+)
+# bei Visu-Änderungen (frontend/) zusätzlich — dieselben Stufen wie der CI-Job frontend-vitest:
+(
+  cd frontend
+  npm run build          # vue-tsc + vite build
   npm run test:coverage
 )
 # bei Backend-Änderungen zusätzlich:
@@ -143,6 +150,7 @@ tools/with-venv pytest tests/integration --cov=obs --cov-append --cov-report=ter
 
 # GUI, vor dem Push:
 (cd gui && npm run test:coverage)
+(cd frontend && npm run test:coverage)   # Visu, Codecov-Flag `frontend`
 node tools/gui-coverage-summary.mjs --changed-only --threshold=70   # weicher Hinweis, kein Hard-Fail
 
 # Branch-Detail je Zeile aus dem lcov-Report (hits == 0 = ungeprüfter Zweig dieser Zeile):

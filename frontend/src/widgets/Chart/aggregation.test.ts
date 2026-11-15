@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  aggregateIntervalMs,
   aggregateBucketEndTimestamp,
   sortedUniqueTimestamps,
   weightedAverage,
@@ -96,5 +97,15 @@ describe('aggregateBucketEndTimestamp', () => {
 
     expect(aggregateBucketEndTimestamp('2026-06-03T12:00:00', '1h', fromMs, toMs))
       .toBe(Date.parse('2026-06-03T13:00:00Z'))
+  })
+})
+
+describe('aggregateIntervalMs', () => {
+  it('returns the bucket length of a known interval', () => {
+    expect(aggregateIntervalMs('1h')).toBe(3_600_000)
+  })
+
+  it('returns NaN for an unknown interval', () => {
+    expect(aggregateIntervalMs('7m')).toBeNaN()
   })
 })

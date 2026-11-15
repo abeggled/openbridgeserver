@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
+import { reactive } from 'vue'
 import { mount } from '@vue/test-utils'
 import PushoverOptionsFields from '@/components/notifications/PushoverOptionsFields.vue'
 
 function mk(options = {}, priority = null, hint = '') {
   return mount(PushoverOptionsFields, {
-    props: { options, priority, hint, 'onUpdate:priority': () => {} },
+    props: { options: reactive(options), priority, hint, 'onUpdate:priority': () => {} },
   })
 }
 
