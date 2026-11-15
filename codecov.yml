@@ -20,3 +20,7 @@ flag_management:
       paths:
         - "gui/src/"
       carryforward: false
+    - name: frontend
+      paths:
+        - "frontend/src/"
+      carryforward: false
