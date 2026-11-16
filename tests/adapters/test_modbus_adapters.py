@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -2409,7 +2410,7 @@ class TestSharedBusAcquireTimeout:
             adapter._io_sem.release()
         assert result is None
         client.read_holding_registers.assert_not_awaited()
-        assert "timed out after 0.2s" in caplog.text
+        assert "no transaction completed for 0.2s" in caplog.text
 
     async def test_write_waits_for_busy_shared_bus(self):
         """A write queued behind a busy shared bus is delivered once the bus
@@ -2420,6 +2421,44 @@ class TestSharedBusAcquireTimeout:
         await adapter.write(make_binding(_HOLDING_CFG, direction="DEST"), 42)
         await releaser
         client.write_register.assert_awaited_once()
+
+    async def test_moving_queue_longer_than_timeout_is_not_a_wedge(self, caplog):
+        """starwarsfan F1: a read queued behind several sibling transactions waits
+        longer than shared_bus_acquire_timeout_s in total, but the bus keeps making
+        progress, so the read must still run instead of being skipped as a wedge."""
+        reader, client = await self._connect_shared("10.9.9.25", 0.3)
+        sibling, _ = await self._connect_shared("10.9.9.25", 0.3)
+        assert reader._io_sem is sibling._io_sem
+
+        async def sibling_transaction():
+            async with sibling._modbus_io_context(bounded=False):
+                await asyncio.sleep(0.1)  # each one completes well within the timeout
+
+        # Six transactions ahead of the read: 0.6 s of queue, twice the 0.3 s bound.
+        queued = [asyncio.create_task(sibling_transaction()) for _ in range(6)]
+        for _ in range(3):
+            await asyncio.sleep(0)
+        with caplog.at_level(logging.WARNING, logger="obs.adapters.modbus_tcp.adapter"):
+            async with reader._modbus_io_context() as c:
+                assert c is client  # waited through the moving queue, not skipped
+        await asyncio.gather(*queued)
+        assert "no transaction completed" not in caplog.text
+
+    async def test_stalled_bus_still_times_out_after_earlier_progress(self):
+        """Progress recorded long before the read started waiting does not extend
+        the bound: a bus that stalls now still times out after the timeout."""
+        from obs.adapters.modbus_tcp.adapter import _SHARED_BUS_PROGRESS
+
+        adapter, _ = await self._connect_shared("10.9.9.26", 0.2)
+        _SHARED_BUS_PROGRESS[adapter._shared_bus_key] = time.monotonic() - 100
+        await adapter._io_sem.acquire()
+        try:
+            started = time.monotonic()
+            async with adapter._modbus_io_context() as c:
+                assert c is None
+            assert 0.15 <= time.monotonic() - started < 1.0
+        finally:
+            adapter._io_sem.release()
 
 
 # ---------------------------------------------------------------------------

@@ -1,9 +1,11 @@
 # Changes
 ## 2026.12.0
 ### Breaking changes 🚨
-* none
+* Adapter/Modbus TCP: With the `shared_bus` option, a read now waits at most `shared_bus_acquire_timeout_s` (default 30 s) without any transaction completing on the shared bus; until now it waited for the bus indefinitely. If the bus stops making progress (e.g. a wedged gateway or a sibling instance that never releases the bus), the read is skipped with a warning and published as `bad`, and the next poll retries it. Writes still wait until the bus is free and are never dropped. Set the option to `0` to keep the old unbounded behaviour. https://github.com/abeggled/openbridgeserver/pull/1105
 
 ### New features ✨
+* Adapter/Modbus TCP: New option `inter_read_delay_ms` (0–5000 ms, default 0 = off) inserts a pause after every Modbus transaction before the next one starts, giving slow RS485/Modbus-TCP gateways time to switch over. With `shared_bus` the largest delay configured by any instance on the same host:port applies to the whole bus, and a disconnect or binding reload does not wait out the pause. https://github.com/abeggled/openbridgeserver/pull/1105
+* Adapter/Modbus TCP: New option `shared_bus_acquire_timeout_s` (0–300 s, default 30 s) bounds how long a read waits for a shared bus that makes no progress, so a wedged gateway or sibling instance shows up as a logged, skipped read instead of a silent hang. A long queue that keeps moving does not trigger it. https://github.com/abeggled/openbridgeserver/pull/1105
 * Visu: The **Camera** ("Kamera") widget can now open a page when it is tapped. The new setting **On tap** offers **Open page**, which opens the chosen target page — e.g. a large view of the same camera from the small preview on an overview page — and **Back to the previously visited page**, which returns to whichever page was open before, so tapping the large view leads back to the overview; without history (e.g. after opening the page directly from a bookmark) it opens an optional fallback page instead. Navigation follows the same rules as the Link widget, including areas and PIN-protected pages; the button in the "stream unavailable" overlay still only reloads the stream. The default **Nothing** keeps existing camera widgets unchanged. In the page picker of the Camera and Link widgets, a target page that has been deleted is now shown as "Page not found" and can be cleared; until now it looked like an empty selection, could not be cleared and was still opened on tap. https://github.com/abeggled/openbridgeserver/issues/1449
 
 ### Fixes 🐞
