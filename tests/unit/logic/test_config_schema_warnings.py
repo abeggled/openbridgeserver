@@ -242,11 +242,28 @@ def test_negation_typos_and_negation_on_other_types_are_flagged():
 def test_type_specific_extra_keys_are_accepted_only_on_their_own_type():
     assert _codes(_flow("datapoint_read", {"value_map": {"0": "aus"}})) == []
     assert _codes(_flow("datapoint_write", {"value_map": {"1": "ein"}})) == []
-    assert _codes(_flow("api_client", {"headers_value_file": "/run/secrets/h", "auth_value_file": "/run/secrets/t"})) == []
     assert _codes(_flow("heating_circuit", {"temp_winter": 15, "temp_summer": 18})) == []
     assert _codes(_flow("heating_circuit", {"temp_winter": "15"})) == []
     # The same keys elsewhere are typos for that type.
     assert _codes(_flow("compare", {"value_map": {}})) == ["unknown_config_field"]
+
+
+def test_api_client_value_files_are_regular_schema_fields():
+    """#1445: the names the runtime reads are schema fields, so their type is checked too."""
+    assert _codes(_flow("api_client", {"headers_value_file": "/run/secrets/h", "auth_value_file": "/run/secrets/t"})) == []
+    warnings = config_schema_warnings(_flow("api_client", {"headers_value_file": 1}))
+    assert [(w["code"], w["message"].split(":")[0]) for w in warnings] == [("config_schema_type_mismatch", "headers_value_file")]
+
+
+def test_api_client_schema_declares_the_field_names_the_runtime_reads():
+    """#1445: the schema used to declare the pre-rename names that only the load migration still knows."""
+    from obs.logic.manager import _API_CLIENT_LEGACY_FIELD_RENAMES
+    from obs.logic.registry import get_node_type
+
+    schema = get_node_type("api_client").config_schema
+    for legacy_key, current_key in _API_CLIENT_LEGACY_FIELD_RENAMES.items():
+        assert current_key in schema
+        assert legacy_key not in schema
 
 
 def test_string_concat_static_text_slots_follow_their_pattern():

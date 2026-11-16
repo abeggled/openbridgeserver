@@ -35,9 +35,6 @@ _TYPE_EXTRA_CONFIG_KEYS: dict[str, frozenset[str]] = {
     # Value-map preset picked in the properties panel, applied by GraphExecutor.
     "datapoint_read": frozenset({"value_map"}),
     "datapoint_write": frozenset({"value_map"}),
-    # The names `_migrate_legacy_api_client_field_names` (obs/logic/manager.py) moves the schema's
-    # older `headers_secret_file`/`auth_token_file` to; graphs saved since then carry these.
-    "api_client": frozenset({"headers_value_file", "auth_value_file"}),
     # Legacy thresholds GraphExecutor still falls back to; checked by `_heating_legacy_warnings`.
     "heating_circuit": frozenset({"temp_winter", "temp_summer"}),
 }

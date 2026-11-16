@@ -197,6 +197,8 @@ async def test_binding_delegation_matrix(monkeypatch, db: Database, adapter_type
     monkeypatch.setattr(adapter_registry, "_adapters", dict(REGISTERED))
     dp_id, instance_id, binding_id = await _setup(db, adapter_type)
     monkeypatch.setattr(bindings_api, "get_registry", lambda: _RegistryStub(dp_id))
+    # The empty test config must reach the validation sentinel; KNX normalization runs before it (#1296).
+    monkeypatch.setattr(bindings_api, "_normalize_knx_group_addresses", lambda _adapter_type, config: config)
     monkeypatch.setattr(bindings_api, "_validate_adapter_binding", _raise_passed)
     monkeypatch.setattr(bindings_api, "_reload_adapter_instance", AsyncMock())
 

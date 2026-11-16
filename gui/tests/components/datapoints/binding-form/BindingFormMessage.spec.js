@@ -1,11 +1,12 @@
 import { describe, it, expect } from 'vitest'
+import { reactive } from 'vue'
 import { mount } from '@vue/test-utils'
 import BindingFormMessage from '@/components/datapoints/binding-form/BindingFormMessage.vue'
 
 function mk({ cfg = {}, selectedInstance = null } = {}) {
   return mount(BindingFormMessage, {
     props: {
-      cfg: {
+      cfg: reactive({
         operator: '==',
         compare_value: 'true',
         title: '',
@@ -14,7 +15,7 @@ function mk({ cfg = {}, selectedInstance = null } = {}) {
         providers: [],
         send_on_change: true,
         ...cfg,
-      },
+      }),
       selectedInstance: selectedInstance ?? {
         config: {
           providers: {

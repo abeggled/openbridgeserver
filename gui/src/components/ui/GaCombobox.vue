@@ -8,9 +8,11 @@
       @keydown.enter.prevent="selectActive"
       @keydown.escape="close"
       :placeholder="effectivePlaceholder"
-      class="input pr-8"
+      :class="['input pr-8', invalid ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : '']"
+      :aria-invalid="invalid"
       autocomplete="off"
     />
+    <GaStyleNotice class="mt-1" />
     <!-- Clear button -->
     <button v-if="query" type="button" @click="clear"
       class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300">
@@ -40,17 +42,17 @@
 
       <!-- Suggestions -->
       <ul v-else>
-        <li v-for="(item, i) in suggestions" :key="item.address"
-          @click="select(item)"
+        <li v-for="(ga, i) in suggestions" :key="ga.address"
+          @click="select(ga)"
           @mouseenter="activeIndex = i"
           :class="['px-3 py-2 cursor-pointer flex items-start gap-2 text-sm transition-colors',
             i === activeIndex ? 'bg-blue-600/20 text-slate-800 dark:text-slate-100' : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100/80 dark:hover:bg-slate-700/50']">
-          <span class="font-mono text-xs text-blue-400 mt-0.5 shrink-0 w-14">{{ item.address }}</span>
+          <span class="font-mono text-xs text-blue-400 mt-0.5 shrink-0 w-14">{{ formatGa(ga.address, knxProject.groupAddressStyle) }}</span>
           <span class="flex-1 min-w-0">
-            <span class="truncate block">{{ item.name }}</span>
-            <span v-if="item.description" class="text-xs text-slate-500 truncate block">{{ item.description }}</span>
+            <span class="truncate block">{{ ga.name }}</span>
+            <span v-if="ga.description" class="text-xs text-slate-500 truncate block">{{ ga.description }}</span>
           </span>
-          <span v-if="item.dpt" class="text-xs text-slate-500 shrink-0 mt-0.5">{{ item.dpt }}</span>
+          <span v-if="ga.dpt" class="text-xs text-slate-500 shrink-0 mt-0.5">{{ ga.dpt }}</span>
         </li>
       </ul>
     </div>
@@ -61,16 +63,23 @@
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { knxprojApi } from '@/api/client'
+import { useKnxProjectStore } from '@/stores/knxProject'
+import { formatGa } from '@/utils/groupAddress'
+import GaStyleNotice from '@/components/ui/GaStyleNotice.vue'
 
 const { t } = useI18n()
 
 const props = defineProps({
   modelValue: { type: String, default: '' },
   placeholder: { type: String, default: null },
+  invalid: { type: Boolean, default: false },
 })
 const emit = defineEmits(['update:modelValue', 'select'])
 
-const query       = ref(props.modelValue || '')
+// Addresses are shown in the project's style (#1296); the backend normalizes what is saved.
+const knxProject  = useKnxProjectStore()
+const shown       = (address) => formatGa(address || '', knxProject.groupAddressStyle)
+const query       = ref(shown(props.modelValue))
 const suggestions = ref([])
 const loading     = ref(false)
 const noResults   = ref(false)
@@ -80,16 +89,30 @@ const activeIndex = ref(-1)
 const container   = ref(null)
 
 let debounceTimer = null
+// What the user typed or picked last: its echo through v-model is not rewritten.
+let lastEmitted = null
+let syncing = false
 
-const effectivePlaceholder = computed(() => props.placeholder ?? t('adapters.bindingForm.groupAddressPlaceholder'))
+const effectivePlaceholder = computed(() => props.placeholder ?? t('adapters.bindingForm.groupAddressPlaceholder', { example: shown('1/2/3') }))
 
-// Sync modelValue → query when parent changes it
-watch(() => props.modelValue, val => {
-  if (val !== query.value) query.value = val || ''
-})
+// Sync modelValue → query when the parent changes it, or the project style arrives
+function syncFromModel() {
+  const text = shown(props.modelValue)
+  if (props.modelValue === lastEmitted) return
+  if (text === query.value) return
+  syncing = true
+  query.value = text
+}
+watch(() => props.modelValue, syncFromModel)
+watch(() => knxProject.groupAddressStyle, syncFromModel)
 
 // Suche beim Tippen
 watch(query, val => {
+  if (syncing) {
+    syncing = false
+    return
+  }
+  lastEmitted = val
   emit('update:modelValue', val)
   clearTimeout(debounceTimer)
   if (!val || val.length < 1) {
@@ -131,10 +154,12 @@ async function onFocus() {
   }
 }
 
-function select(item) {
-  query.value = item.address
-  emit('update:modelValue', item.address)
-  emit('select', item)
+function select(ga) {
+  lastEmitted = ga.address
+  syncing = shown(ga.address) !== query.value
+  query.value = shown(ga.address)
+  emit('update:modelValue', ga.address)
+  emit('select', ga)
   close()
 }
 
@@ -170,6 +195,9 @@ function selectActive() {
 function onClickOutside(e) {
   if (container.value && !container.value.contains(e.target)) close()
 }
-onMounted(() => document.addEventListener('mousedown', onClickOutside))
+onMounted(() => {
+  document.addEventListener('mousedown', onClickOutside)
+  knxProject.load()
+})
 onUnmounted(() => document.removeEventListener('mousedown', onClickOutside))
 </script>

@@ -25,6 +25,7 @@ Implementierte DPTs:
   DPT20.x  — 1-Byte Enum/Mode (INTEGER) — vollständig (20.001–20.604)
   DPT29.x  — 64-Bit signed (INTEGER) ← Smart Metering Energie
   DPT219.x — AlarmInfo (INTEGER)
+  DPTn     — Haupttyp ohne Subtyp (#1260), siehe _MAIN_TYPE_DPTS
 """
 
 from __future__ import annotations
@@ -75,6 +76,19 @@ class DPTRegistry:
     @classmethod
     def by_data_type(cls, data_type: str) -> list[DPTDefinition]:
         return [d for d in cls._dpts.values() if d.data_type == data_type]
+
+
+def keeps_stored_subtype(new: str | None, stored: str | None) -> bool:
+    """Whether a DPT already set keeps winning over a DPT taken over from the project (#1260).
+
+    A project (or the group address catalog) that names only the main type ("DPT5") does
+    not replace a subtype of that main type already set ("DPT5.001", guessed by an older
+    import or chosen by hand): the values would change, e.g. by a factor of 2.55 for DPT5.
+    A subtype, a different main type or an empty field take the new DPT. Used by the
+    .knxproj re-import and, as ``keepsStoredSubtype`` in ``gui/src/utils/dpt.js``, by the
+    binding form; ``gui/tests/fixtures/dpt-keep-parity.json`` holds the contract.
+    """
+    return bool(new and stored and "." not in new and stored.startswith(f"{new}."))
 
 
 # ---------------------------------------------------------------------------
@@ -1408,6 +1422,45 @@ def _register_builtin_dpts() -> None:
     ]
     for d in defs:
         DPTRegistry.register(d)
+    for d in _MAIN_TYPE_DPTS:
+        DPTRegistry.register(d)
+
+
+# ---------------------------------------------------------------------------
+# Main types without a subtype (#1260)
+# ---------------------------------------------------------------------------
+# A .knxproj may carry only the main type of a group address ("DPT-14"). These
+# entries hold the codec of the main type's plain encoding, without unit and
+# without the scaling a subtype adds (DPT5 is the raw byte, not percent; DPT7/8
+# are the raw integer, not ×10 ms). Each main type here has one encoding for
+# all of its subtypes in this registry, except DPT4: 4.001 is ASCII, 4.002 is
+# ISO 8859-1, so the main type reads ISO 8859-1 (a superset) and writes ASCII
+# (valid for both). Main types without any codec here (15, 21, 22, 232, 251, …)
+# get no entry and stay UNKNOWN.
+_MAIN_TYPE_DPTS = [
+    DPTDefinition("DPT1", "1-Bit (no subtype)", "BOOLEAN", "", 1, _dpt1_encode, _dpt1_decode),
+    DPTDefinition("DPT2", "1-Bit Controlled (no subtype)", "INTEGER", "", 1, _dpt2_encode, _dpt2_decode),
+    DPTDefinition("DPT3", "3-Bit Controlled (no subtype)", "INTEGER", "", 1, _dpt3_encode, _dpt3_decode),
+    DPTDefinition("DPT4", "Character (no subtype)", "STRING", "", 1, _dpt4_001_encode, _dpt4_002_decode),
+    DPTDefinition("DPT5", "8-Bit Unsigned (no subtype)", "INTEGER", "", 1, _dpt5_encode_raw, _dpt5_decode_raw),
+    DPTDefinition("DPT6", "8-Bit Signed (no subtype)", "INTEGER", "", 1, _dpt6_encode, _dpt6_decode),
+    DPTDefinition("DPT7", "16-Bit Unsigned (no subtype)", "INTEGER", "", 2, _dpt7_encode, _dpt7_decode),
+    DPTDefinition("DPT8", "16-Bit Signed (no subtype)", "INTEGER", "", 2, _dpt8_encode, _dpt8_decode),
+    DPTDefinition("DPT9", "16-Bit Float (no subtype)", "FLOAT", "", 2, _dpt9_encode, _dpt9_decode),
+    DPTDefinition("DPT10", "Time of Day (no subtype)", "TIME", "", 3, _dpt10_encode, _dpt10_decode),
+    DPTDefinition("DPT11", "Date (no subtype)", "DATE", "", 3, _dpt11_encode, _dpt11_decode),
+    DPTDefinition("DPT12", "32-Bit Unsigned (no subtype)", "INTEGER", "", 4, _dpt12_encode, _dpt12_decode),
+    DPTDefinition("DPT13", "32-Bit Signed (no subtype)", "INTEGER", "", 4, _dpt13_encode, _dpt13_decode),
+    DPTDefinition("DPT14", "32-Bit Float (no subtype)", "FLOAT", "", 4, _dpt14_encode, _dpt14_decode),
+    DPTDefinition("DPT16", "14-Byte String (no subtype)", "STRING", "", 14, _dpt16_encode, _dpt16_decode),
+    DPTDefinition("DPT17", "Scene Number (no subtype)", "INTEGER", "", 1, _dpt17_encode, _dpt17_decode),
+    DPTDefinition("DPT18", "Scene Control (no subtype)", "INTEGER", "", 1, _dpt18_encode, _dpt18_decode),
+    DPTDefinition("DPT19", "Date and Time (no subtype)", "STRING", "", 8, _dpt19_encode, _dpt19_decode),
+    DPTDefinition("DPT20", "1-Byte Enum (no subtype)", "INTEGER", "", 1, _dpt20_encode, _dpt20_decode),
+    DPTDefinition("DPT29", "64-Bit Signed (no subtype)", "INTEGER", "", 8, _dpt29_encode, _dpt29_decode),
+    DPTDefinition("DPT219", "AlarmInfo (no subtype)", "INTEGER", "", 2, _dpt219_encode, _dpt219_decode),
+    DPTDefinition("DPT240", "Combined Position (no subtype)", "STRING", "", 3, _dpt240_800_encode, _dpt240_800_decode),
+]
 
 
 _register_builtin_dpts()
