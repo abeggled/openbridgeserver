@@ -100,6 +100,16 @@ class TestCroniter7Semantics:
         start = datetime(2026, 11, 15, 12, 3, tzinfo=_ZURICH)  # a Sunday
         assert {dt.weekday() for dt in _next("0 0 * * 6/1", start, 3)} == {5}  # Saturday
 
+    def test_leading_zeros_do_not_change_the_max_step_meaning(self):
+        start = datetime(2026, 11, 15, 12, 3, tzinfo=_ZURICH)
+        assert [dt.minute for dt in _next("059/15 * * * *", start, 2)] == [59, 59]
+
+    def test_step_from_weekday_seven_still_covers_the_week(self):
+        # 7 (Sunday) is no maximum to croniter: 7/2 keeps meaning Sun, Tue, Thu, Sat,
+        # which is why obs.logic.manager does not warn about it.
+        start = datetime(2026, 11, 15, 12, 3, tzinfo=_ZURICH)  # a Sunday
+        assert [dt.weekday() for dt in _next("0 0 * * 7/2", start, 4)] == [1, 3, 5, 6]
+
     def test_step_below_the_maximum_still_covers_the_field(self):
         start = datetime(2026, 11, 15, 12, 3, tzinfo=_ZURICH)
         assert [dt.minute for dt in _next("0/15 * * * *", start, 4)] == [15, 30, 45, 0]

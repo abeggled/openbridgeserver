@@ -50,8 +50,16 @@ class TestMaxStepFields:
             ("0 0 1 DEC/3 *", ["DEC/3"]),
             ("0 0 1 dec/3 *", ["dec/3"]),
             ("* * * * 6/1", ["6/1"]),
-            ("* * * * 7/2", ["7/2"]),
             ("* * * * SAT/2", ["SAT/2"]),
+            ("* * * * sat/2", ["sat/2"]),
+            # croniter reads a number with leading zeros as that number (#1444 review)
+            ("059/15 * * * *", ["059/15"]),
+            ("0059/15 * * * *", ["0059/15"]),
+            ("0 023/6 * * *", ["023/6"]),
+            ("0 0 031/5 * *", ["031/5"]),
+            ("0 0 1 012/3 *", ["012/3"]),
+            ("* * * * 06/1", ["06/1"]),
+            ("0 0 1 1 * 0 02099/1", ["02099/1"]),
             ("0 0 * * * 59/15", ["59/15"]),  # optional seconds field
             ("0 0 1 1 * 0 2099/1", ["2099/1"]),  # optional year field
             ("0,59/15 * * * *", ["0,59/15"]),  # only one list item affected
@@ -71,6 +79,11 @@ class TestMaxStepFields:
             "0 59/15 * * *",  # 59 is no maximum in the hour field
             "0 8-17 * * 1-5",
             "0 6,18 * * *",
+            "* * * * 7/2",  # Sunday-based in croniter 6 and 7 alike: no change
+            "* * * * 07/1",
+            "058/15 * * * *",  # leading zero, but below the maximum
+            "0 0 1 nov/3 *",  # a name, but not the maximum
+            "٥٩/15 * * * *",  # non-ASCII digits are no number (croniter 7 rejects them)
         ],
     )
     def test_leaves_other_expressions_alone(self, expr):

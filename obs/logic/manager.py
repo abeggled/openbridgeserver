@@ -114,31 +114,37 @@ def _cron_fire_overrides(node_ids: Iterable[str]) -> dict[str, dict[str, Any]]:
     return {node_id: {"trigger": True} for node_id in node_ids}
 
 
-# The maximum of each cron field in croniter's field order: minute, hour, day
-# of month, month, day of week, then the optional seconds and year fields.
-_CRON_FIELD_MAXIMA: tuple[frozenset[str], ...] = (
-    frozenset({"59"}),
-    frozenset({"23"}),
-    frozenset({"31"}),
-    frozenset({"12", "dec"}),
-    frozenset({"6", "7", "sat"}),
-    frozenset({"59"}),
-    frozenset({"2099"}),
+# The maximum of each cron field in croniter's field order (minute, hour, day
+# of month, month, day of week, then the optional seconds and year fields) as
+# a number and as the names croniter accepts for it.  Day of week 7 (Sunday)
+# is no maximum here: croniter 6 and 7 both expand ``7/<step>`` alike.
+_CRON_FIELD_MAXIMA: tuple[tuple[int, frozenset[str]], ...] = (
+    (59, frozenset()),
+    (23, frozenset()),
+    (31, frozenset()),
+    (12, frozenset({"dec"})),
+    (6, frozenset({"sat"})),
+    (59, frozenset()),
+    (2099, frozenset()),
 )
 
 
 def _cron_max_step_fields(cron_expr: str) -> list[str]:
     """Fields of *cron_expr* holding a step that starts at the field maximum.
 
-    croniter 7 reads such a step (``59/15``, ``* * * * 6/1``) as that maximum
-    alone; croniter 6 expanded it to the whole field (#1444).  The expression
-    stays valid, only its schedule changes, so it is worth a warning.
+    croniter 7 reads such a step (``59/15``, ``059/15``, ``* * * * SAT/1``) as
+    that maximum alone; croniter 6 expanded it to the whole field (#1444).  The
+    expression stays valid, only its schedule changes, so it is worth a warning.
     """
     fields = []
-    for field_text, maxima in zip(cron_expr.split(), _CRON_FIELD_MAXIMA, strict=False):
+    for field_text, (maximum, names) in zip(cron_expr.split(), _CRON_FIELD_MAXIMA, strict=False):
         for part in field_text.split(","):
             start, slash, _ = part.partition("/")
-            if slash and start.lower() in maxima:
+            if not slash:
+                continue
+            # Compare numbers as numbers: croniter reads ``059`` as 59.
+            is_number = start.isascii() and start.isdigit()
+            if (is_number and int(start) == maximum) or start.lower() in names:
                 fields.append(field_text)
                 break
     return fields
