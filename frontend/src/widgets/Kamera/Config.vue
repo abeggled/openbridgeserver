@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import PagePicker from '@/components/PagePicker.vue'
 
 const props = defineProps<{
   modelValue: Record<string, unknown> | null | undefined
@@ -37,9 +38,14 @@ const refreshInterval = ref((r.refreshInterval as number)  ?? 5)
 const aspectRatio     = ref((r.aspectRatio     as string)  ?? '16/9')
 const objectFit       = ref((r.objectFit       as string)  ?? 'contain')
 const useProxy        = ref((r.useProxy        as boolean) ?? false)
+const clickAction     = ref((r.clickAction     as string)  ?? 'none')
+// Ohne Aktion gibt es kein Ziel: eine versteckt mitgespeicherte Seite würde
+// sonst beim späteren Wechsel auf „Zurück“ unbemerkt zur Ersatz-Seite.
+const targetNodeId    = ref(clickAction.value === 'none' ? '' : (r.targetNodeId as string) ?? '')
+watch(clickAction, (action) => { if (action === 'none') targetNodeId.value = '' })
 
 watch(
-  [label, url, streamType, authType, username, password, apiKeyParam, apiKeyValue, refreshInterval, aspectRatio, objectFit, useProxy],
+  [label, url, streamType, authType, username, password, apiKeyParam, apiKeyValue, refreshInterval, aspectRatio, objectFit, useProxy, clickAction, targetNodeId],
   () => {
     emit('update:modelValue', {
       label:           label.value,
@@ -54,6 +60,8 @@ watch(
       aspectRatio:     aspectRatio.value,
       objectFit:       objectFit.value,
       useProxy:        useProxy.value,
+      clickAction:     clickAction.value,
+      targetNodeId:    targetNodeId.value,
     })
   },
 )
@@ -218,6 +226,30 @@ const showRefresh    = computed(() => streamType.value === 'snapshot')
           <option value="fill">{{ $t('widgets.kamera.fitFill') }}</option>
         </select>
       </div>
+    </div>
+
+    <!-- Antippen: Seite öffnen oder zurück -->
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.kamera.clickAction') }}</label>
+      <select
+        v-model="clickAction"
+        data-testid="kamera-config-click-action"
+        class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+      >
+        <option value="none">{{ $t('widgets.kamera.clickActionNone') }}</option>
+        <option value="navigate">{{ $t('widgets.kamera.clickActionNavigate') }}</option>
+        <option value="back">{{ $t('widgets.kamera.clickActionBack') }}</option>
+      </select>
+    </div>
+
+    <div v-if="clickAction !== 'none'" data-testid="kamera-config-click-target">
+      <label class="block text-xs text-gray-400 mb-1">
+        {{ clickAction === 'back' ? $t('widgets.kamera.clickFallbackPage') : $t('widgets.kamera.clickTargetPage') }}
+      </label>
+      <PagePicker v-model="targetNodeId" />
+      <p v-if="clickAction === 'back'" class="text-xs text-gray-500 mt-1">
+        {{ $t('widgets.kamera.clickFallbackHint') }}
+      </p>
     </div>
 
   </div>
