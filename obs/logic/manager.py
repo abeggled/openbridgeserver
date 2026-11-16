@@ -114,6 +114,57 @@ def _cron_fire_overrides(node_ids: Iterable[str]) -> dict[str, dict[str, Any]]:
     return {node_id: {"trigger": True} for node_id in node_ids}
 
 
+# The maximum of each cron field in croniter's field order (minute, hour, day
+# of month, month, day of week, then the optional seconds and year fields) as
+# a number and as the names croniter accepts for it.  Day of week 7 (Sunday)
+# is no maximum here: croniter 6 and 7 both expand ``7/<step>`` alike.
+_CRON_FIELD_MAXIMA: tuple[tuple[int, frozenset[str]], ...] = (
+    (59, frozenset()),
+    (23, frozenset()),
+    (31, frozenset()),
+    (12, frozenset({"dec"})),
+    (6, frozenset({"sat"})),
+    (59, frozenset()),
+    (2099, frozenset()),
+)
+
+
+def _cron_max_step_fields(cron_expr: str) -> list[str]:
+    """Fields of *cron_expr* holding a step that starts at the field maximum.
+
+    croniter 7 reads such a step (``59/15``, ``059/15``, ``* * * * SAT/1``) as
+    that maximum alone; croniter 6 expanded it to the whole field (#1444).  The
+    expression stays valid, only its schedule changes, so it is worth a warning.
+    """
+    fields = []
+    for field_text, (maximum, names) in zip(cron_expr.split(), _CRON_FIELD_MAXIMA, strict=False):
+        for part in field_text.split(","):
+            start, slash, _ = part.partition("/")
+            if not slash:
+                continue
+            # Compare numbers as numbers: croniter reads ``059`` as 59.
+            is_number = start.isascii() and start.isdigit()
+            if (is_number and int(start) == maximum) or start.lower() in names:
+                fields.append(field_text)
+                break
+    return fields
+
+
+def _cron_schedule_problem(cron_expr: Any, now: datetime) -> str | None:
+    """Why *cron_expr* can never fire from *now* on, or ``None`` if it can."""
+    from croniter import CroniterBadDateError, croniter
+
+    if not isinstance(cron_expr, str) or not croniter.is_valid(cron_expr):
+        return "invalid cron expression"
+    try:
+        croniter(cron_expr, now).get_next(datetime)
+    except CroniterBadDateError:
+        return "the cron expression has no future match"
+    except Exception:  # noqa: BLE001 - no verdict on the expression; _cron_loop logs it and retries
+        return None
+    return None
+
+
 class _ObsoleteGraphExecution(Exception):
     """Stop a pass whose captured graph generation has been replaced."""
 
@@ -2930,6 +2981,31 @@ class LogicManager:
                     if key in self._cron_tasks and not self._cron_tasks[key].done():
                         continue  # already running
                     cron_expr = node.data.get("cron", "0 7 * * *")
+                    problem = _cron_schedule_problem(cron_expr, datetime.now(self._cron_timezone()))
+                    if problem is not None:
+                        # Reported once per (re)load instead of a traceback every
+                        # minute from _cron_loop; fixing the block reschedules it.
+                        logger.warning(
+                            "Cron not scheduled: graph=%s (%s) node=%s expr=%r: %s",
+                            graph_id[:8],
+                            name,
+                            node.id[:8],
+                            cron_expr,
+                            problem,
+                        )
+                        continue
+                    max_step_fields = _cron_max_step_fields(cron_expr)
+                    if max_step_fields:
+                        logger.warning(
+                            "Cron graph=%s (%s) node=%s expr=%r: %s starts at the field maximum followed by '/', "
+                            "which since croniter 7 means that maximum only, not the whole field; "
+                            "use '*' or '*/<step>' for 'every'",
+                            graph_id[:8],
+                            name,
+                            node.id[:8],
+                            cron_expr,
+                            ", ".join(max_step_fields),
+                        )
                     task = asyncio.create_task(
                         self._cron_loop(graph_id, node.id, cron_expr),
                         name=f"cron-{graph_id[:8]}-{node.id[:8]}",
@@ -3001,12 +3077,7 @@ class LogicManager:
 
         while True:
             try:
-                tz_name = self._app_config.get("timezone", "Europe/Zurich")
-                try:
-                    tz = ZoneInfo(tz_name)
-                except ZoneInfoNotFoundError:
-                    tz = ZoneInfo("Europe/Zurich")
-                now = datetime.now(tz)
+                now = datetime.now(self._cron_timezone())
                 it = croniter(cron_expr, now)
                 next_dt = it.get_next(datetime)
                 wait_s = max(0.0, (next_dt - now).total_seconds())
@@ -3032,8 +3103,15 @@ class LogicManager:
             except asyncio.CancelledError:
                 raise
             except Exception:
-                logger.exception("Cron loop error graph=%s", graph_id[:8])
+                logger.exception("Cron loop error graph=%s node=%s expr=%r", graph_id[:8], node_id[:8], cron_expr)
                 await asyncio.sleep(60)  # back-off on unexpected errors
+
+    def _cron_timezone(self) -> ZoneInfo:
+        """The configured system timezone cron schedules run in, else Europe/Zurich."""
+        try:
+            return ZoneInfo(self._app_config.get("timezone", "Europe/Zurich"))
+        except (ZoneInfoNotFoundError, TypeError, ValueError):
+            return ZoneInfo("Europe/Zurich")
 
     async def _ical_loop(self, graph_id: str, node_id: str, refresh_min: float) -> None:
         """Triggers the graph containing an ical node on its refresh schedule.

@@ -25,6 +25,13 @@ Der Zeitplan wird in der eingestellten Anwendungs-Zeitzone ausgewertet (**Einste
 Allgemein**), nicht in UTC — ein Trigger „Täglich um 07:00" löst also um 07:00 Ortszeit aus und
 folgt automatisch der Zeitumstellung (Sommer-/Winterzeit).
 
+Ein Schritt, der beim höchsten Wert seines Feldes beginnt, bedeutet nur diesen Wert, nicht das ganze
+Feld: `59/15 * * * *` löst nur in Minute 59 aus, `* * * * 6/1` nur samstags. Für „jede/alle“ `*/15`
+oder `*` schreiben. Beim Speichern des Logikblatts und beim Serverstart warnt das Log vor einem
+solchen Ausdruck. Ein Trigger, dessen Ausdruck ungültig ist oder nie mehr zutrifft (z. B.
+`0 0 31/5 2 *`, der 31. Februar), wird nicht eingeplant; das Log nennt Logikblatt, Block und
+Ausdruck.
+
 Im Debug-Modus muss man nicht auf den nächsten Zeitpunkt warten: Der Reiter **Debug-Werte** eines
 Trigger-Blocks bietet die Schaltfläche **Jetzt auslösen**. Sie führt das Logikblatt einmal so aus,
 als hätte der Zeitplan gerade ausgelöst — mit allen Folgeaktionen wie Schreibvorgängen oder

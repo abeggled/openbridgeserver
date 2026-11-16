@@ -24,6 +24,12 @@ All three levels stay in sync — a change at any level updates the others.
 The schedule is evaluated in the configured application timezone (**Settings → General**), not
 UTC — a "Daily at 07:00" trigger fires at 7am local time and follows daylight-saving transitions.
 
+A step that starts at the highest value of its field means that value only, not the whole field:
+`59/15 * * * *` fires at minute 59 only, `* * * * 6/1` on Saturdays only. Write `*/15` or `*` for
+"every". When the logic sheet is saved and when the server starts, the log warns about such an
+expression. A Trigger whose expression is invalid or never matches again (e.g. `0 0 31/5 2 *`, the
+31st of February) is not scheduled; the log names the sheet, the block and the expression.
+
 In debug mode you need not wait for the next scheduled time: the **Debug values** tab of a Trigger
 block offers a **Fire now** button. It runs the logic sheet once as if the schedule had just fired —
 with all follow-up actions such as writes or notifications. Overrides set on other blocks in debug

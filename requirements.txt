@@ -38,7 +38,7 @@ pyzipper>=0.3.6
 xknxproject>=3.8.2,<4     # tracks xknx major version
 
 # Logic Engine — cron scheduling
-croniter>=6.2.2,<7
+croniter>=7,<8
 astral>=3.2,<4             # 2.x→3.x changed LocationInfo constructor signature
 
 # Zeitschaltuhr — holiday calendar
