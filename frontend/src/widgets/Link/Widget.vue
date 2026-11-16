@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import type { AccessLevel, DataPointValue, VisuNode } from '@/types'
+import type { DataPointValue } from '@/types'
 import VisuIcon from '@/components/VisuIcon.vue'
 import { useVisuStore } from '@/stores/visu'
+import { usePageNavigation } from '@/composables/usePageNavigation'
 
 const props = defineProps<{
   config: Record<string, unknown>
@@ -14,7 +15,6 @@ const props = defineProps<{
   editorMode: boolean
 }>()
 
-const router   = useRouter()
 const route    = useRoute()
 const store    = useVisuStore()
 const { t } = useI18n()
@@ -37,31 +37,13 @@ const showArrow = computed(() => props.config.show_arrow !== false)
 // Back to the previously visited page, whichever it was; target_node_id is the
 // fallback when there is no history (e.g. the page was opened directly).
 const historyBack = computed(() => props.config.history_back === true)
-// history.state is not reactive; it changes with every navigation, so the current
-// route is read along with it. In the editor it says nothing about the Visu's history.
-const canGoBack = computed(() => {
-  void route.fullPath
-  return !props.editorMode && !!window.history.state?.back
+const { navigate, hasDestination } = usePageNavigation({
+  targetId,
+  historyBack,
+  editorMode: () => props.editorMode,
 })
-// Without history (bookmark, kiosk start, new tab) only the fallback page is a destination.
-const hasDestination = computed(() => !!targetId.value || (historyBack.value && canGoBack.value))
 
 const activeIndicator = computed(() => (props.config.active_indicator as string | undefined) ?? 'none')
-
-function resolveAccessNode(node: VisuNode): { access: AccessLevel; definingId: string } {
-  let cur: VisuNode | undefined = node
-  while (cur) {
-    if (cur.access !== null) return { access: cur.access, definingId: cur.id }
-    cur = cur.parent_id ? store.getNode(cur.parent_id) : undefined
-  }
-  return { access: 'public', definingId: node.id }
-}
-
-function isVisibleInLocationOverview(node: VisuNode): boolean {
-  const { access } = resolveAccessNode(node)
-  if (access === 'user') return store.isLoggedIn
-  return true
-}
 
 // Active if targetId is the current page OR any ancestor of the current page in the visu tree
 const isActive = computed(() => {
@@ -75,32 +57,6 @@ const isActive = computed(() => {
   }
   return false
 })
-
-function navigate() {
-  if (props.editorMode) return
-  if (historyBack.value && window.history.state?.back) {
-    router.back()
-    return
-  }
-  if (!targetId.value) return
-  const target = store.getNode(targetId.value)
-  if (target?.type === 'LOCATION') {
-    const targetAccess = resolveAccessNode(target)
-    if (targetAccess.access === 'protected' && !store.hasSessionToken(targetAccess.definingId)) {
-      router.push({ name: 'viewer', params: { id: targetId.value } })
-      return
-    }
-
-    // Navigate to the first direct page that would also be visible in the location overview.
-    const firstPage = store.getChildren(targetId.value)
-      .find(n => n.type === 'PAGE' && isVisibleInLocationOverview(n))
-    if (firstPage) {
-      router.push({ name: 'viewer', params: { id: firstPage.id } })
-      return
-    }
-  }
-  router.push({ name: 'viewer', params: { id: targetId.value } })
-}
 </script>
 
 <template>
