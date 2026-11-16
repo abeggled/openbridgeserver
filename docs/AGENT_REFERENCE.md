@@ -468,7 +468,7 @@ One file per external library. Each test verifies the exact import paths and API
 |---|---|---|
 | `test_aiomqtt_contract.py` | `aiomqtt` | `Client(hostname=, port=, username=, password=)`, `publish/subscribe/messages`, `Message` fields |
 | `test_astral_contract.py` | `astral` | `LocationInfo.observer`, `sun()` keys, `SunDirection`, `time_at_elevation()` |
-| `test_croniter_contract.py` | `croniter` | `croniter(expr, now).get_next(datetime)` — exact manager.py pattern |
+| `test_croniter_contract.py` | `croniter` | `croniter(expr, now).get_next(datetime)` — exact manager.py pattern; croniter 7 meanings (max-step form, rejected and unsatisfiable expressions) and DST transitions in `Europe/Zurich` |
 | `test_fastapi_contract.py` | `fastapi` | Routing, 422 response shape (`detail` list with `loc`/`msg`), `HTTPException`, `APIRouter` |
 | `test_holidays_contract.py` | `holidays` | `country_holidays()`, `.items()`, date membership, `subdiv` kwarg |
 | `test_jose_contract.py` | `python-jose` | `jwt.encode/decode` roundtrip, `JWTError`, expiry handling |

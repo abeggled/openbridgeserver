@@ -440,7 +440,8 @@
       "selectPage": "Select page …",
       "type": "Type",
       "qualityBad": "Quality: bad",
-      "qualityUncertain": "Quality: uncertain"
+      "qualityUncertain": "Quality: uncertain",
+      "pageNotFound": "Page not found"
     },
     "chart": {
       "title": "History",
@@ -606,7 +607,14 @@
       "fitFill": "Fill",
       "streamUnavailable": "Stream unavailable",
       "autoRetry": "Automatic retry in 10 s",
-      "reloadNow": "Reload now"
+      "reloadNow": "Reload now",
+      "clickAction": "On tap",
+      "clickActionNone": "Nothing",
+      "clickActionNavigate": "Open page",
+      "clickActionBack": "Back to the previously visited page",
+      "clickTargetPage": "Target page",
+      "clickFallbackPage": "Fallback page (optional)",
+      "clickFallbackHint": "Opened when there is no previous page, e.g. after opening it directly from a bookmark."
     },
     "licht": {
       "brightness": "Brightness (0–100 %)",

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { reactive } from 'vue'
 import { mount, flushPromises } from '@vue/test-utils'
 
 const haProfiles = vi.fn()
@@ -26,7 +27,7 @@ const CATALOG = [
 const BASE = { entity_id: '', attribute: '', service_domain: '', service_name: '', service_data_key: '', profile: '' }
 
 async function mk(cfg = {}) {
-  const props = { cfg: { ...BASE, ...cfg } }
+  const props = { cfg: reactive({ ...BASE, ...cfg }) }
   const w = mount(BindingFormHomeAssistant, { props })
   await flushPromises()
   return { w, cfg: props.cfg }
