@@ -708,18 +708,43 @@ class ModbusTcpAdapter(AdapterBase):
         Waits as long as transactions keep completing on the endpoint; returns
         False only once nothing has completed for ``timeout_s`` since this read
         started waiting (or since the last completion, whichever is later).
+
+        A single ``acquire()`` stays queued for the whole wait, so the read keeps
+        its place in the semaphore's FIFO. Re-issuing the acquire after each
+        check would put the read back at the tail every time, and behind pollers
+        that keep rejoining it would starve without ever reporting anything.
         """
         started = time.monotonic()
-        while True:
-            last = max(_SHARED_BUS_PROGRESS.get(self._shared_bus_key, started), started)
-            remaining = timeout_s - (time.monotonic() - last)
-            if remaining <= 0:
-                return False
-            try:
-                await asyncio.wait_for(self._io_sem.acquire(), timeout=remaining)
-                return True
-            except TimeoutError:
-                continue
+        acquire = asyncio.ensure_future(self._io_sem.acquire())
+        try:
+            while True:
+                last = max(_SHARED_BUS_PROGRESS.get(self._shared_bus_key, started), started)
+                remaining = timeout_s - (time.monotonic() - last)
+                if remaining <= 0:
+                    break
+                done, _ = await asyncio.wait({acquire}, timeout=remaining)
+                if done:
+                    return True
+        except BaseException:
+            # Caller cancelled: give the permit back if it was granted meanwhile.
+            await self._abandon_acquire(acquire)
+            raise
+        # Wedged: leave the queue. If the permit arrived in the same instant,
+        # use it rather than skipping a read the bus could serve.
+        return not await self._abandon_acquire(acquire, keep_if_granted=True)
+
+    async def _abandon_acquire(self, acquire: asyncio.Future, *, keep_if_granted: bool = False) -> bool:
+        """Cancel a pending shared-bus ``acquire()``. Returns True when the waiter
+        left the queue without a permit. A permit granted in the meantime is kept
+        (``keep_if_granted``) or released, so it can never leak."""
+        acquire.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await acquire
+        if acquire.cancelled():
+            return True
+        if not keep_if_granted:
+            self._io_sem.release()
+        return False
 
     async def _space_out_bus(self, client) -> None:
         """Pause after a Modbus transaction so a slow shared RS485 gateway can

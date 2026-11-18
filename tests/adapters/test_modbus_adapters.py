@@ -2444,6 +2444,68 @@ class TestSharedBusAcquireTimeout:
         await asyncio.gather(*queued)
         assert "no transaction completed" not in caplog.text
 
+    async def test_read_keeps_its_queue_place_behind_rejoining_pollers(self):
+        """starwarsfan F1 (reopened): sibling pollers rejoin the shared bus queue as
+        soon as they finish, so the queue ahead of a read stays longer than the
+        bound. A read that gave up its waiter slot on every timeout would rejoin
+        at the tail forever and starve silently; it must keep its place and run."""
+        reader, client = await self._connect_shared("10.9.9.27", 0.3)
+        sibling, _ = await self._connect_shared("10.9.9.27", 0.3)
+        stop = asyncio.Event()
+
+        async def poller():
+            # Unbounded transactions never drop their waiter slot, so whoever leaves
+            # the queue on a timeout always rejoins behind all of them.
+            while not stop.is_set():
+                async with sibling._modbus_io_context(bounded=False):
+                    await asyncio.sleep(0.1)
+
+        # Eight pollers keep ~0.8 s of transactions queued ahead of the read (bound 0.3 s).
+        pollers = [asyncio.create_task(poller()) for _ in range(8)]
+        await asyncio.sleep(0.05)
+        try:
+
+            async def read():
+                async with reader._modbus_io_context() as c:
+                    return c
+
+            # With a fixed queue place the read runs after ~0.8 s; a read that rejoins
+            # the tail on every timeout never gets there.
+            assert await asyncio.wait_for(read(), timeout=2.0) is client
+        finally:
+            stop.set()
+            await asyncio.gather(*pollers)
+
+    async def test_cancelled_waiting_read_does_not_leak_the_semaphore(self):
+        """A read cancelled while queued (disconnect / binding reload) leaves the
+        queue cleanly: once the holder releases, the bus is free again."""
+        adapter, _ = await self._connect_shared("10.9.9.29", 5.0)
+        await adapter._io_sem.acquire()
+
+        async def read():
+            async with adapter._modbus_io_context():
+                pass
+
+        task = asyncio.create_task(read())
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        adapter._io_sem.release()
+        await asyncio.sleep(0)
+        assert adapter._io_sem.locked() is False
+
+    async def test_wedge_timeout_does_not_leak_the_semaphore(self):
+        """Giving up on a stalled bus must not leave a permit acquired on its behalf:
+        once the holder releases, the bus is free again."""
+        adapter, _ = await self._connect_shared("10.9.9.28", 0.2)
+        await adapter._io_sem.acquire()
+        async with adapter._modbus_io_context() as c:
+            assert c is None
+        adapter._io_sem.release()
+        await asyncio.sleep(0)
+        assert adapter._io_sem.locked() is False
+
     async def test_stalled_bus_still_times_out_after_earlier_progress(self):
         """Progress recorded long before the read started waiting does not extend
         the bound: a bus that stalls now still times out after the timeout."""
