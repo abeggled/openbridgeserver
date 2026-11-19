@@ -395,6 +395,15 @@ class TestTlsErrorReporting:
             ("WARNING", "unable to get local issuer certificate"),
         ]
 
+    def test_a_failure_without_tls_cause_rearms_the_warning(self):
+        adapter = _adapter({})
+        adapter._adp_cfg = ModbusTcpAdapterConfig(host="plc", port=802)
+        adapter._logged_tls_reason = "certificate has expired"
+
+        adapter._connect_failure("reconnect", "Could not reconnect to", "couldNotReconnectTo")
+
+        assert adapter._logged_tls_reason is None
+
     async def test_a_successful_handshake_rearms_the_warning(self):
         adapter = _adapter({"tls": True})
         adapter._logged_tls_reason = "certificate has expired"
@@ -673,6 +682,14 @@ class TestPublishReconnectFailure:
         await adapter._publish_reconnect_failure("Could not reconnect to plc:502", "couldNotReconnectTo", {"host": "plc", "port": 502})
 
         adapter._publish_status.assert_not_awaited()
+
+    async def test_offline_device_replaces_a_stale_tls_cause(self):
+        adapter = self._disconnected("modbusTlsCertificateRejected", {"host": "plc", "port": 802, "reason": "certificate has expired"})
+        params = {"host": "plc", "port": 802}
+
+        await adapter._publish_reconnect_failure("Could not reconnect to plc:802", "couldNotReconnectTo", params)
+
+        adapter._publish_status.assert_awaited_once_with(False, "Could not reconnect to plc:802", code="couldNotReconnectTo", params=params)
 
 
 class TestMbapFramingOverTls:

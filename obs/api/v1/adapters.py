@@ -838,6 +838,8 @@ async def test_instance(
         # started by connect(). Poll briefly so that task gets a chance to run.
         deadline = asyncio.get_event_loop().time() + 5.0
         while not test_instance.connected and asyncio.get_event_loop().time() < deadline:
+            if _connect_failed_result(test_instance).detail_code != "connectFailed":
+                break  # the adapter already reported a definitive cause (e.g. TLS config)
             await asyncio.sleep(0.1)
         connected = test_instance.connected
         failure = None if connected else _connect_failed_result(test_instance)
@@ -2521,6 +2523,8 @@ async def test_adapter(
         # started by connect(). Poll briefly so that task gets a chance to run.
         deadline = asyncio.get_event_loop().time() + 5.0
         while not test_instance.connected and asyncio.get_event_loop().time() < deadline:
+            if _connect_failed_result(test_instance).detail_code != "connectFailed":
+                break  # the adapter already reported a definitive cause (e.g. TLS config)
             await asyncio.sleep(0.1)
         connected = test_instance.connected
         failure = None if connected else _connect_failed_result(test_instance)

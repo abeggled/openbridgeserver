@@ -615,7 +615,12 @@ _MODBUS_TLS_BAD_CA = {"host": "127.0.0.1", "port": 9, "timeout": 0.5, "tls": Tru
 
 
 async def test_adapter_type_test_reports_invalid_modbus_tls_config(client, auth_headers):
+    import time
+
+    started = time.monotonic()
     resp = await client.post("/api/v1/adapters/MODBUS_TCP/test", json={"config": _MODBUS_TLS_BAD_CA}, headers=auth_headers)
+
+    assert time.monotonic() - started < 4.0  # definitive cause: no 5 s connect polling
 
     assert resp.status_code == 200
     body = resp.json()
@@ -642,5 +647,17 @@ async def test_instance_test_reports_invalid_modbus_tls_config(client, auth_head
 async def test_plain_modbus_connect_failure_keeps_the_generic_code(client, auth_headers):
     config = {"host": "127.0.0.1", "port": 9, "timeout": 0.5}
     resp = await client.post("/api/v1/adapters/MODBUS_TCP/test", json={"config": config}, headers=auth_headers)
+
+    assert resp.json()["detail_code"] == "connectFailed"
+
+
+async def test_instance_test_plain_modbus_connect_failure_keeps_the_generic_code(client, auth_headers):
+    inst = await _create_instance(client, auth_headers, adapter_type="MODBUS_TCP")
+
+    resp = await client.post(
+        f"/api/v1/adapters/instances/{inst['id']}/test",
+        json={"config": {"host": "127.0.0.1", "port": 9, "timeout": 0.5}},
+        headers=auth_headers,
+    )
 
     assert resp.json()["detail_code"] == "connectFailed"

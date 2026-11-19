@@ -726,6 +726,7 @@ class ModbusTcpAdapter(AdapterBase):
         host, port = self._adp_cfg.host, self._adp_cfg.port
         exc = self._last_tls_error
         if exc is None:
+            self._logged_tls_reason = None  # a TLS failure after this outage is news again
             return f"{fallback_detail} {host}:{port}", fallback_code, {"host": host, "port": port}
         if isinstance(exc, ssl.SSLCertVerificationError):
             reason = getattr(exc, "verify_message", None) or str(exc)
@@ -806,13 +807,15 @@ class ModbusTcpAdapter(AdapterBase):
             await self._publish_status(False, detail, code=code, params=params)
 
     async def _publish_reconnect_failure(self, detail: str, code: str, params: dict) -> None:
-        """Like _publish_disconnected_if_needed, but a new TLS cause is always shown.
+        """Like _publish_disconnected_if_needed, but a changed TLS cause is always shown.
 
         The adapter is usually already disconnected when a reconnect fails, so the
-        generic path would keep an older message (device offline) although the
-        device is now back with, e.g., an expired certificate.
+        generic path would keep an older message: "device offline" although the device
+        is now back with an expired certificate, or a stale certificate error although
+        the device is now simply unreachable.
         """
-        if code in _TLS_FAILURE_CODES and (code, params) != (self.last_detail_code, self.last_detail_params):
+        tls_involved = code in _TLS_FAILURE_CODES or self.last_detail_code in _TLS_FAILURE_CODES
+        if tls_involved and (code, params) != (self.last_detail_code, self.last_detail_params):
             await self._publish_status(False, detail, code=code, params=params)
             return
         await self._publish_disconnected_if_needed(detail, code=code, params=params)
