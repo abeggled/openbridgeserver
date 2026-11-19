@@ -58,6 +58,15 @@ period's** value for comparison (previous day, previous week, previous month, pr
 initial value can optionally be set for the meter reading and each period, e.g. when first setting
 this up with an already-running meter.
 
+Only finite numbers count as a meter reading (a boolean counts as 1 or 0). Empty values, text,
+`NaN` and infinity are ignored; the last valid reading stays the baseline. A reading **below** the
+baseline is not taken over at once but held as pending. If the meter then rises back to at most
+10 % below the baseline or above it, the low reading was an outlier: the baseline stays, and only
+what goes beyond it is counted. If it instead rises from further down, that counts as a meter
+replacement or reset, and only that rise is counted from there — unobserved consumption before the
+first low reading is not estimated. A genuine meter replacement whose first rise already lands
+within the 10 % band is therefore only counted once the meter passes the old baseline.
+
 ## Summer/Winter (DIN) {#logic-block-heating-circuit}
 
 Summer/winter switchover for heating control per DIN (Mannheim method), based on outside

@@ -16,7 +16,7 @@ from typing import ClassVar
 
 import pytest
 
-from obs.core.transformation import _extract_nested, apply_source_type, apply_value_map
+from obs.core.transformation import SourceExtractionError, _extract_nested, apply_source_type, apply_value_map
 
 # ===========================================================================
 # apply_value_map
@@ -305,3 +305,67 @@ class TestExtractNested:
     def test_missing_nested_key_raises(self):
         with pytest.raises(KeyError):
             _extract_nested({"a": {"b": 1}}, "a.c")
+
+
+# ===========================================================================
+# apply_source_type — XML extraction contract (#1471)
+# ===========================================================================
+
+_XML_PATH = "DataRecord[@id='1']/Value"
+
+
+def _xml(value_xml: str) -> str:
+    return f'<root><DataRecord id="1">{value_xml}</DataRecord></root>'
+
+
+class TestApplySourceTypeXmlPath:
+    def test_int_text(self):
+        assert _run(_xml("<Value>811</Value>"), "xml", xml_path=_XML_PATH) == 811
+
+    def test_float_text(self):
+        assert _run(_xml("<Value>811.455</Value>"), "xml", xml_path=_XML_PATH) == pytest.approx(811.455)
+
+    def test_non_empty_string_text_is_stripped(self):
+        assert _run(_xml("<Value>  ok  </Value>"), "xml", xml_path=_XML_PATH) == "ok"
+
+    @pytest.mark.parametrize("value_xml", ["<Value></Value>", "<Value/>", "<Value>  \n\t </Value>"])
+    def test_empty_or_whitespace_element_raises(self, value_xml):
+        with pytest.raises(SourceExtractionError, match="empty element"):
+            _run(_xml(value_xml), "xml", xml_path=_XML_PATH)
+
+    def test_missing_path_raises(self):
+        with pytest.raises(SourceExtractionError, match="not found"):
+            _run(_xml("<Other>1</Other>"), "xml", xml_path=_XML_PATH)
+
+    @pytest.mark.parametrize("xml_path", ["/Value", "Value[0]", "Value[", "Value/text()", "Value/@id"])
+    def test_invalid_path_raises(self, xml_path):
+        # ElementPath raises SyntaxError for "/Value" and "Value[0]", TypeError
+        # for "Value[" and KeyError for "Value/text()" and "Value/@id".
+        with pytest.raises(SourceExtractionError, match="invalid XML path"):
+            _run(_xml("<Value>1</Value>"), "xml", xml_path=xml_path)
+
+    def test_malformed_xml_raises(self):
+        with pytest.raises(SourceExtractionError, match="malformed"):
+            _run("<root><Value>1</root>", "xml", xml_path=_XML_PATH)
+
+    def test_padded_path_is_trimmed(self):
+        assert _run(_xml("<Value>7</Value>"), "xml", xml_path=f"  {_XML_PATH} ") == 7
+
+    def test_error_is_a_value_error(self):
+        # Callers that already catch ValueError keep working.
+        assert issubclass(SourceExtractionError, ValueError)
+
+
+class TestApplySourceTypeXmlWithoutPath:
+    def test_root_text_kept(self):
+        assert _run("<root> 42 </root>", "xml") == "42"
+
+    def test_empty_root_text_kept(self):
+        # Root-text semantics without a path are unchanged by #1471.
+        assert _run("<root></root>", "xml") == ""
+
+    def test_malformed_xml_returns_auto_value(self):
+        assert _run("not xml", "xml") == "not xml"
+
+    def test_blank_path_means_no_path(self):
+        assert _run("<root> 42 </root>", "xml", xml_path="   ") == "42"

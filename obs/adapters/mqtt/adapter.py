@@ -65,7 +65,7 @@ from obs.adapters.base import AdapterBase, AdapterDelegationCapability
 from obs.adapters.registry import register
 from obs.core.event_bus import DataValueEvent
 from obs.core.json import json_dumps, jsonable
-from obs.core.transformation import apply_source_type, apply_value_map
+from obs.core.transformation import SourceExtractionError, apply_source_type, apply_value_map
 
 logger = logging.getLogger(__name__)
 
@@ -285,6 +285,17 @@ class MqttAdapter(AdapterBase):
 
                     pub_value = apply_formula(binding.value_formula, pub_value)
                 pub_value = apply_value_map(pub_value, binding.value_map)
+            except SourceExtractionError as exc:
+                # No sample in this message (#1471): publishing a stand-in as
+                # good would overwrite the last valid value downstream.
+                logger.warning(
+                    "MQTT: skipping message on topic=%s for binding %s (dp=%s): %s",
+                    topic,
+                    binding.id,
+                    binding.datapoint_id,
+                    exc,
+                )
+                continue
             except Exception:
                 logger.exception("MQTT: error processing binding %s", binding.id)
             logger.info(
