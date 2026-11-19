@@ -473,7 +473,7 @@ One file per external library. Each test verifies the exact import paths and API
 | `test_holidays_contract.py` | `holidays` | `country_holidays()`, `.items()`, date membership, `subdiv` kwarg |
 | `test_jose_contract.py` | `python-jose` | `jwt.encode/decode` roundtrip, `JWTError`, expiry handling |
 | `test_pydantic_contract.py` | `pydantic` | v2 APIs: `model_dump()`, `model_validate()`, `field_validator(mode=)`, `model_config` |
-| `test_pymodbus_contract.py` | `pymodbus` | Import path `from pymodbus.client import Async*`, all read/write method names, `connected`; TLS: `AsyncModbusTlsClient(sslctx=)`, `ctx.call_create`, TLS framer byte-identical to MBAP |
+| `test_pymodbus_contract.py` | `pymodbus` | Import path `from pymodbus.client import Async*`, all read/write method names, `connected`; TLS: `CommParams` TLS fields, MBAP-over-TLS subclass keeps preset `comm_params` and uses `FramerSocket`, `ctx.call_create` |
 | `test_slowapi_contract.py` | `slowapi` | `Limiter`, `_rate_limit_exceeded_handler`, `RateLimitExceeded` |
 | `test_socketio_contract.py` | `python-socketio` | `AsyncClient`, `@sio.event`, `connect/emit/disconnect` as coroutines |
 | `test_xknx_contract.py` | `xknx` | `Telegram`, `GroupAddress`, `DPTArray/DPTBinary`, APCI types |
