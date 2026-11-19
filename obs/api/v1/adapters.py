@@ -410,20 +410,29 @@ def _preserve_redacted_message_config_secrets(stored_config: dict[str, Any], inc
     return merged
 
 
+# Secrets only admins configure: a delegated reader never sees them (#1392, #1448).
+_ADMIN_ONLY_SECRET_FIELDS: dict[str, tuple[str, ...]] = {
+    "HOME_ASSISTANT": ("token",),
+    "MODBUS_TCP": ("tls_client_key_password",),
+}
+
+
 def _redact_instance_config(adapter_type: str, config: dict[str, Any], *, privileged: bool = False) -> dict[str, Any]:
     if adapter_type == "MESSAGE":
         return _redact_message_config(config)
-    if adapter_type == "HOME_ASSISTANT" and not privileged:
-        # Only admins configure HA instances; a delegated reader never sees the token (#1392).
-        return redact_sensitive_fields(config, ("token",))
+    secret_fields = _ADMIN_ONLY_SECRET_FIELDS.get(adapter_type)
+    if secret_fields and not privileged:
+        return redact_sensitive_fields(config, secret_fields)
     return config
 
 
 def _restore_redacted_token(adapter_type: str, stored: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
-    """Keep the stored HA token when a client sends the redacted placeholder back."""
-    if adapter_type == "HOME_ASSISTANT" and incoming.get("token") == REDACTED:
-        return {**incoming, "token": stored.get("token", "")}
-    return incoming
+    """Keep a stored admin-only secret when a client sends the redacted placeholder back."""
+    restored = incoming
+    for field in _ADMIN_ONLY_SECRET_FIELDS.get(adapter_type, ()):
+        if incoming.get(field) == REDACTED:
+            restored = {**restored, field: stored.get(field, "")}
+    return restored
 
 
 def _instance_out(row: Any, instance: Any | None, *, privileged: bool) -> AdapterInstanceOut:
@@ -2557,7 +2566,7 @@ async def update_adapter_config(
     if cls is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Adapter '{adapter_type}' nicht registriert")
     config_new = body.config
-    if adapter_type == "HOME_ASSISTANT":
+    if adapter_type in _ADMIN_ONLY_SECRET_FIELDS:
         row = await db.fetchone("SELECT config FROM adapter_configs WHERE adapter_type=?", (adapter_type,))
         config_new = _restore_redacted_token(adapter_type, json.loads(row["config"]) if row is not None and row["config"] else {}, body.config)
     if adapter_type == "MESSAGE":

@@ -646,6 +646,26 @@ class TestConnectFailedResult:
         assert _connect_failed_result(instance).detail_code == "connectFailed"
 
 
+class TestKeyPasswordRedaction:
+    def test_delegated_readers_get_the_placeholder(self):
+        from obs.api.v1.adapters import _redact_instance_config
+        from obs.api.v1.redaction import REDACTED
+
+        cfg = {"tls": True, "tls_client_key_password": "secret"}
+
+        assert _redact_instance_config("MODBUS_TCP", cfg)["tls_client_key_password"] == REDACTED
+        assert _redact_instance_config("MODBUS_TCP", cfg, privileged=True)["tls_client_key_password"] == "secret"
+
+    def test_placeholder_restores_the_stored_password(self):
+        from obs.api.v1.adapters import _restore_redacted_token
+        from obs.api.v1.redaction import REDACTED
+
+        stored = {"tls_client_key_password": "secret"}
+
+        assert _restore_redacted_token("MODBUS_TCP", stored, {"tls_client_key_password": REDACTED}) == stored
+        assert _restore_redacted_token("MODBUS_TCP", stored, {"tls_client_key_password": "new"}) == {"tls_client_key_password": "new"}
+
+
 # ---------------------------------------------------------------------------
 # Reconnect failures: a new TLS cause replaces an older status
 # ---------------------------------------------------------------------------

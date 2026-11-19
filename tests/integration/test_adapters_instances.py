@@ -232,6 +232,52 @@ async def test_instance_grants_drive_visibility_and_delegable_configuration(clie
         await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
+async def test_modbus_tls_key_password_is_redacted_for_delegated_readers(client, auth_headers):
+    password = "modbus-client-key-password"
+    created = await client.post(
+        "/api/v1/adapters/instances",
+        json={
+            "adapter_type": "MODBUS_TCP",
+            "name": f"Modbus TLS {uuid.uuid4().hex[:8]}",
+            "config": {"tls": True, "tls_client_key_password": password},
+            "enabled": False,
+        },
+        headers=auth_headers,
+    )
+    assert created.status_code == 201, created.text
+    instance_id = created.json()["id"]
+    username, user_headers = await _create_non_admin_headers(client, auth_headers)
+    try:
+        state = await client.get(f"/api/v1/authz/principals/user/{username}/grants", headers=auth_headers)
+        granted = await client.put(
+            f"/api/v1/authz/principals/user/{username}/grants",
+            json={"grants": [{"node_type": "adapter_instance", "node_id": instance_id, "role": "operator", "effect": "allow"}]},
+            headers={**auth_headers, "If-Match": state.headers["etag"]},
+        )
+        assert granted.status_code == 200, granted.text
+
+        delegated = await client.get(f"/api/v1/adapters/instances/{instance_id}", headers=user_headers)
+        assert delegated.status_code == 200, delegated.text
+        assert delegated.json()["config"]["tls_client_key_password"] == "[redacted]"
+
+        listed = await client.get("/api/v1/adapters/instances", headers=user_headers)
+        row = next(r for r in listed.json() if r["id"] == instance_id)
+        assert row["config"]["tls_client_key_password"] == "[redacted]"
+
+        # Sending the placeholder back keeps the stored password.
+        patched = await client.patch(
+            f"/api/v1/adapters/instances/{instance_id}",
+            json={"config": {"tls": True, "tls_client_key_password": "[redacted]"}},
+            headers=auth_headers,
+        )
+        assert patched.status_code == 200, patched.text
+        admin_view = await client.get(f"/api/v1/adapters/instances/{instance_id}", headers=auth_headers)
+        assert admin_view.json()["config"]["tls_client_key_password"] == password
+    finally:
+        await client.delete(f"/api/v1/adapters/instances/{instance_id}", headers=auth_headers)
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
+
+
 # ---------------------------------------------------------------------------
 # PATCH /instances/{id}
 # ---------------------------------------------------------------------------
