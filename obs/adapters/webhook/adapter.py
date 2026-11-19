@@ -254,9 +254,10 @@ class WebhookBindingConfig(BaseModel):
 def coerce_webhook_value(raw: Any, data_type: str) -> Any:
     """Coerce an HTTP-supplied value to the DataPoint's declared type.
 
-    Unlike ``apply_source_type`` (which logs and passes a bad value through,
-    the right behaviour for a subscribed MQTT topic) this raises ``ValueError``
-    so the caller can answer 400 instead of putting a wrong value on the bus.
+    Unlike ``apply_source_type`` (which mostly logs and passes a bad value
+    through, raising only for a failed XML path extraction, #1471) this raises
+    ``ValueError`` so the caller can answer 400 instead of putting a wrong
+    value on the bus.
     """
     name = DataTypeRegistry.get(data_type).name
     if name == "UNKNOWN":

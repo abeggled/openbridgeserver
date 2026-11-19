@@ -4814,6 +4814,153 @@ class TestConsumptionCounter:
         assert out["monthly"] == pytest.approx(310.0)  # 300 seed + 10 delta
         assert out["yearly"] == pytest.approx(1210.0)  # 1200 seed + 10 delta
 
+    # --- #1471: invalid samples and meter resets ---------------------------
+
+    def _feed(self, values, cfg=None):
+        state = {}
+        n1 = node("c", "consumption_counter", cfg or {})
+        out = None
+        for v in values:
+            out = make_executor([n1], hysteresis_state=state).execute({"c": {"value": v}})["c"]
+        return out, state["c"]
+
+    @pytest.mark.parametrize(
+        ("values", "expected"),
+        [
+            ([811.455, "", 811.459], 0.004),
+            ([9990.0, 0.0, 0.0, 9990.0], 0.0),
+            ([9990.0, 0.0, 0.0, 5.0, 8.0], 8.0),
+            ([9990.0, 5.0, 8.0], 3.0),
+        ],
+        ids=["empty-string", "transient-low", "reset-confirmed-by-rise", "reset-unobserved-start"],
+    )
+    def test_issue_1471_sequences(self, values, expected):
+        out, _ = self._feed(values)
+        for period in ("daily", "weekly", "monthly", "yearly"):
+            assert out[period] == pytest.approx(expected, abs=1e-9)
+
+    @pytest.mark.parametrize(
+        "bad",
+        ["", "   ", "abc", float("nan"), float("inf"), float("-inf"), "nan", "inf", "1e999", 10**400, [1], {"v": 1}],
+        ids=lambda v: repr(v)[:20],
+    )
+    def test_invalid_sample_keeps_baseline(self, bad):
+        out, st = self._feed([100.0, bad, 105.0])
+        assert out["daily"] == pytest.approx(5.0)
+        assert st["last_value"] == pytest.approx(105.0)
+        assert st["pending_low"] is None
+
+    def test_invalid_first_sample_does_not_set_baseline(self):
+        out, _ = self._feed(["", 100.0, 110.0])
+        assert out["daily"] == pytest.approx(10.0)
+
+    def test_invalid_sample_alone_leaves_state_untouched(self):
+        out, st = self._feed(["", float("nan")])
+        assert out["daily"] == pytest.approx(0.0)
+        assert st["last_value"] is None
+
+    def test_numeric_string_and_int_samples_count(self):
+        out, _ = self._feed(["100.5", 102, " 103.5 "])
+        assert out["daily"] == pytest.approx(3.0)
+
+    def test_bool_samples_count_as_one_and_zero(self):
+        # bool stays a 1/0 reading, as before #1471 (_to_num semantics).
+        out, st = self._feed([False, True])
+        assert out["daily"] == pytest.approx(1.0)
+        assert st["last_value"] == pytest.approx(1.0)
+
+    def test_low_sample_is_pending_not_baseline(self):
+        _, st = self._feed([9990.0, 5.0])
+        assert st["last_value"] == pytest.approx(9990.0)
+        assert st["pending_low"] == pytest.approx(5.0)
+
+    def test_lower_pending_sample_replaces_pending(self):
+        out, st = self._feed([9990.0, 5.0, 2.0])
+        assert out["daily"] == pytest.approx(0.0)
+        assert st["pending_low"] == pytest.approx(2.0)
+        out, st = self._feed([9990.0, 5.0, 2.0, 4.0])
+        assert out["daily"] == pytest.approx(2.0)
+        assert st["last_value"] == pytest.approx(4.0)
+        assert st["pending_low"] is None
+
+    def test_recovery_above_baseline_clears_pending_and_counts_from_baseline(self):
+        out, st = self._feed([9990.0, 0.0, 9995.0])
+        assert out["daily"] == pytest.approx(5.0)
+        assert st["pending_low"] is None
+
+    @pytest.mark.parametrize(
+        ("values", "expected"),
+        [
+            ([9990.0, 0.0, 9989.99], 0.0),
+            ([9990.0, 0.0, 9989.99, 9990.5], 0.5),
+            ([811598.0, 0.0, 811000.0, 811600.0], 2.0),
+            ([2.0, 0.0, 1.9, 2.1], 0.1),
+            ([1000.0, 0.0, 999.5, 999.6, 999.7, 1000.1], 0.1),
+            ([1000.0, 0.0, 900.0], 0.0),
+        ],
+        ids=["just-below", "then-rise", "large-meter", "coarse-resolution", "jitter-run", "band-edge"],
+    )
+    def test_recovery_within_band_keeps_baseline(self, values, expected):
+        out, st = self._feed(values)
+        assert out["daily"] == pytest.approx(expected, abs=1e-9)
+        assert st["last_value"] >= values[0]
+
+    def test_recovery_clears_pending(self):
+        _, st = self._feed([1000.0, 0.0, 950.0])
+        assert st["last_value"] == pytest.approx(1000.0)
+        assert st["pending_low"] is None
+
+    @pytest.mark.parametrize(
+        ("values", "expected"),
+        [
+            ([100.0, 0.0, 60.0, 70.0, 80.0], 80.0),
+            ([1000.0, 0.0, 899.0], 899.0),
+        ],
+        ids=["sparse-reset", "just-outside-band"],
+    )
+    def test_rise_below_band_confirms_reset(self, values, expected):
+        out, _ = self._feed(values)
+        assert out["daily"] == pytest.approx(expected, abs=1e-9)
+
+    def test_seed_meter_with_low_first_reading_is_pending(self):
+        out, st = self._feed([5.0, 8.0], cfg={"init_meter": 1000.0})
+        assert out["daily"] == pytest.approx(3.0)
+        assert st["last_value"] == pytest.approx(8.0)
+
+    def test_state_without_pending_key_still_works(self):
+        """State persisted before #1471 has no pending_low key."""
+        state = {
+            "c": {
+                "last_value": 100.0,
+                "daily": 0.0,
+                "prev_daily": 0.0,
+                "last_day": None,
+                "weekly": 0.0,
+                "prev_weekly": 0.0,
+                "last_week": None,
+                "monthly": 0.0,
+                "prev_monthly": 0.0,
+                "last_month": None,
+                "yearly": 0.0,
+                "prev_yearly": 0.0,
+                "last_year": None,
+                "initialized": True,
+            }
+        }
+        out, state = self._run(50.0, state)
+        assert out["daily"] == pytest.approx(0.0)
+        out, state = self._run(60.0, state)
+        assert out["daily"] == pytest.approx(10.0)
+
+    def test_pending_low_survives_period_boundary(self):
+        state = {}
+        for v in (9990.0, 0.0):
+            self._run(v, state)
+        state["c"]["last_day"] = "1970-01-01"
+        out, _ = self._run(4.0, state)
+        assert out["daily"] == pytest.approx(4.0)
+        assert out["prev_daily"] == pytest.approx(0.0)
+
     def test_seed_not_reapplied_after_first_run(self):
         """Seed wird nur einmal angewendet, nicht bei jedem Executor-Aufruf."""
         cfg = {"init_meter": 0.0, "init_daily": 50.0}

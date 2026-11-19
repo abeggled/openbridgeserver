@@ -148,6 +148,66 @@ class TestOnMessageSourceDataType:
         assert event.value == pytest.approx(23.1)
 
 
+class TestOnMessageXmlExtraction:
+    """#1471: an MQTT/XML message without an extractable sample emits nothing."""
+
+    _PATH = "DataRecord[@id='1']/Value"
+
+    def _bind(self, adapter, xml_path=_PATH, **kwargs):
+        binding = make_binding({"topic": "meter", "source_data_type": "xml", "xml_path": xml_path, **kwargs})
+        adapter._topic_map["meter"] = [binding]
+        return binding
+
+    @staticmethod
+    def _payload(value_xml: str) -> bytes:
+        return f'<root><DataRecord id="1">{value_xml}</DataRecord></root>'.encode()
+
+    @pytest.mark.asyncio
+    async def test_valid_value_is_published_good(self, adapter, mock_bus):
+        binding = self._bind(adapter)
+        await adapter._on_message("meter", self._payload("<Value>811.455</Value>"))
+
+        event = mock_bus.publish.call_args[0][0]
+        assert event.value == pytest.approx(811.455)
+        assert event.quality == "good"
+        assert event.datapoint_id == binding.datapoint_id
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("payload", "xml_path"),
+        [
+            (b'<root><DataRecord id="1"><Value></Value></DataRecord></root>', _PATH),
+            (b'<root><DataRecord id="1"><Value>   </Value></DataRecord></root>', _PATH),
+            (b'<root><DataRecord id="2"><Value>1</Value></DataRecord></root>', _PATH),
+            (b'<root><DataRecord id="1"><Value>1</Value></DataRecord></root>', "/Value"),
+            (b'<root><DataRecord id="1"><Value>1</Value></DataRecord></root>', _PATH + "/text()"),
+            (b"<root><DataRecord id=", _PATH),
+        ],
+        ids=["empty", "whitespace", "missing-path", "invalid-path", "text-step", "malformed"],
+    )
+    async def test_no_sample_publishes_nothing(self, adapter, mock_bus, caplog, payload, xml_path):
+        binding = self._bind(adapter, xml_path=xml_path)
+        with caplog.at_level("WARNING", logger="obs.adapters.mqtt.adapter"):
+            await adapter._on_message("meter", payload)
+
+        mock_bus.publish.assert_not_called()
+        assert "topic=meter" in caplog.text
+        assert str(binding.id) in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_skipped_binding_does_not_block_others_on_same_topic(self, adapter, mock_bus):
+        self._bind(adapter)
+        other = make_binding({"topic": "meter", "source_data_type": "xml", "xml_path": "DataRecord[@id='1']/Unit"})
+        adapter._topic_map["meter"].append(other)
+
+        await adapter._on_message("meter", self._payload("<Value></Value><Unit>m3</Unit>"))
+
+        assert mock_bus.publish.call_count == 1
+        event = mock_bus.publish.call_args[0][0]
+        assert event.datapoint_id == other.datapoint_id
+        assert event.value == "m3"
+
+
 # ---------------------------------------------------------------------------
 # _on_message — value_map
 # ---------------------------------------------------------------------------

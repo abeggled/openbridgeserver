@@ -10,6 +10,9 @@ apply_source_type(raw, auto_value, source_data_type, json_key, xml_path, binding
 
 apply_value_map(value, value_map)
     Apply a string-keyed substitution map to an incoming or outgoing value.
+
+SourceExtractionError
+    Raised by apply_source_type when a configured extraction yields no sample.
 """
 
 from __future__ import annotations
@@ -17,9 +20,19 @@ from __future__ import annotations
 import json
 import logging
 import re
+import xml.etree.ElementTree as ET
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+class SourceExtractionError(ValueError):
+    """A configured extraction produced no usable sample (issue #1471).
+
+    Raised instead of returning a stand-in such as ``""`` or the raw payload,
+    which a caller would otherwise publish as a valid value with quality good.
+    The caller decides how to report it; the last valid value stays in place.
+    """
 
 
 def _extract_nested(obj: Any, path: str) -> Any:
@@ -65,6 +78,12 @@ def apply_source_type(
     -------
     Coerced Python value.
 
+    Raises
+    ------
+    SourceExtractionError
+        ``source_data_type == "xml"`` with an ``xml_path`` and the payload is
+        malformed, the path is invalid or absent, or the element is empty.
+
     """
     pub_value = auto_value
 
@@ -83,34 +102,19 @@ def apply_source_type(
             pub_value = obj
 
     elif source_data_type == "xml":
-        try:
-            import xml.etree.ElementTree as ET
-
-            root = ET.fromstring(raw)
-            if xml_path:
-                el = root.find(xml_path)
-                if el is not None:
-                    text = (el.text or "").strip()
-                    try:
-                        pub_value = int(text)
-                    except ValueError:
-                        try:
-                            pub_value = float(text)
-                        except ValueError:
-                            pub_value = text
-                else:
-                    logger.warning(
-                        "Transformation XML: path %r not found in payload for binding %s",
-                        xml_path,
-                        binding_id,
-                    )
-            else:
+        # A blank or padded path from the binding form is no path / the trimmed path.
+        xml_path = (xml_path or "").strip()
+        if xml_path:
+            pub_value = _extract_xml_path(raw, xml_path)
+        else:
+            try:
+                root = ET.fromstring(raw)
                 pub_value = (root.text or "").strip()
-        except Exception:
-            logger.exception(
-                "Transformation XML: parse error for binding %s",
-                binding_id,
-            )
+            except Exception:
+                logger.exception(
+                    "Transformation XML: parse error for binding %s",
+                    binding_id,
+                )
 
     elif source_data_type == "int":
         try:
@@ -146,6 +150,38 @@ def apply_source_type(
     # else None / "auto": use auto_value as-is
 
     return pub_value
+
+
+def _extract_xml_path(raw: str, xml_path: str) -> Any:
+    """Extract the text of *xml_path* from *raw* as int, float or non-empty str.
+
+    Raises SourceExtractionError when the payload is malformed XML, the path is
+    invalid or matches nothing, or the selected element holds no text.
+    """
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError as exc:
+        raise SourceExtractionError(f"malformed XML payload: {exc}") from exc
+    try:
+        el = root.find(xml_path)
+    except (SyntaxError, TypeError, KeyError) as exc:
+        # ElementPath signals a bad expression with SyntaxError, with TypeError
+        # for an unterminated predicate such as "a[", and with KeyError for
+        # full-XPath steps it lacks, such as "a/text()" or "a/@id".
+        raise SourceExtractionError(f"invalid XML path {xml_path!r}: {exc}") from exc
+    if el is None:
+        raise SourceExtractionError(f"XML path {xml_path!r} not found in payload")
+    text = (el.text or "").strip()
+    if not text:
+        raise SourceExtractionError(f"XML path {xml_path!r} selected an empty element")
+    try:
+        return int(text)
+    except ValueError:
+        pass
+    try:
+        return float(text)
+    except ValueError:
+        return text
 
 
 def apply_value_map(value: Any, value_map: dict[str, Any] | None) -> Any:
