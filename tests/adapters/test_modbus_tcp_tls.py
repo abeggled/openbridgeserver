@@ -148,6 +148,13 @@ class TestBuildTlsContext:
 
         assert ctx.verify_mode == ssl.CERT_NONE
         assert ctx.check_hostname is False
+        assert ctx.get_ca_certs() == []  # the system store is not even loaded
+
+    def test_strict_x509_mode_is_relaxed_but_verification_stays(self):
+        ctx = build_tls_context(ModbusTcpAdapterConfig(tls=True))
+
+        assert not ctx.verify_flags & ssl.VERIFY_X509_STRICT
+        assert ctx.verify_mode == ssl.CERT_REQUIRED
 
     def test_client_certificate_is_loaded_even_without_verification(self, pki):
         cfg = ModbusTcpAdapterConfig(tls=True, tls_verify=False, tls_client_cert_file=pki.client_cert, tls_client_key_file=pki.client_key)
@@ -189,7 +196,7 @@ class TestBuildTlsContext:
         monkeypatch.setattr(ssl.SSLContext, "load_cert_chain", spy)
         cfg = ModbusTcpAdapterConfig(tls=True, tls_client_cert_file=pki.client_cert, tls_client_key_file=pki.client_key_encrypted)
 
-        with pytest.raises(ssl.SSLError):
+        with pytest.raises(ValueError, match="encrypted: set tls_client_key_password"):
             build_tls_context(cfg)
         assert callable(seen["password"])
 
@@ -237,8 +244,10 @@ def _fake_pymodbus(monkeypatch):
     client.ctx = None  # no transport to wrap
     mod = types.ModuleType("pymodbus.client")
     mod.AsyncModbusTcpClient = MagicMock(return_value=client)
+    # The MBAP-over-TLS client class; exposed on the fake module for the assertions.
     mod.AsyncModbusTlsClient = MagicMock(return_value=client)
     monkeypatch.setitem(sys.modules, "pymodbus.client", mod)
+    monkeypatch.setattr("obs.adapters.modbus_tcp.adapter._mbap_tls_client_class", lambda: mod.AsyncModbusTlsClient)
     return mod, client
 
 
@@ -598,11 +607,10 @@ class TestConnectFailedResult:
     def test_tls_status_codes_are_passed_through(self):
         from obs.api.v1.adapters import _connect_failed_result
 
-        instance = types.SimpleNamespace(
-            last_detail="TLS certificate of plc:802 rejected: certificate has expired",
-            last_detail_code="modbusTlsCertificateRejected",
-            last_detail_params={"host": "plc", "port": 802, "reason": "certificate has expired"},
-        )
+        instance = _adapter({})
+        instance._last_detail = "TLS certificate of plc:802 rejected: certificate has expired"
+        instance._last_detail_code = "modbusTlsCertificateRejected"
+        instance._last_detail_params = {"host": "plc", "port": 802, "reason": "certificate has expired"}
 
         result = _connect_failed_result(instance)
 
@@ -614,8 +622,112 @@ class TestConnectFailedResult:
     def test_other_status_codes_keep_the_generic_result(self):
         from obs.api.v1.adapters import _connect_failed_result
 
-        instance = types.SimpleNamespace(last_detail="Could not connect to plc:502", last_detail_code="couldNotConnectTo", last_detail_params={})
+        instance = _adapter({})
+        instance._last_detail_code = "couldNotConnectTo"
 
         result = _connect_failed_result(instance)
 
         assert result.detail_code == "connectFailed"
+
+    def test_adapters_without_declared_codes_keep_the_generic_result(self):
+        from obs.api.v1.adapters import _connect_failed_result
+
+        instance = types.SimpleNamespace(last_detail="x", last_detail_code="modbusTlsCertificateRejected", last_detail_params={})
+
+        assert _connect_failed_result(instance).detail_code == "connectFailed"
+
+
+# ---------------------------------------------------------------------------
+# Reconnect failures: a new TLS cause replaces an older status
+# ---------------------------------------------------------------------------
+
+
+class TestPublishReconnectFailure:
+    def _disconnected(self, code, params):
+        adapter = ModbusTcpAdapter(MagicMock(publish=AsyncMock()), {})
+        adapter._connected = False
+        adapter._last_detail_code = code
+        adapter._last_detail_params = params
+        adapter._publish_status = AsyncMock()
+        return adapter
+
+    async def test_new_tls_cause_is_published_while_disconnected(self):
+        adapter = self._disconnected("couldNotConnectTo", {"host": "plc", "port": 802})
+        params = {"host": "plc", "port": 802, "reason": "certificate has expired"}
+
+        await adapter._publish_reconnect_failure("TLS ... rejected", "modbusTlsCertificateRejected", params)
+
+        adapter._publish_status.assert_awaited_once_with(False, "TLS ... rejected", code="modbusTlsCertificateRejected", params=params)
+
+    async def test_unchanged_tls_cause_is_not_republished(self):
+        params = {"host": "plc", "port": 802, "reason": "certificate has expired"}
+        adapter = self._disconnected("modbusTlsCertificateRejected", params)
+
+        await adapter._publish_reconnect_failure("TLS ... rejected", "modbusTlsCertificateRejected", dict(params))
+
+        adapter._publish_status.assert_not_awaited()
+
+    async def test_generic_failure_keeps_the_disconnected_only_rule(self):
+        adapter = self._disconnected("modbusReconnectBackoff", {})
+
+        await adapter._publish_reconnect_failure("Could not reconnect to plc:502", "couldNotReconnectTo", {"host": "plc", "port": 502})
+
+        adapter._publish_status.assert_not_awaited()
+
+
+class TestMbapFramingOverTls:
+    async def test_response_split_across_tls_records_is_reassembled(self, pki):
+        """stunnel or slow links may split one MBAP frame into several TLS records."""
+
+        async def handler(reader, writer):
+            while request := await reader.read(12):
+                response = request[0:2] + bytes.fromhex("0000 0005 01 0302 04d2")
+                writer.write(response[:5])
+                await writer.drain()
+                await asyncio.sleep(0.05)
+                writer.write(response[5:])
+                await writer.drain()
+
+        server = await asyncio.start_server(handler, "127.0.0.1", 0, ssl=_server_context(pki.server))
+        adapter = await _connect(server.sockets[0].getsockname()[1], tls_ca_file=pki.ca)
+        try:
+            assert await adapter.read(make_binding(_HOLDING)) == 1234
+        finally:
+            await adapter.disconnect()
+            server.close()
+
+    async def test_certificate_without_authority_key_identifier_is_accepted(self, pki, tmp_path):
+        """Many device CAs lack the AKI that Python's strict X.509 mode demands."""
+        ca_key = ec.generate_private_key(ec.SECP256R1())
+        ca = (
+            x509.CertificateBuilder()
+            .subject_name(_name("Device CA"))
+            .issuer_name(_name("Device CA"))
+            .public_key(ca_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(dt.datetime.now(dt.UTC) - dt.timedelta(days=1))
+            .not_valid_after(dt.datetime.now(dt.UTC) + dt.timedelta(days=30))
+            .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+            .sign(ca_key, hashes.SHA256())
+        )
+        leaf_key = ec.generate_private_key(ec.SECP256R1())
+        leaf = (
+            x509.CertificateBuilder()
+            .subject_name(_name("localhost"))
+            .issuer_name(_name("Device CA"))
+            .public_key(leaf_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(dt.datetime.now(dt.UTC) - dt.timedelta(days=1))
+            .not_valid_after(dt.datetime.now(dt.UTC) + dt.timedelta(days=30))
+            .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), critical=False)
+            .sign(ca_key, hashes.SHA256())
+        )
+        ca_file = _write_pem(tmp_path / "device-ca.pem", ca)
+        server_files = (_write_pem(tmp_path / "leaf.pem", leaf), _write_pem(tmp_path / "leaf.key", key=leaf_key))
+
+        async with _tls_server(server_files) as (port, _):
+            adapter = await _connect(port, tls_ca_file=ca_file)
+            try:
+                assert await adapter.read(make_binding(_HOLDING)) == 1234
+            finally:
+                await adapter.disconnect()

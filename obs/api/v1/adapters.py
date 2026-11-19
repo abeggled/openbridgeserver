@@ -158,15 +158,14 @@ def _failed_test_result(request: Request | None, result: TestResult) -> TestResu
     return result
 
 
-# Adapter status codes that name the cause of a failed connection test precisely
-# enough to replace the generic connectFailed result (issue #1448: Modbus TLS).
-_TEST_FAILURE_STATUS_CODES = frozenset({"modbusTlsConfigError", "modbusTlsCertificateRejected", "modbusTlsHandshakeFailed"})
-
-
 def _connect_failed_result(test_instance: Any) -> TestResult:
-    """TestResult for a test connection that did not connect, read before disconnect()."""
+    """TestResult for a test connection that did not connect, read before disconnect().
+
+    An adapter class may list status codes in ``test_failure_status_codes`` that name
+    the cause precisely enough to replace the generic connectFailed (issue #1448).
+    """
     code = getattr(test_instance, "last_detail_code", None)
-    if code in _TEST_FAILURE_STATUS_CODES:
+    if code and code in getattr(type(test_instance), "test_failure_status_codes", ()):
         return TestResult(
             success=False,
             detail=test_instance.last_detail,
