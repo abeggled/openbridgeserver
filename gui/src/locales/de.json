@@ -1362,7 +1362,10 @@
       "configError": "Konfigurationsfehler: {error}",
       "configValidationError": "Konfigurations-Validierungsfehler: {error}",
       "connectOk": "Verbindung zu {type} erfolgreich",
-      "connectFailed": "Verbindungsversuch fehlgeschlagen"
+      "connectFailed": "Verbindungsversuch fehlgeschlagen",
+      "modbusTlsConfigError": "TLS-Konfiguration ungültig: {error}",
+      "modbusTlsCertificateRejected": "TLS-Zertifikat von {host}:{port} abgelehnt: {reason}",
+      "modbusTlsHandshakeFailed": "TLS-Verbindungsaufbau zu {host}:{port} fehlgeschlagen: {reason}"
     },
     "allowlist": {
       "bindingLabel": "Erlaubte Netze (CIDR)",

@@ -444,6 +444,13 @@ password appear as *Invalid TLS configuration*. OBS never falls back to unencryp
 TCP. Reconnects use TLS again with the same settings. Key contents and the key password
 never appear in the log.
 
+Limitation with mTLS: if a server using TLS 1.3 rejects the client certificate (missing, wrong
+or from an unknown CA), OBS only learns about it after the connection is set up, and without a
+reason. The status then alternates between *Connected* and a generic connection error, and the
+values have quality *bad*. In that case check the client certificate, the key and the CA
+configured on the server. **Test connection**, in contrast, shows the other TLS errors with
+their cause.
+
 ## Scheduling {#adapters-zeitschaltuhr}
 
 The scheduling adapter is a pure **source**: it writes to objects at defined points in time

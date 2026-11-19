@@ -1362,7 +1362,10 @@
       "configError": "Configuration error: {error}",
       "configValidationError": "Configuration validation error: {error}",
       "connectOk": "Connection to {type} successful",
-      "connectFailed": "Connection attempt failed"
+      "connectFailed": "Connection attempt failed",
+      "modbusTlsConfigError": "Invalid TLS configuration: {error}",
+      "modbusTlsCertificateRejected": "TLS certificate of {host}:{port} rejected: {reason}",
+      "modbusTlsHandshakeFailed": "TLS handshake with {host}:{port} failed: {reason}"
     },
     "allowlist": {
       "bindingLabel": "Allowed networks (CIDR)",

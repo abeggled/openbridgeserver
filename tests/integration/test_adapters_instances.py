@@ -605,3 +605,42 @@ async def test_migrate_message_bindings_prevalidates_before_updates(client, auth
     target_bindings = await client.get(f"/api/v1/adapters/instances/{target['id']}/bindings", headers=auth_headers)
     assert len(source_bindings.json()) == 2
     assert target_bindings.json() == []
+
+
+# ---------------------------------------------------------------------------
+# Modbus TCP TLS (issue #1448): the connection test names the TLS cause
+# ---------------------------------------------------------------------------
+
+_MODBUS_TLS_BAD_CA = {"host": "127.0.0.1", "port": 9, "timeout": 0.5, "tls": True, "tls_ca_file": "/nonexistent/obs-test-ca.pem"}
+
+
+async def test_adapter_type_test_reports_invalid_modbus_tls_config(client, auth_headers):
+    resp = await client.post("/api/v1/adapters/MODBUS_TCP/test", json={"config": _MODBUS_TLS_BAD_CA}, headers=auth_headers)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is False
+    assert body["detail_code"] == "modbusTlsConfigError"
+    assert "/nonexistent/obs-test-ca.pem" in body["detail_params"]["error"]
+
+
+async def test_instance_test_reports_invalid_modbus_tls_config(client, auth_headers):
+    inst = await _create_instance(client, auth_headers, adapter_type="MODBUS_TCP")
+
+    resp = await client.post(
+        f"/api/v1/adapters/instances/{inst['id']}/test",
+        json={"config": _MODBUS_TLS_BAD_CA},
+        headers=auth_headers,
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is False
+    assert body["detail_code"] == "modbusTlsConfigError"
+
+
+async def test_plain_modbus_connect_failure_keeps_the_generic_code(client, auth_headers):
+    config = {"host": "127.0.0.1", "port": 9, "timeout": 0.5}
+    resp = await client.post("/api/v1/adapters/MODBUS_TCP/test", json={"config": config}, headers=auth_headers)
+
+    assert resp.json()["detail_code"] == "connectFailed"

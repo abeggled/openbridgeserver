@@ -158,6 +158,24 @@ def _failed_test_result(request: Request | None, result: TestResult) -> TestResu
     return result
 
 
+# Adapter status codes that name the cause of a failed connection test precisely
+# enough to replace the generic connectFailed result (issue #1448: Modbus TLS).
+_TEST_FAILURE_STATUS_CODES = frozenset({"modbusTlsConfigError", "modbusTlsCertificateRejected", "modbusTlsHandshakeFailed"})
+
+
+def _connect_failed_result(test_instance: Any) -> TestResult:
+    """TestResult for a test connection that did not connect, read before disconnect()."""
+    code = getattr(test_instance, "last_detail_code", None)
+    if code in _TEST_FAILURE_STATUS_CODES:
+        return TestResult(
+            success=False,
+            detail=test_instance.last_detail,
+            detail_code=code,
+            detail_params=dict(test_instance.last_detail_params),
+        )
+    return TestResult(success=False, detail="Verbindungsversuch fehlgeschlagen", detail_code="connectFailed")
+
+
 def _bulk_summary(request: Request | None, *, count: int, payload: Any, error_count: int | None = None) -> None:
     if request is not None:
         set_contract_audit_summary(request, resource_count=count, payload=payload)
@@ -823,6 +841,7 @@ async def test_instance(
         while not test_instance.connected and asyncio.get_event_loop().time() < deadline:
             await asyncio.sleep(0.1)
         connected = test_instance.connected
+        failure = None if connected else _connect_failed_result(test_instance)
         await test_instance.disconnect()
         if connected:
             return TestResult(
@@ -831,7 +850,7 @@ async def test_instance(
                 detail_code="connectOk",
                 detail_params={"type": row["adapter_type"]},
             )
-        return _failed_test_result(request, TestResult(success=False, detail="Verbindungsversuch fehlgeschlagen", detail_code="connectFailed"))
+        return _failed_test_result(request, failure)
     except Exception as exc:
         logger.exception("Verbindungstest für Instanz %s fehlgeschlagen", instance_id)
         return _failed_test_result(request, TestResult(success=False, detail=str(exc)))
@@ -2505,6 +2524,7 @@ async def test_adapter(
         while not test_instance.connected and asyncio.get_event_loop().time() < deadline:
             await asyncio.sleep(0.1)
         connected = test_instance.connected
+        failure = None if connected else _connect_failed_result(test_instance)
         await test_instance.disconnect()
         if connected:
             return TestResult(
@@ -2513,7 +2533,7 @@ async def test_adapter(
                 detail_code="connectOk",
                 detail_params={"type": adapter_type},
             )
-        return _failed_test_result(request, TestResult(success=False, detail="Verbindungsversuch fehlgeschlagen", detail_code="connectFailed"))
+        return _failed_test_result(request, failure)
     except Exception as exc:
         logger.exception("Verbindungstest für Adapter-Typ %s fehlgeschlagen", adapter_type)
         return _failed_test_result(request, TestResult(success=False, detail=str(exc)))

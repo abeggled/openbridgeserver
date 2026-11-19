@@ -151,6 +151,11 @@ class ModbusTcpAdapterConfig(BaseModel):
     )
 
 
+def _no_key_password() -> bytes:
+    """Password callback for keys without a configured password (fails encrypted keys)."""
+    return b""
+
+
 def build_tls_context(cfg: ModbusTcpAdapterConfig) -> ssl.SSLContext:
     """SSLContext for one adapter instance.
 
@@ -173,7 +178,9 @@ def build_tls_context(cfg: ModbusTcpAdapterConfig) -> ssl.SSLContext:
         ctx.load_cert_chain(
             cfg.tls_client_cert_file,
             cfg.tls_client_key_file or None,
-            password=cfg.tls_client_key_password or None,
+            # Never None: OpenSSL would then prompt for the pass phrase on the
+            # controlling terminal and block the event loop.
+            password=cfg.tls_client_key_password or _no_key_password,
         )
     return ctx
 
@@ -226,6 +233,8 @@ class ModbusTcpAdapter(AdapterBase):
         # SSL error of the most recent failed handshake, for a readable status.
         self._sslctx: ssl.SSLContext | None = None
         self._last_tls_error: ssl.SSLError | None = None
+        # Reason last logged as WARNING; repeats of a persistent TLS failure log at DEBUG.
+        self._logged_tls_reason: str | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -246,7 +255,8 @@ class ModbusTcpAdapter(AdapterBase):
         self._sslctx = None
         if cfg.tls:
             try:
-                self._sslctx = build_tls_context(cfg)
+                # File reads and CA-store parsing stay off the event loop.
+                self._sslctx = await asyncio.to_thread(build_tls_context, cfg)
             except (OSError, ValueError) as exc:  # ssl.SSLError is an OSError
                 # Never fall back to plain Modbus TCP: stay without a client.
                 self._client = None
@@ -642,10 +652,12 @@ class ModbusTcpAdapter(AdapterBase):
         async def _create_recording_tls_errors():
             self._last_tls_error = None
             try:
-                return await create()
+                result = await create()
             except ssl.SSLError as exc:
                 self._last_tls_error = exc
                 raise
+            self._logged_tls_reason = None  # a later failure is news again
+            return result
 
         ctx.call_create = _create_recording_tls_errors
 
@@ -661,7 +673,10 @@ class ModbusTcpAdapter(AdapterBase):
         else:
             reason = getattr(exc, "reason", None) or str(exc)
             detail, code = f"TLS handshake with {host}:{port} failed: {reason}", "modbusTlsHandshakeFailed"
-        logger.warning("Modbus TCP: TLS %s to %s:%s failed: %s", action, host, port, reason)
+        # Poll loops retry every backoff cycle; a persistent failure warns once per reason.
+        level = logging.DEBUG if reason == self._logged_tls_reason else logging.WARNING
+        self._logged_tls_reason = reason
+        logger.log(level, "Modbus TCP: TLS %s to %s:%s failed: %s", action, host, port, reason)
         return detail, code, {"host": host, "port": port, "reason": reason}
 
     @contextlib.asynccontextmanager

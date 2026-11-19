@@ -177,6 +177,22 @@ class TestBuildTlsContext:
             build_tls_context(cfg)
         assert "wrong-password" not in str(err.value)
 
+    def test_encrypted_key_without_password_fails_instead_of_prompting(self, pki, monkeypatch):
+        """password=None would make OpenSSL prompt on the TTY and block the event loop."""
+        seen = {}
+        original = ssl.SSLContext.load_cert_chain
+
+        def spy(self, certfile, keyfile=None, password=None):
+            seen["password"] = password
+            return original(self, certfile, keyfile, password)
+
+        monkeypatch.setattr(ssl.SSLContext, "load_cert_chain", spy)
+        cfg = ModbusTcpAdapterConfig(tls=True, tls_client_cert_file=pki.client_cert, tls_client_key_file=pki.client_key_encrypted)
+
+        with pytest.raises(ssl.SSLError):
+            build_tls_context(cfg)
+        assert callable(seen["password"])
+
     def test_key_without_certificate_is_rejected(self, pki):
         with pytest.raises(ValueError, match="requires tls_client_cert_file"):
             build_tls_context(ModbusTcpAdapterConfig(tls=True, tls_client_key_file=pki.client_key))
@@ -341,6 +357,36 @@ class TestTlsErrorReporting:
         assert params == {"host": "plc", "port": 802, "reason": "certificate has expired"}
         assert "certificate has expired" in detail
         assert "TLS reconnect to plc:802 failed: certificate has expired" in caplog.text
+
+    def test_a_persistent_tls_failure_warns_once_per_reason(self, caplog):
+        adapter = _adapter({})
+        adapter._adp_cfg = ModbusTcpAdapterConfig(host="plc", port=802)
+        expired = ssl.SSLCertVerificationError(1, "verify failed")
+        expired.verify_message = "certificate has expired"
+        unknown = ssl.SSLCertVerificationError(1, "verify failed")
+        unknown.verify_message = "unable to get local issuer certificate"
+
+        with caplog.at_level("DEBUG", logger="obs.adapters.modbus_tcp.adapter"):
+            for exc in (expired, expired, unknown):
+                adapter._last_tls_error = exc
+                adapter._connect_failure("reconnect", "Could not reconnect to", "couldNotReconnectTo")
+
+        levels = [(r.levelname, r.getMessage().rsplit(": ", 1)[1]) for r in caplog.records]
+        assert levels == [
+            ("WARNING", "certificate has expired"),
+            ("DEBUG", "certificate has expired"),
+            ("WARNING", "unable to get local issuer certificate"),
+        ]
+
+    async def test_a_successful_handshake_rearms_the_warning(self):
+        adapter = _adapter({"tls": True})
+        adapter._logged_tls_reason = "certificate has expired"
+        client = types.SimpleNamespace(ctx=types.SimpleNamespace(call_create=AsyncMock(return_value="transport")))
+        adapter._record_tls_errors(client)
+
+        await client.ctx.call_create()
+
+        assert adapter._logged_tls_reason is None
 
     def test_certificate_rejection_without_verify_message_uses_the_error_text(self):
         adapter = _adapter({})
@@ -533,3 +579,35 @@ class TestRealTlsServer:
                 with contextlib.suppress(asyncio.CancelledError):
                     await poll
                 await adapter.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# Connection-test API: the TLS cause replaces the generic connectFailed
+# ---------------------------------------------------------------------------
+
+
+class TestConnectFailedResult:
+    def test_tls_status_codes_are_passed_through(self):
+        from obs.api.v1.adapters import _connect_failed_result
+
+        instance = types.SimpleNamespace(
+            last_detail="TLS certificate of plc:802 rejected: certificate has expired",
+            last_detail_code="modbusTlsCertificateRejected",
+            last_detail_params={"host": "plc", "port": 802, "reason": "certificate has expired"},
+        )
+
+        result = _connect_failed_result(instance)
+
+        assert result.success is False
+        assert result.detail_code == "modbusTlsCertificateRejected"
+        assert result.detail_params["reason"] == "certificate has expired"
+        assert result.detail == instance.last_detail
+
+    def test_other_status_codes_keep_the_generic_result(self):
+        from obs.api.v1.adapters import _connect_failed_result
+
+        instance = types.SimpleNamespace(last_detail="Could not connect to plc:502", last_detail_code="couldNotConnectTo", last_detail_params={})
+
+        result = _connect_failed_result(instance)
+
+        assert result.detail_code == "connectFailed"

@@ -471,6 +471,12 @@ ein falsches Schlüsselpasswort erscheinen als *TLS-Konfiguration ungültig*. OB
 unverschlüsseltes Modbus TCP zurück. Wiederverbindungen nutzen erneut TLS mit denselben
 Einstellungen. Schlüsselinhalte und das Schlüsselpasswort erscheinen nicht im Log.
 
+Einschränkung bei mTLS: Lehnt ein Server mit TLS 1.3 das Clientzertifikat ab (fehlend, falsch
+oder von einer unbekannten CA), erfährt OBS das erst nach dem Verbindungsaufbau und ohne Grund.
+Der Status wechselt dann zwischen *Verbunden* und einem allgemeinen Verbindungsfehler, die Werte
+haben Qualität *bad*. In diesem Fall Clientzertifikat, Schlüssel und die beim Server hinterlegte
+CA prüfen. Der Knopf **Verbindung testen** zeigt dagegen die übrigen TLS-Fehler mit Ursache an.
+
 ## Zeitschaltuhr {#adapters-zeitschaltuhr}
 
 Die Zeitschaltuhr ist eine reine **Quelle**: sie schreibt zu definierten Zeitpunkten in
