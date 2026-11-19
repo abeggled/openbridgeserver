@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import random
 import socket
 import ssl
@@ -167,6 +168,15 @@ def build_tls_context(cfg: ModbusTcpAdapterConfig) -> ssl.SSLContext:
     """
     if cfg.tls_client_key_file and not cfg.tls_client_cert_file:
         raise ValueError("tls_client_key_file requires tls_client_cert_file")
+    # ssl's own errors omit the path ("[Errno 2] No such file or directory"); name it.
+    files = {
+        "tls_ca_file": cfg.tls_ca_file if cfg.tls_verify else None,
+        "tls_client_cert_file": cfg.tls_client_cert_file,
+        "tls_client_key_file": cfg.tls_client_key_file,
+    }
+    for field, path in files.items():
+        if path and not (os.path.isfile(path) and os.access(path, os.R_OK)):
+            raise FileNotFoundError(f"{field}: file not found or not readable: {path}")
     if cfg.tls_verify:
         ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH, cafile=cfg.tls_ca_file or None)
     else:

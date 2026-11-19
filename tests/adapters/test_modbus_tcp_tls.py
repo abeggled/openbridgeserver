@@ -197,9 +197,17 @@ class TestBuildTlsContext:
         with pytest.raises(ValueError, match="requires tls_client_cert_file"):
             build_tls_context(ModbusTcpAdapterConfig(tls=True, tls_client_key_file=pki.client_key))
 
-    def test_missing_ca_file_raises(self, pki):
-        with pytest.raises(OSError):
-            build_tls_context(ModbusTcpAdapterConfig(tls=True, tls_ca_file=str(pki.dir / "missing.pem")))
+    def test_missing_ca_file_names_field_and_path(self, pki):
+        missing = str(pki.dir / "missing.pem")
+        with pytest.raises(OSError, match=f"tls_ca_file: file not found or not readable: {missing}"):
+            build_tls_context(ModbusTcpAdapterConfig(tls=True, tls_ca_file=missing))
+
+    def test_unreadable_client_key_names_field_and_path(self, pki, monkeypatch):
+        monkeypatch.setattr("obs.adapters.modbus_tcp.adapter.os.access", lambda path, mode: path != pki.client_key)
+        cfg = ModbusTcpAdapterConfig(tls=True, tls_client_cert_file=pki.client_cert, tls_client_key_file=pki.client_key)
+
+        with pytest.raises(OSError, match="tls_client_key_file: file not found or not readable"):
+            build_tls_context(cfg)
 
 
 class TestConfigDefaults:
