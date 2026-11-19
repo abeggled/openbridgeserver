@@ -165,6 +165,52 @@ describe('AdaptersView — initial render', () => {
   })
 })
 
+describe('AdaptersView — MODBUS_TCP config form', () => {
+  const MODBUS_SCHEMA = {
+    type: 'object',
+    properties: {
+      port: { type: 'integer', default: 502 },
+      tls: { type: 'boolean', default: false },
+      tls_verify: { type: 'boolean', default: true },
+    },
+  }
+
+  it('renders the Modbus TCP form for new MODBUS_TCP instances', async () => {
+    adapterApiMock.schema.mockResolvedValue({ data: MODBUS_SCHEMA })
+    const { wrapper } = await mountAdapters({ types: ['MODBUS_TCP'] })
+    await wrapper.find('[data-testid="btn-new-instance"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="select-adapter-type"]').setValue('MODBUS_TCP')
+    await flushPromises()
+
+    expect(wrapper.findComponent({ name: 'ModbusTcpConfigForm' }).exists()).toBe(true)
+  })
+
+  it('keeps the generic schema form for other adapter types', async () => {
+    adapterApiMock.schema.mockResolvedValue({ data: MODBUS_SCHEMA })
+    const { wrapper } = await mountAdapters({ types: ['MQTT'] })
+    await wrapper.find('[data-testid="btn-new-instance"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="select-adapter-type"]').setValue('MQTT')
+    await flushPromises()
+
+    expect(wrapper.findComponent({ name: 'ModbusTcpConfigForm' }).exists()).toBe(false)
+    expect(wrapper.find('.schema-form').exists()).toBe(true)
+  })
+
+  it('renders the Modbus TCP form with the TLS hint when editing an instance', async () => {
+    adapterApiMock.schema.mockResolvedValue({ data: MODBUS_SCHEMA })
+    const { wrapper } = await mountAdapters({
+      instances: [makeInstance({ id: 7, adapter_type: 'MODBUS_TCP', name: 'PLC', config: { port: 802, tls: true, tls_verify: false } })],
+    })
+    await wrapper.find('[data-testid="btn-expand-7"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findComponent({ name: 'ModbusTcpConfigForm' }).exists()).toBe(true)
+    expect(wrapper.find('[data-testid="modbus-tls-verify-disabled-hint"]').exists()).toBe(true)
+  })
+})
+
 // ─── Demo mode ───────────────────────────────────────────────────────────────
 
 describe('AdaptersView — demo mode', () => {

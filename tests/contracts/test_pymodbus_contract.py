@@ -93,3 +93,46 @@ class TestTcpClientInterface:
         from pymodbus.client import AsyncModbusTcpClient
 
         assert hasattr(AsyncModbusTcpClient, "write_coil")
+
+
+class TestTlsClientInterface:
+    """Modbus TCP TLS mode (issue #1448) — obs/adapters/modbus_tcp/adapter.py."""
+
+    def test_async_modbus_tls_client_importable(self):
+        from pymodbus.client import AsyncModbusTlsClient
+
+        assert AsyncModbusTlsClient is not None
+
+    def test_constructor_accepts_sslctx_host_port_timeout(self):
+        from pymodbus.client import AsyncModbusTlsClient
+
+        params = inspect.signature(AsyncModbusTlsClient.__init__).parameters
+        for name in ("host", "port", "timeout", "sslctx"):
+            assert name in params, f"AsyncModbusTlsClient.__init__ no longer accepts '{name}'"
+
+    def test_default_framer_is_tls(self):
+        from pymodbus.client import AsyncModbusTlsClient
+        from pymodbus.framer import FramerType
+
+        assert inspect.signature(AsyncModbusTlsClient.__init__).parameters["framer"].default == FramerType.TLS
+
+    def test_tls_framing_is_mbap_on_the_wire(self):
+        """The docs promise MBAP framing inside TLS (Modbus/TCP Security): the TLS
+        framer must emit byte-identical frames to the plain Modbus TCP socket framer."""
+        from pymodbus.framer import FramerSocket, FramerTLS
+        from pymodbus.pdu import DecodePDU
+
+        payload = bytes.fromhex("0300000002")  # read holding registers, address 0, count 2
+        decoder = DecodePDU(False)
+        assert FramerTLS(decoder).encode(payload, 7, 42) == FramerSocket(decoder).encode(payload, 7, 42)
+
+    async def test_transport_exposes_call_create_and_sslctx(self):
+        """adapter._record_tls_errors wraps ctx.call_create to see handshake errors."""
+        import ssl
+
+        from pymodbus.client import AsyncModbusTlsClient
+
+        sslctx = ssl.create_default_context()
+        client = AsyncModbusTlsClient("127.0.0.1", port=802, sslctx=sslctx)
+        assert callable(client.ctx.call_create)
+        assert client.ctx.comm_params.sslctx is sslctx

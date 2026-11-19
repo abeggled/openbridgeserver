@@ -421,6 +421,56 @@ Die Nachricht wird nicht ohne Bild versendet, der Fehler erscheint im Log, im Ad
 am Logikbaustein, und dessen Ausgang **Gesendet** wird nicht ausgelöst. Zugangsdaten aus der
 Bild-URL, API-Token und User-Key erscheinen dabei nie in Fehlermeldungen.
 
+## Modbus TCP: TLS {#adapters-modbus-tls}
+
+Eine MODBUS_TCP-Instanz kann sich verschlüsselt verbinden, wenn das Gerät gesichertes
+Modbus voraussetzt. Bestehende Instanzen bleiben unverschlüsselt, bis **TLS verwenden**
+aktiviert wird.
+
+- **Framing:** OBS spricht Modbus/TCP Security — der normale MBAP-Header (wie bei Modbus TCP)
+  innerhalb einer TLS-Verbindung. Geräte oder TLS-Gateways (z. B. stunnel vor einem
+  Modbus-TCP-Gerät), die genau das erwarten, funktionieren. RTU- oder ASCII-Framing
+  innerhalb von TLS wird nicht unterstützt.
+- **Port:** Beim Einschalten von TLS schlägt das Formular Port **802** vor (Standard für
+  Modbus/TCP Security); ein eigener Port bleibt erhalten.
+- **Serverzertifikat prüfen** (Standard: an) prüft Zertifikatskette, Gültigkeit und Hostname.
+  Der Hostname wird gegen das Feld **Host** geprüft — bei einer IP-Adresse muss das Zertifikat
+  diese IP als Subject Alternative Name enthalten. Mit einer **CA-Datei** vertraut OBS nur
+  dieser CA, sonst dem Zertifikatsspeicher des Systems.
+- **Prüfung deaktiviert:** Die Verbindung ist weiterhin verschlüsselt, die Identität des
+  Servers wird jedoch nicht geprüft. Selbstsignierte oder abgelaufene Zertifikate und
+  abweichende Hostnamen werden dann akzeptiert — ein Angreifer im Netz könnte sich als Gerät
+  ausgeben. Nur verwenden, wenn keine CA hinterlegt werden kann.
+- **Clientzertifikat (mTLS):** Optional Clientzertifikat und privaten Schlüssel (PEM)
+  angeben; verschlüsselte Schlüssel brauchen das Passwort. Das Clientzertifikat wird auch
+  bei deaktivierter Serverprüfung gesendet.
+
+**Zertifikatsdateien** werden als Pfad auf dem OBS-Host angegeben und müssen für den
+OBS-Prozess lesbar sein. Bei Docker und im LXC-Container empfiehlt sich `/data/certs/`
+(liegt im Daten-Volume und übersteht Updates). Bei Docker lässt sich ein Host-Verzeichnis
+auch zusätzlich einbinden, z. B. in `docker-compose.yml` unter `obs` → `volumes`:
+`- ./certs:/certs:ro` und dann `/certs/ca.pem` als CA-Datei eintragen.
+
+Beispielkonfiguration:
+
+```json
+{
+  "host": "plc.example.lan",
+  "port": 802,
+  "tls": true,
+  "tls_verify": true,
+  "tls_ca_file": "/data/certs/ca.pem",
+  "tls_client_cert_file": "/data/certs/obs-client.pem",
+  "tls_client_key_file": "/data/certs/obs-client.key"
+}
+```
+
+Schlägt der TLS-Aufbau fehl, zeigt der Adapterstatus den Grund, z. B. *TLS-Zertifikat von
+…:802 abgelehnt: certificate has expired* oder *… Hostname mismatch*; unlesbare Dateien oder
+ein falsches Schlüsselpasswort erscheinen als *TLS-Konfiguration ungültig*. OBS fällt nie auf
+unverschlüsseltes Modbus TCP zurück. Wiederverbindungen nutzen erneut TLS mit denselben
+Einstellungen. Schlüsselinhalte und das Schlüsselpasswort erscheinen nicht im Log.
+
 ## Zeitschaltuhr {#adapters-zeitschaltuhr}
 
 Die Zeitschaltuhr ist eine reine **Quelle**: sie schreibt zu definierten Zeitpunkten in

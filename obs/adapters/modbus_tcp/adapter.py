@@ -9,6 +9,10 @@ Adapter-Konfiguration (adapter_configs.config):
   timeout:          float  (default: 3.0)
   serialize_reads:  bool   (default: True)  — one in-flight I/O at a time
   startup_jitter_s: float  (default: 30.0) — max random delay before first poll
+  tls:              bool   (default: False) — Modbus/TCP Security (MBAP framing inside TLS)
+  tls_verify:       bool   (default: True)  — verify server certificate chain, validity and hostname
+  tls_ca_file:      str?   — PEM file with the CA(s) to trust instead of the system store
+  tls_client_cert_file / tls_client_key_file / tls_client_key_password: str? — optional mTLS
 
 Binding-Konfiguration (AdapterBinding.config):
   unit_id:        int     (Modbus Slave ID, default: 1)
@@ -27,6 +31,7 @@ import contextlib
 import logging
 import random
 import socket
+import ssl
 import time
 from typing import Any
 
@@ -89,6 +94,40 @@ class ModbusTcpAdapterConfig(BaseModel):
     host: str = "192.168.1.1"
     port: int = 502
     timeout: float = 3.0
+    tls: bool = Field(
+        default=False,
+        title="TLS verwenden",
+        description=(
+            "Verbindet sich verschluesselt nach Modbus/TCP Security (MBAP-Framing innerhalb von TLS, Standard-Port 802). "
+            "Kein Rueckfall auf unverschluesseltes Modbus TCP."
+        ),
+    )
+    tls_verify: bool = Field(
+        default=True,
+        title="Serverzertifikat pruefen",
+        description="Prueft Zertifikatskette, Gueltigkeit und Hostname des Servers.",
+    )
+    tls_ca_file: str | None = Field(
+        default=None,
+        title="CA-Datei (PEM)",
+        description="Pfad zu einer eigenen CA. Leer = Zertifikatsspeicher des Systems.",
+    )
+    tls_client_cert_file: str | None = Field(
+        default=None,
+        title="Clientzertifikat (PEM)",
+        description="Pfad zum Clientzertifikat fuer gegenseitige Authentifizierung (mTLS).",
+    )
+    tls_client_key_file: str | None = Field(
+        default=None,
+        title="Privater Schluessel (PEM)",
+        description="Pfad zum privaten Schluessel des Clientzertifikats. Leer = im Zertifikat enthalten.",
+    )
+    tls_client_key_password: str | None = Field(
+        default=None,
+        title="Passwort des privaten Schluessels",
+        description="Nur fuer verschluesselte Schluesseldateien.",
+        json_schema_extra={"format": "password"},
+    )
     serialize_reads: bool = Field(
         default=True,
         title="Reads serialisieren",
@@ -110,6 +149,33 @@ class ModbusTcpAdapterConfig(BaseModel):
         title="Startup-Jitter (s)",
         description="Maximale zufaellige Verzoegerung (Sekunden) vor dem ersten Poll jedes Bindings. Verhindert einen Request-Burst wenn alle Tasks gleichzeitig starten. 0 = deaktiviert.",
     )
+
+
+def build_tls_context(cfg: ModbusTcpAdapterConfig) -> ssl.SSLContext:
+    """SSLContext for one adapter instance.
+
+    Verification on: chain, validity and hostname are checked against ``tls_ca_file``
+    (only that CA) or the system store. Verification off: the connection stays
+    encrypted, but neither certificate nor hostname is validated. A client
+    certificate is loaded in both cases (mTLS). Raises OSError/ssl.SSLError/ValueError
+    for unreadable or mismatched files; the messages never contain file contents.
+    """
+    if cfg.tls_client_key_file and not cfg.tls_client_cert_file:
+        raise ValueError("tls_client_key_file requires tls_client_cert_file")
+    if cfg.tls_verify:
+        ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH, cafile=cfg.tls_ca_file or None)
+    else:
+        ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+        # check_hostname must be cleared before verify_mode may drop to CERT_NONE.
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    if cfg.tls_client_cert_file:
+        ctx.load_cert_chain(
+            cfg.tls_client_cert_file,
+            cfg.tls_client_key_file or None,
+            password=cfg.tls_client_key_password or None,
+        )
+    return ctx
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +222,10 @@ class ModbusTcpAdapter(AdapterBase):
         # Socket that _apply_socket_keepalive() last configured; a new one (own
         # reconnect or pymodbus' automatic one) gets the options again.
         self._keepalive_sock: Any = None
+        # TLS mode: the per-instance SSLContext (reused by every reconnect) and the
+        # SSL error of the most recent failed handshake, for a readable status.
+        self._sslctx: ssl.SSLContext | None = None
+        self._last_tls_error: ssl.SSLError | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -164,15 +234,30 @@ class ModbusTcpAdapter(AdapterBase):
     async def connect(self) -> None:
         self._stopping = False
         try:
-            from pymodbus.client import AsyncModbusTcpClient
+            from pymodbus.client import AsyncModbusTcpClient, AsyncModbusTlsClient
         except ImportError:
             logger.error("pymodbus not installed — Modbus TCP disabled. Run: pip install pymodbus")
             await self._publish_status(False, "pymodbus not installed", code="libNotInstalled", params={"lib": "pymodbus"})
             return
-        self._client_factory = AsyncModbusTcpClient
 
         cfg = ModbusTcpAdapterConfig(**self._config)
         self._adp_cfg = cfg
+        self._client_factory = AsyncModbusTlsClient if cfg.tls else AsyncModbusTcpClient
+        self._sslctx = None
+        if cfg.tls:
+            try:
+                self._sslctx = build_tls_context(cfg)
+            except (OSError, ValueError) as exc:  # ssl.SSLError is an OSError
+                # Never fall back to plain Modbus TCP: stay without a client.
+                self._client = None
+                logger.error("Modbus TCP: TLS configuration for %s:%d is invalid: %s", cfg.host, cfg.port, exc)
+                await self._publish_status(
+                    False,
+                    f"Invalid TLS configuration: {exc}",
+                    code="modbusTlsConfigError",
+                    params={"error": str(exc)},
+                )
+                return
 
         # Configure I/O serialization: Semaphore(1) = one operation at a time (safe
         # for embedded devices); None = no-op via nullcontext (for capable PLCs).
@@ -197,14 +282,10 @@ class ModbusTcpAdapter(AdapterBase):
                     code="connectedTo",
                     params={"host": cfg.host, "port": cfg.port},
                 )
-                logger.info("Modbus TCP connected: %s:%d", cfg.host, cfg.port)
+                logger.info("Modbus TCP connected: %s:%d%s", cfg.host, cfg.port, " (TLS)" if cfg.tls else "")
             else:
-                await self._publish_status(
-                    False,
-                    f"Could not connect to {cfg.host}:{cfg.port}",
-                    code="couldNotConnectTo",
-                    params={"host": cfg.host, "port": cfg.port},
-                )
+                detail, code, params = self._connect_failure("connect", "Could not connect to", "couldNotConnectTo")
+                await self._publish_status(False, detail, code=code, params=params)
         except Exception as exc:
             await self._publish_status(False, str(exc))
             logger.exception("Modbus TCP connect failed")
@@ -313,12 +394,8 @@ class ModbusTcpAdapter(AdapterBase):
                             )
                             logger.info("Modbus TCP: reconnected after binding reload")
                         else:
-                            await self._publish_status(
-                                False,
-                                f"Could not reconnect to {self._adp_cfg.host}:{self._adp_cfg.port}",
-                                code="couldNotReconnectTo",
-                                params={"host": self._adp_cfg.host, "port": self._adp_cfg.port},
-                            )
+                            detail, code, params = self._connect_failure("reconnect", "Could not reconnect to", "couldNotReconnectTo")
+                            await self._publish_status(False, detail, code=code, params=params)
                             logger.warning("Modbus TCP: reconnect after reload left client disconnected")
                     except Exception as exc:
                         await self._publish_status(False, str(exc))
@@ -393,11 +470,8 @@ class ModbusTcpAdapter(AdapterBase):
                                     self._reconnect_ok_after = time.monotonic() + self._reconnect_backoff_delay(
                                         bc.poll_interval,
                                     )
-                                    await self._publish_disconnected_if_needed(
-                                        f"Could not reconnect to {self._adp_cfg.host}:{self._adp_cfg.port}",
-                                        code="couldNotReconnectTo",
-                                        params={"host": self._adp_cfg.host, "port": self._adp_cfg.port},
-                                    )
+                                    detail, code, params = self._connect_failure("reconnect", "Could not reconnect to", "couldNotReconnectTo")
+                                    await self._publish_disconnected_if_needed(detail, code=code, params=params)
                                     logger.warning(
                                         "Modbus TCP: connect() succeeded but client still disconnected (binding %s)",
                                         binding.id,
@@ -540,11 +614,55 @@ class ModbusTcpAdapter(AdapterBase):
             from pymodbus.client import AsyncModbusTcpClient
 
             self._client_factory = AsyncModbusTcpClient
-        return self._client_factory(
-            host=self._adp_cfg.host,
-            port=self._adp_cfg.port,
-            timeout=self._adp_cfg.timeout,
-        )
+        kwargs: dict[str, Any] = {
+            "host": self._adp_cfg.host,
+            "port": self._adp_cfg.port,
+            "timeout": self._adp_cfg.timeout,
+        }
+        if self._sslctx is None:
+            return self._client_factory(**kwargs)
+        # AsyncModbusTlsClient: FramerType.TLS = MBAP header inside TLS (Modbus/TCP Security).
+        client = self._client_factory(**kwargs, sslctx=self._sslctx)
+        self._record_tls_errors(client)
+        return client
+
+    def _record_tls_errors(self, client: Any) -> None:
+        """Remember why a TLS handshake failed.
+
+        pymodbus swallows every OSError of a connect attempt (ssl.SSLError included)
+        and only returns False. Wrapping the transport's connection factory — which
+        also serves pymodbus' own automatic reconnects — keeps the SSL error so the
+        adapter status can say *why* (unknown CA, expired, wrong hostname, ...).
+        """
+        ctx = getattr(client, "ctx", None)
+        create = getattr(ctx, "call_create", None)
+        if create is None:
+            return
+
+        async def _create_recording_tls_errors():
+            self._last_tls_error = None
+            try:
+                return await create()
+            except ssl.SSLError as exc:
+                self._last_tls_error = exc
+                raise
+
+        ctx.call_create = _create_recording_tls_errors
+
+    def _connect_failure(self, action: str, fallback_detail: str, fallback_code: str) -> tuple[str, str, dict]:
+        """(detail, code, params) for a failed connect; TLS errors get their own reason."""
+        host, port = self._adp_cfg.host, self._adp_cfg.port
+        exc = self._last_tls_error
+        if exc is None:
+            return f"{fallback_detail} {host}:{port}", fallback_code, {"host": host, "port": port}
+        if isinstance(exc, ssl.SSLCertVerificationError):
+            reason = getattr(exc, "verify_message", None) or str(exc)
+            detail, code = f"TLS certificate of {host}:{port} rejected: {reason}", "modbusTlsCertificateRejected"
+        else:
+            reason = getattr(exc, "reason", None) or str(exc)
+            detail, code = f"TLS handshake with {host}:{port} failed: {reason}", "modbusTlsHandshakeFailed"
+        logger.warning("Modbus TCP: TLS %s to %s:%s failed: %s", action, host, port, reason)
+        return detail, code, {"host": host, "port": port, "reason": reason}
 
     @contextlib.asynccontextmanager
     async def _client_lifecycle(self):
