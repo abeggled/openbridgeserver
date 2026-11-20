@@ -59,6 +59,16 @@ jeweiligen Wert der **Vorperiode** zum Vergleich (Vortag, Vorwoche, Vormonat, Vo
 Zählerstand und jede Periode lässt sich optional ein Startwert vorgeben, z. B. beim erstmaligen
 Einrichten mit einem bereits laufenden Zähler.
 
+Als Zählerstand zählen nur endliche Zahlen (ein Wahrheitswert zählt als 1 bzw. 0). Leere Werte,
+Text, `NaN` und Unendlich werden ignoriert; der letzte gültige Zählerstand bleibt die Basis. Ein
+Wert **unter** der Basis wird nicht sofort übernommen, sondern vorgemerkt. Steigt der Zähler danach
+wieder auf höchstens 10 % unter die Basis oder darüber, war der tiefe Wert ein Ausreißer: Die Basis
+bleibt, und gezählt wird erst, was über sie hinausgeht. Steigt er dagegen tiefer unten an, gilt das
+als Zählerwechsel oder -rücksetzung, und ab dort zählt nur dieser Anstieg — der unbeobachtete
+Verbrauch vor dem ersten tiefen Wert wird nicht geschätzt. Ein echter Zählerwechsel, dessen erster
+Anstieg schon im 10-%-Band liegt, wird deshalb erst gezählt, sobald der Zähler die alte Basis
+überschreitet.
+
 ## Sommer/Winter (DIN) {#logic-block-heating-circuit}
 
 Sommer/Winter-Umschaltung für die Heizungssteuerung nach DIN (Mannheimer Methode), basierend auf

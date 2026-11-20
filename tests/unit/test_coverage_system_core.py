@@ -441,13 +441,13 @@ class TestApplySourceTypeXml:
         result = apply_source_type(raw, raw, "xml", None, "status")
         assert result == "ok"
 
-    def test_xml_missing_path_returns_unchanged(self):
-        from obs.core.transformation import apply_source_type
+    def test_xml_missing_path_raises_extraction_error(self):
+        from obs.core.transformation import SourceExtractionError, apply_source_type
 
         raw = "<root><temp>22</temp></root>"
-        result = apply_source_type(raw, raw, "xml", None, "humidity")
-        # path not found, returns original auto_value
-        assert result == raw
+        # #1471: the raw XML is no stand-in for a missing value.
+        with pytest.raises(SourceExtractionError, match="not found"):
+            apply_source_type(raw, raw, "xml", None, "humidity")
 
     def test_xml_no_path_returns_root_text(self):
         from obs.core.transformation import apply_source_type
@@ -456,12 +456,19 @@ class TestApplySourceTypeXml:
         result = apply_source_type(raw, raw, "xml", None, None)
         assert result == "hello"
 
-    def test_xml_parse_error_returns_unchanged(self):
+    def test_xml_parse_error_with_path_raises_extraction_error(self):
+        from obs.core.transformation import SourceExtractionError, apply_source_type
+
+        raw = "not xml at all!!!"
+        with pytest.raises(SourceExtractionError, match="malformed"):
+            apply_source_type(raw, raw, "xml", None, "something")
+
+    def test_xml_parse_error_without_path_returns_unchanged(self):
         from obs.core.transformation import apply_source_type
 
         raw = "not xml at all!!!"
-        result = apply_source_type(raw, raw, "xml", None, "something")
-        # parse error → returns auto_value (raw)
+        # Without an xml_path the existing semantics stay: log, keep auto_value.
+        result = apply_source_type(raw, raw, "xml", None, None)
         assert result == raw
 
     def test_auto_returns_auto_value(self):

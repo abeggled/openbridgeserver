@@ -255,6 +255,17 @@ def _skips_unchanged(wired: dict[str, tuple[str, str]], hems_only_on_change: set
     return "trigger" not in wired and "value" in wired and wired["value"][0] in hems_only_on_change
 
 
+# Consumption counter (#1471): how far below its baseline, relative to it, a
+# rise out of a low glitch may land and still count as the meter recovering
+# rather than a meter reset. One reading cannot tell the two apart, so the
+# band only decides which error is possible: a recovery keeps the old baseline
+# and never adds consumption, while a reset or replacement normally starts far
+# lower. A real reset whose first rise lands inside the band is not counted
+# until the meter passes the old baseline: it loses at most the span from the
+# low reading up to that baseline, never more than the baseline itself.
+_METER_RECOVERY_BAND = 0.1
+
+
 class GraphExecutor:
     """Executes a logic graph with given input overrides.
 
@@ -709,6 +720,53 @@ class GraphExecutor:
         if handle == "out" and "result" in outputs:
             return True, outputs.get("result")
         return False, None
+
+    @staticmethod
+    def _finite_meter_reading(v: Any) -> float | None:
+        """Return *v* as a finite float meter reading, or None if it is not one.
+
+        Numbers, numeric strings and bool (1/0, as ``_to_num``) qualify; None,
+        empty or other text, NaN and infinities do not.
+        """
+        if not isinstance(v, (int, float, str)):
+            return None
+        try:
+            f = float(v)
+        except (ValueError, OverflowError):
+            return None
+        return f if math.isfinite(f) else None
+
+    @staticmethod
+    def _consumption_delta(state: dict[str, Any], fval: float) -> float:
+        """Advance the consumption counter's baseline to *fval*; return the consumption.
+
+        A reading below the baseline is held in ``pending_low`` instead of
+        replacing the baseline: one low sample may be a glitch. Only a rise
+        within the low sequence confirms a meter reset, and then only that rise
+        counts; consumption before the first observed low reading is unknown
+        and is not inferred. A rise that lands within ``_METER_RECOVERY_BAND``
+        below the baseline is the meter recovering from the glitch, not a
+        reset: it adds nothing and the baseline stays, since a meter cannot
+        legitimately read below a value it already showed.
+        """
+        prev = state["last_value"]
+        pending = state.get("pending_low")
+        if prev is None:
+            state["last_value"] = fval
+            state["pending_low"] = None
+            return 0.0
+        if fval >= prev:
+            state["last_value"] = fval
+            state["pending_low"] = None
+            return fval - prev
+        if pending is not None and fval > pending:
+            state["pending_low"] = None
+            if fval >= prev - abs(prev) * _METER_RECOVERY_BAND:
+                return 0.0
+            state["last_value"] = fval
+            return fval - pending
+        state["pending_low"] = fval  # first low reading, or a still lower one
+        return 0.0
 
     @staticmethod
     def _to_num(v: Any, default: float = 0.0) -> float:
@@ -2887,6 +2945,7 @@ class GraphExecutor:
                     node.id,
                     {
                         "last_value": None,
+                        "pending_low": None,
                         "daily": 0.0,
                         "prev_daily": 0.0,
                         "last_day": None,
@@ -2945,18 +3004,15 @@ class GraphExecutor:
                         if v not in (None, ""):
                             state[key] = float(v)
                     state["initialized"] = True
-                val = inputs.get("value")
-                if val is not None:
-                    fval = self._to_num(val)
-                    # Add delta (counter increments only; ignores rollovers)
-                    prev = state["last_value"]
-                    if prev is not None and fval >= prev:
-                        delta = fval - prev
-                        state["daily"] += delta
-                        state["weekly"] += delta
-                        state["monthly"] += delta
-                        state["yearly"] += delta
-                    state["last_value"] = fval
+                # Only a finite numeric reading is a sample (#1471): coercing
+                # "" or text to 0.0 would make the next real reading count in full.
+                fval = self._finite_meter_reading(inputs.get("value"))
+                if fval is not None:
+                    delta = self._consumption_delta(state, fval)
+                    state["daily"] += delta
+                    state["weekly"] += delta
+                    state["monthly"] += delta
+                    state["yearly"] += delta
                 return {
                     "daily": state["daily"],
                     "weekly": state["weekly"],
