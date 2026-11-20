@@ -68,6 +68,30 @@ _TCP_KEEPALIVE_OPTS = (
 # Modbus endpoint (several devices behind one RS485/Modbus-TCP gateway) share a
 # lock so their requests never overlap on the single serial bus.
 _SHARED_BUS_SEMS: dict[tuple[str, int], asyncio.Semaphore] = {}
+# Endpoint-wide inter-read delay (ms): the largest delay any instance sharing a
+# host:port configured, so the promised turnaround also holds when a zero-delay
+# sibling completes a transaction on the shared bus.
+_SHARED_BUS_DELAYS: dict[tuple[str, int], float] = {}
+# Active per-instance delay contributions for each endpoint, so disconnect() can
+# recompute (or drop) the endpoint policy instead of letting the max grow
+# monotonically and leave a stale throttle after a sibling lowers it or leaves.
+_SHARED_BUS_MEMBERS: dict[tuple[str, int], dict[int, float]] = {}
+# time.monotonic() of the last transaction released on each shared endpoint. The
+# bounded acquire only gives up when the bus has made no progress for
+# shared_bus_acquire_timeout_s, so a long but moving queue is not mistaken for a wedge.
+_SHARED_BUS_PROGRESS: dict[tuple[str, int], float] = {}
+
+
+def _recompute_shared_delay(key: tuple[str, int]) -> None:
+    """Recompute the endpoint delay from the still-active members, or drop the
+    endpoint once the last instance has unregistered."""
+    members = _SHARED_BUS_MEMBERS.get(key)
+    if members:
+        _SHARED_BUS_DELAYS[key] = max(members.values())
+    else:
+        _SHARED_BUS_DELAYS.pop(key, None)
+        _SHARED_BUS_MEMBERS.pop(key, None)
+        _SHARED_BUS_PROGRESS.pop(key, None)
 
 
 def _cancel_requested() -> bool:
@@ -103,6 +127,20 @@ class ModbusTcpAdapterConfig(BaseModel):
             "Verhindert gleichzeitige Requests konkurrierender Instanzen am selben Bus."
         ),
     )
+    inter_read_delay_ms: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=5000.0,
+        title="Wartefrist pro Read (ms)",
+        description="Pause nach jeder Modbus-Transaktion auf dem (geteilten) Bus, bevor die naechste startet. Gibt langsamen RS485/Modbus-TCP-Gateways Umschaltzeit und entzerrt mehrere Geraete an einem Bus. 0 = deaktiviert.",
+    )
+    shared_bus_acquire_timeout_s: float = Field(
+        default=30.0,
+        ge=0.0,
+        le=300.0,
+        title="Shared-Bus Acquire-Timeout (s)",
+        description="Nur bei shared_bus: Wird auf dem geteilten Bus so lange keine Transaktion mehr fertig (verklemmte Semaphore ueber Instanzen), wird ein wartender Read mit WARNING uebersprungen statt unbegrenzt zu blockieren; der naechste Poll holt ihn nach. Writes warten immer, bis der Bus frei ist. 0 = kein Timeout.",
+    )
     startup_jitter_s: float = Field(
         default=30.0,
         ge=0.0,
@@ -132,6 +170,16 @@ class ModbusTcpAdapter(AdapterBase):
         # None when serialize_reads=False (no-op via nullcontext).
         # Reconfigured in connect() based on serialize_reads option.
         self._io_sem: asyncio.Semaphore | None = asyncio.Semaphore(1)
+        # Serializes bus transactions purely to make inter_read_delay_ms
+        # meaningful when serialize_reads=False and shared_bus=False (_io_sem
+        # is None). Without this, concurrent poll tasks each sleep after their
+        # own transaction, but the sleeps overlap and never produce a minimum
+        # interval between transactions on the bus. Only ever acquired when a
+        # positive delay is configured, so the no-delay fast path is unaffected.
+        self._space_lock: asyncio.Lock = asyncio.Lock()
+        # host:port of the shared bus this instance joins (set in connect()),
+        # or None when shared_bus is off.
+        self._shared_bus_key: tuple[str, int] | None = None
         # Prevents concurrent _on_bindings_reloaded() calls from interleaving.
         # Without this, two simultaneous REST binding changes can create orphan
         # poll tasks that use the same TCP client alongside the tracked tasks.
@@ -178,8 +226,16 @@ class ModbusTcpAdapter(AdapterBase):
         # for embedded devices); None = no-op via nullcontext (for capable PLCs).
         if cfg.shared_bus:
             self._io_sem = _shared_bus_sem(cfg.host, cfg.port)
+            self._shared_bus_key = (cfg.host, cfg.port)
+            # Enforce one delay policy per shared endpoint: the interval must hold
+            # bus-wide, so the endpoint adopts the largest delay any *active* sibling
+            # configured. Register this instance's contribution and recompute, so a
+            # later disconnect() drops it instead of leaving a stale throttle.
+            _SHARED_BUS_MEMBERS.setdefault(self._shared_bus_key, {})[id(self)] = cfg.inter_read_delay_ms
+            _recompute_shared_delay(self._shared_bus_key)
         else:
             self._io_sem = asyncio.Semaphore(1) if cfg.serialize_reads else None
+            self._shared_bus_key = None
         logger.debug(
             "Modbus TCP: serialize_reads=%s startup_jitter_s=%.1f",
             cfg.serialize_reads,
@@ -272,6 +328,13 @@ class ModbusTcpAdapter(AdapterBase):
             if self._client:
                 async with self._client_lifecycle():
                     self._client.close()
+            # Drop this instance's shared-bus delay contribution so a lowered delay
+            # or a removed sibling no longer throttles the endpoint permanently.
+            if self._shared_bus_key is not None:
+                members = _SHARED_BUS_MEMBERS.get(self._shared_bus_key)
+                if members is not None:
+                    members.pop(id(self), None)
+                _recompute_shared_delay(self._shared_bus_key)
             await self._publish_status(False, "Disconnected", code="disconnected")
 
     # ------------------------------------------------------------------
@@ -580,14 +643,151 @@ class ModbusTcpAdapter(AdapterBase):
                     self._lifecycle_cond.notify_all()
 
     @contextlib.asynccontextmanager
-    async def _modbus_io_context(self):
+    async def _modbus_io_context(self, *, bounded: bool = True):
+        """Serialize one Modbus transaction and track it for the client lifecycle.
+
+        ``bounded`` only affects a shared bus: reads (the default) give up once no
+        transaction has completed on the endpoint for ``shared_bus_acquire_timeout_s``
+        and yield ``None`` because the next poll cycle retries them anyway. A queue
+        that keeps moving (e.g. many readers each spacing the bus with
+        ``inter_read_delay_ms``) never trips it. Writes pass ``bounded=False`` and
+        keep waiting for the bus, so a value is never dropped just because a
+        sibling is busy.
+        """
         if self._io_sem is None:
-            async with self._inflight_modbus_call():
-                yield self._client if self._client_ready() else None
+            # Only serialize via _space_lock when a delay is actually configured —
+            # otherwise concurrent poll tasks keep their full existing concurrency.
+            spacer = self._space_lock if self._adp_cfg.inter_read_delay_ms > 0 else contextlib.nullcontext()
+            async with spacer, self._inflight_modbus_call():
+                client = self._client if self._client_ready() else None
+                try:
+                    yield client
+                finally:
+                    await self._space_out_bus(client)
             return
 
-        async with self._io_sem, self._inflight_modbus_call():
-            yield self._client if self._client_ready() else None
+        # Shared bus: bound the acquire for reads so a wedged cross-instance semaphore
+        # surfaces as a logged, skipped poll instead of an unbounded silent hang. The
+        # per-instance serialize lock (not shared) keeps its plain blocking acquire.
+        _sbt = self._adp_cfg.shared_bus_acquire_timeout_s
+        if bounded and self._shared_bus_key is not None and _sbt > 0:
+            if not await self._acquire_shared_bus(_sbt):
+                logger.warning(
+                    "Modbus shared bus %s: no transaction completed for %gs (possible cross-instance wedge) — skipping this read",
+                    self._shared_bus_key,
+                    _sbt,
+                )
+                yield None
+                return
+            try:
+                async with self._inflight_modbus_call():
+                    client = self._client if self._client_ready() else None
+                    try:
+                        yield client
+                    finally:
+                        await self._space_out_bus(client)
+            finally:
+                self._io_sem.release()
+                _SHARED_BUS_PROGRESS[self._shared_bus_key] = time.monotonic()
+            return
+
+        try:
+            async with self._io_sem, self._inflight_modbus_call():
+                client = self._client if self._client_ready() else None
+                try:
+                    yield client
+                finally:
+                    await self._space_out_bus(client)
+        finally:
+            if self._shared_bus_key is not None:
+                _SHARED_BUS_PROGRESS[self._shared_bus_key] = time.monotonic()
+
+    async def _acquire_shared_bus(self, timeout_s: float) -> bool:
+        """Acquire the shared-bus semaphore unless the bus is wedged.
+
+        Waits as long as transactions keep completing on the endpoint; returns
+        False only once nothing has completed for ``timeout_s`` since this read
+        started waiting (or since the last completion, whichever is later).
+
+        A single ``acquire()`` stays queued for the whole wait, so the read keeps
+        its place in the semaphore's FIFO. Re-issuing the acquire after each
+        check would put the read back at the tail every time, and behind pollers
+        that keep rejoining it would starve without ever reporting anything.
+        """
+        started = time.monotonic()
+        acquire = asyncio.ensure_future(self._io_sem.acquire())
+        try:
+            while True:
+                last = max(_SHARED_BUS_PROGRESS.get(self._shared_bus_key, started), started)
+                remaining = timeout_s - (time.monotonic() - last)
+                if remaining <= 0:
+                    break
+                done, _ = await asyncio.wait({acquire}, timeout=remaining)
+                if done:
+                    return True
+        except BaseException:
+            # Caller cancelled: give the permit back if it was granted meanwhile.
+            await self._abandon_acquire(acquire)
+            raise
+        # Wedged: leave the queue. If the permit arrived in the same instant,
+        # use it rather than skipping a read the bus could serve.
+        return not await self._abandon_acquire(acquire, keep_if_granted=True)
+
+    async def _abandon_acquire(self, acquire: asyncio.Future, *, keep_if_granted: bool = False) -> bool:
+        """Cancel a pending shared-bus ``acquire()``. Returns True when the waiter
+        left the queue without a permit. A permit granted in the meantime is kept
+        (``keep_if_granted``) or released, so it can never leak.
+
+        The ``CancelledError`` from awaiting the cancelled ``acquire`` cannot be
+        told apart from a cancellation of the calling poll task (disconnect /
+        reload). So it is only swallowed when this task has no pending cancel;
+        otherwise any granted permit is released and the cancellation propagates.
+        """
+        acquire.cancel()
+        try:
+            await acquire
+        except asyncio.CancelledError:
+            pass
+        granted = acquire.done() and not acquire.cancelled()
+        task = asyncio.current_task()
+        if task is not None and task.cancelling():
+            if granted:
+                self._io_sem.release()
+            raise asyncio.CancelledError
+        if not granted:
+            return True
+        if not keep_if_granted:
+            self._io_sem.release()
+        return False
+
+    async def _space_out_bus(self, client) -> None:
+        """Pause after a Modbus transaction so a slow shared RS485 gateway can
+        settle before the next one.
+
+        Runs whether the transaction succeeded or raised (timeout/socket error),
+        is skipped when no transaction was performed (no ready client), and
+        applies regardless of whether an I/O semaphore is in use. Skipped while
+        the poller task is being cancelled (disconnect / binding reload) so
+        lifecycle operations are not stalled by the turnaround sleep.
+        """
+        if client is None:
+            return
+        # A cancellation (disconnect / reload) must not wait out the delay.
+        task = asyncio.current_task()
+        if task is not None and getattr(task, "cancelling", lambda: 0)():
+            return
+        _delay = self._effective_delay()
+        if _delay > 0:
+            await asyncio.sleep(_delay / 1000.0)
+
+    def _effective_delay(self) -> float:
+        """Inter-read delay to enforce (ms). For a shared endpoint this is the
+        largest delay configured by any sibling instance, so the minimum interval
+        holds bus-wide even right after a zero-delay sibling released the shared
+        semaphore."""
+        if self._shared_bus_key is not None:
+            return _SHARED_BUS_DELAYS.get(self._shared_bus_key, self._adp_cfg.inter_read_delay_ms)
+        return self._adp_cfg.inter_read_delay_ms
 
     def _client_ready(self) -> bool:
         if self._stopping or not self._client or not self._client.connected:
@@ -683,7 +883,8 @@ class ModbusTcpAdapter(AdapterBase):
     async def _write_register(self, bc: ModbusBindingConfig, value: Any) -> None:
         # Use the same _io_sem as reads — a concurrent write and read on the same
         # TCP socket reproduce exactly the stream-corruption race the PR fixes.
-        async with self._modbus_io_context() as client:
+        # Unbounded: a write must wait for a busy shared bus, never be dropped.
+        async with self._modbus_io_context(bounded=False) as client:
             if client is None:
                 return
 
