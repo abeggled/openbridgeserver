@@ -183,7 +183,12 @@ describe('AdaptersView — MODBUS_TCP config form', () => {
     await wrapper.find('[data-testid="select-adapter-type"]').setValue('MODBUS_TCP')
     await flushPromises()
 
-    expect(wrapper.findComponent({ name: 'ModbusTcpConfigForm' }).exists()).toBe(true)
+    const form = wrapper.findComponent({ name: 'ModbusTcpConfigForm' })
+    expect(form.exists()).toBe(true)
+
+    form.vm.$emit('update:modelValue', { port: 802, tls: true })
+    await flushPromises()
+    expect(form.props('modelValue')).toEqual({ port: 802, tls: true })
   })
 
   it('keeps the generic schema form for other adapter types', async () => {
@@ -206,8 +211,14 @@ describe('AdaptersView — MODBUS_TCP config form', () => {
     await wrapper.find('[data-testid="btn-expand-7"]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.findComponent({ name: 'ModbusTcpConfigForm' }).exists()).toBe(true)
+    const form = wrapper.findComponent({ name: 'ModbusTcpConfigForm' })
+    expect(form.exists()).toBe(true)
     expect(wrapper.find('[data-testid="modbus-tls-verify-disabled-hint"]').exists()).toBe(true)
+
+    form.vm.$emit('update:modelValue', { port: 802, tls: true, tls_verify: true })
+    await flushPromises()
+    expect(form.props('modelValue')).toEqual({ port: 802, tls: true, tls_verify: true })
+    expect(wrapper.find('[data-testid="modbus-tls-verify-disabled-hint"]').exists()).toBe(false)
   })
 })
 
