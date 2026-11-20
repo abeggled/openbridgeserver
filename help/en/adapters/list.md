@@ -234,12 +234,13 @@ go2rtc or Frigate configuration:
 go2rtc:
   webrtc:
     candidates:
-      - frigate.example.lan:8555   # host name or IP of the camera server
+      - 192.168.1.20:8555          # LAN IP address of the camera server
       - stun:8555                  # for access from outside
 ```
 
-Chrome resolves a host name here by itself. If WebRTC does not work in another browser, enter the
-IP address instead.
+Enter the **IP address** here, not a host name: go2rtc passes a host name on to the browser
+unchanged, and only Chrome resolves it. Firefox drops it and falls back to MSE. The camera server
+therefore needs a fixed IP (e.g. a DHCP reservation).
 
 Frigate's port 5000 and the go2rtc API on port 1984 have no login. They should only be reachable
 from the LAN, ideally only for the OBS host.
