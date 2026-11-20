@@ -904,11 +904,35 @@
         },
         "port": {
           "title": "Port",
-          "description": "Modbus-TCP-Port (Standard: 502)"
+          "description": "Modbus-TCP-Port (Standard: 502, mit TLS: 802)"
         },
         "timeout": {
           "title": "Timeout (s)",
           "description": "Anfrage-Timeout in Sekunden"
+        },
+        "tls": {
+          "title": "TLS verwenden",
+          "description": "Verschlüsselte Verbindung nach Modbus/TCP Security (MBAP-Framing innerhalb von TLS, Standard-Port 802). Schlägt TLS fehl, wird nicht auf unverschlüsseltes Modbus TCP zurückgefallen."
+        },
+        "tls_verify": {
+          "title": "Serverzertifikat prüfen",
+          "description": "Prüft Zertifikatskette, Gültigkeit und Hostname des Servers. Nur für Testumgebungen oder Geräte mit selbstsigniertem Zertifikat deaktivieren."
+        },
+        "tls_ca_file": {
+          "title": "CA-Datei (PEM)",
+          "description": "Pfad zu einer eigenen CA auf dem OBS-Host bzw. im Container, z. B. /data/certs/ca.pem. Ist sie gesetzt, wird nur dieser CA vertraut; leer = Zertifikatsspeicher des Systems."
+        },
+        "tls_client_cert_file": {
+          "title": "Clientzertifikat (PEM)",
+          "description": "Optional: Pfad zum Clientzertifikat für gegenseitige Authentifizierung (mTLS). Wird auch bei deaktivierter Serverprüfung verwendet."
+        },
+        "tls_client_key_file": {
+          "title": "Privater Schlüssel (PEM)",
+          "description": "Pfad zum privaten Schlüssel des Clientzertifikats. Leer, wenn der Schlüssel in der Zertifikatsdatei enthalten ist."
+        },
+        "tls_client_key_password": {
+          "title": "Passwort des privaten Schlüssels",
+          "description": "Nur für verschlüsselte Schlüsseldateien."
         }
       },
       "SNMP": {
@@ -1328,14 +1352,20 @@
       "webhookPrefixConflict": "Pfad-Präfix {prefix} überschneidet sich mit dem Präfix einer anderen Instanz",
       "webhookDuplicateSlug": "Doppelte Slugs ignoriert: {slugs}",
       "webhookInvalidConfig": "Ungültige Instanz-Konfiguration",
-      "haActionFailed": "Home Assistant hat {action} abgelehnt"
+      "haActionFailed": "Home Assistant hat {action} abgelehnt",
+      "modbusTlsConfigError": "TLS-Konfiguration ungültig: {error}",
+      "modbusTlsCertificateRejected": "TLS-Zertifikat von {host}:{port} abgelehnt: {reason}",
+      "modbusTlsHandshakeFailed": "TLS-Verbindungsaufbau zu {host}:{port} fehlgeschlagen: {reason}"
     },
     "testResult": {
       "typeNotRegistered": "Adapter-Typ '{type}' nicht registriert",
       "configError": "Konfigurationsfehler: {error}",
       "configValidationError": "Konfigurations-Validierungsfehler: {error}",
       "connectOk": "Verbindung zu {type} erfolgreich",
-      "connectFailed": "Verbindungsversuch fehlgeschlagen"
+      "connectFailed": "Verbindungsversuch fehlgeschlagen",
+      "modbusTlsConfigError": "TLS-Konfiguration ungültig: {error}",
+      "modbusTlsCertificateRejected": "TLS-Zertifikat von {host}:{port} abgelehnt: {reason}",
+      "modbusTlsHandshakeFailed": "TLS-Verbindungsaufbau zu {host}:{port} fehlgeschlagen: {reason}"
     },
     "allowlist": {
       "bindingLabel": "Erlaubte Netze (CIDR)",
@@ -1521,6 +1551,9 @@
       "nameLabel": "Objektname",
       "resetName": "Vorschlag wiederherstellen: {name}",
       "nameHint": "Namen neuer Objekte lassen sich hier vor dem Import ändern."
+    },
+    "modbusTcp": {
+      "tlsVerifyDisabledHint": "Die Verbindung ist verschlüsselt, die Identität des Servers wird jedoch nicht geprüft."
     }
   },
   "history": {

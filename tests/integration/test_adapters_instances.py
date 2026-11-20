@@ -232,6 +232,52 @@ async def test_instance_grants_drive_visibility_and_delegable_configuration(clie
         await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
 
 
+async def test_modbus_tls_key_password_is_redacted_for_delegated_readers(client, auth_headers):
+    password = "modbus-client-key-password"
+    created = await client.post(
+        "/api/v1/adapters/instances",
+        json={
+            "adapter_type": "MODBUS_TCP",
+            "name": f"Modbus TLS {uuid.uuid4().hex[:8]}",
+            "config": {"tls": True, "tls_client_key_password": password},
+            "enabled": False,
+        },
+        headers=auth_headers,
+    )
+    assert created.status_code == 201, created.text
+    instance_id = created.json()["id"]
+    username, user_headers = await _create_non_admin_headers(client, auth_headers)
+    try:
+        state = await client.get(f"/api/v1/authz/principals/user/{username}/grants", headers=auth_headers)
+        granted = await client.put(
+            f"/api/v1/authz/principals/user/{username}/grants",
+            json={"grants": [{"node_type": "adapter_instance", "node_id": instance_id, "role": "operator", "effect": "allow"}]},
+            headers={**auth_headers, "If-Match": state.headers["etag"]},
+        )
+        assert granted.status_code == 200, granted.text
+
+        delegated = await client.get(f"/api/v1/adapters/instances/{instance_id}", headers=user_headers)
+        assert delegated.status_code == 200, delegated.text
+        assert delegated.json()["config"]["tls_client_key_password"] == "[redacted]"
+
+        listed = await client.get("/api/v1/adapters/instances", headers=user_headers)
+        row = next(r for r in listed.json() if r["id"] == instance_id)
+        assert row["config"]["tls_client_key_password"] == "[redacted]"
+
+        # Sending the placeholder back keeps the stored password.
+        patched = await client.patch(
+            f"/api/v1/adapters/instances/{instance_id}",
+            json={"config": {"tls": True, "tls_client_key_password": "[redacted]"}},
+            headers=auth_headers,
+        )
+        assert patched.status_code == 200, patched.text
+        admin_view = await client.get(f"/api/v1/adapters/instances/{instance_id}", headers=auth_headers)
+        assert admin_view.json()["config"]["tls_client_key_password"] == password
+    finally:
+        await client.delete(f"/api/v1/adapters/instances/{instance_id}", headers=auth_headers)
+        await client.delete(f"/api/v1/auth/users/{username}", headers=auth_headers)
+
+
 # ---------------------------------------------------------------------------
 # PATCH /instances/{id}
 # ---------------------------------------------------------------------------
@@ -605,3 +651,59 @@ async def test_migrate_message_bindings_prevalidates_before_updates(client, auth
     target_bindings = await client.get(f"/api/v1/adapters/instances/{target['id']}/bindings", headers=auth_headers)
     assert len(source_bindings.json()) == 2
     assert target_bindings.json() == []
+
+
+# ---------------------------------------------------------------------------
+# Modbus TCP TLS (issue #1448): the connection test names the TLS cause
+# ---------------------------------------------------------------------------
+
+_MODBUS_TLS_BAD_CA = {"host": "127.0.0.1", "port": 9, "timeout": 0.5, "tls": True, "tls_ca_file": "/nonexistent/obs-test-ca.pem"}
+
+
+async def test_adapter_type_test_reports_invalid_modbus_tls_config(client, auth_headers):
+    import time
+
+    started = time.monotonic()
+    resp = await client.post("/api/v1/adapters/MODBUS_TCP/test", json={"config": _MODBUS_TLS_BAD_CA}, headers=auth_headers)
+
+    assert time.monotonic() - started < 4.0  # definitive cause: no 5 s connect polling
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is False
+    assert body["detail_code"] == "modbusTlsConfigError"
+    assert "/nonexistent/obs-test-ca.pem" in body["detail_params"]["error"]
+
+
+async def test_instance_test_reports_invalid_modbus_tls_config(client, auth_headers):
+    inst = await _create_instance(client, auth_headers, adapter_type="MODBUS_TCP")
+
+    resp = await client.post(
+        f"/api/v1/adapters/instances/{inst['id']}/test",
+        json={"config": _MODBUS_TLS_BAD_CA},
+        headers=auth_headers,
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is False
+    assert body["detail_code"] == "modbusTlsConfigError"
+
+
+async def test_plain_modbus_connect_failure_keeps_the_generic_code(client, auth_headers):
+    config = {"host": "127.0.0.1", "port": 9, "timeout": 0.5}
+    resp = await client.post("/api/v1/adapters/MODBUS_TCP/test", json={"config": config}, headers=auth_headers)
+
+    assert resp.json()["detail_code"] == "connectFailed"
+
+
+async def test_instance_test_plain_modbus_connect_failure_keeps_the_generic_code(client, auth_headers):
+    inst = await _create_instance(client, auth_headers, adapter_type="MODBUS_TCP")
+
+    resp = await client.post(
+        f"/api/v1/adapters/instances/{inst['id']}/test",
+        json={"config": {"host": "127.0.0.1", "port": 9, "timeout": 0.5}},
+        headers=auth_headers,
+    )
+
+    assert resp.json()["detail_code"] == "connectFailed"

@@ -158,6 +158,23 @@ def _failed_test_result(request: Request | None, result: TestResult) -> TestResu
     return result
 
 
+def _connect_failed_result(test_instance: Any) -> TestResult:
+    """TestResult for a test connection that did not connect, read before disconnect().
+
+    An adapter class may list status codes in ``test_failure_status_codes`` that name
+    the cause precisely enough to replace the generic connectFailed (issue #1448).
+    """
+    code = getattr(test_instance, "last_detail_code", None)
+    if code and code in getattr(type(test_instance), "test_failure_status_codes", ()):
+        return TestResult(
+            success=False,
+            detail=test_instance.last_detail,
+            detail_code=code,
+            detail_params=dict(test_instance.last_detail_params),
+        )
+    return TestResult(success=False, detail="Verbindungsversuch fehlgeschlagen", detail_code="connectFailed")
+
+
 def _bulk_summary(request: Request | None, *, count: int, payload: Any, error_count: int | None = None) -> None:
     if request is not None:
         set_contract_audit_summary(request, resource_count=count, payload=payload)
@@ -393,20 +410,29 @@ def _preserve_redacted_message_config_secrets(stored_config: dict[str, Any], inc
     return merged
 
 
+# Secrets only admins configure: a delegated reader never sees them (#1392, #1448).
+_ADMIN_ONLY_SECRET_FIELDS: dict[str, tuple[str, ...]] = {
+    "HOME_ASSISTANT": ("token",),
+    "MODBUS_TCP": ("tls_client_key_password",),
+}
+
+
 def _redact_instance_config(adapter_type: str, config: dict[str, Any], *, privileged: bool = False) -> dict[str, Any]:
     if adapter_type == "MESSAGE":
         return _redact_message_config(config)
-    if adapter_type == "HOME_ASSISTANT" and not privileged:
-        # Only admins configure HA instances; a delegated reader never sees the token (#1392).
-        return redact_sensitive_fields(config, ("token",))
+    secret_fields = _ADMIN_ONLY_SECRET_FIELDS.get(adapter_type)
+    if secret_fields and not privileged:
+        return redact_sensitive_fields(config, secret_fields)
     return config
 
 
 def _restore_redacted_token(adapter_type: str, stored: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
-    """Keep the stored HA token when a client sends the redacted placeholder back."""
-    if adapter_type == "HOME_ASSISTANT" and incoming.get("token") == REDACTED:
-        return {**incoming, "token": stored.get("token", "")}
-    return incoming
+    """Keep a stored admin-only secret when a client sends the redacted placeholder back."""
+    restored = incoming
+    for field in _ADMIN_ONLY_SECRET_FIELDS.get(adapter_type, ()):
+        if incoming.get(field) == REDACTED:
+            restored = {**restored, field: stored.get(field, "")}
+    return restored
 
 
 def _instance_out(row: Any, instance: Any | None, *, privileged: bool) -> AdapterInstanceOut:
@@ -821,8 +847,11 @@ async def test_instance(
         # started by connect(). Poll briefly so that task gets a chance to run.
         deadline = asyncio.get_event_loop().time() + 5.0
         while not test_instance.connected and asyncio.get_event_loop().time() < deadline:
+            if _connect_failed_result(test_instance).detail_code != "connectFailed":
+                break  # the adapter already reported a definitive cause (e.g. TLS config)
             await asyncio.sleep(0.1)
         connected = test_instance.connected
+        failure = None if connected else _connect_failed_result(test_instance)
         await test_instance.disconnect()
         if connected:
             return TestResult(
@@ -831,7 +860,7 @@ async def test_instance(
                 detail_code="connectOk",
                 detail_params={"type": row["adapter_type"]},
             )
-        return _failed_test_result(request, TestResult(success=False, detail="Verbindungsversuch fehlgeschlagen", detail_code="connectFailed"))
+        return _failed_test_result(request, failure)
     except Exception as exc:
         logger.exception("Verbindungstest für Instanz %s fehlgeschlagen", instance_id)
         return _failed_test_result(request, TestResult(success=False, detail=str(exc)))
@@ -2503,8 +2532,11 @@ async def test_adapter(
         # started by connect(). Poll briefly so that task gets a chance to run.
         deadline = asyncio.get_event_loop().time() + 5.0
         while not test_instance.connected and asyncio.get_event_loop().time() < deadline:
+            if _connect_failed_result(test_instance).detail_code != "connectFailed":
+                break  # the adapter already reported a definitive cause (e.g. TLS config)
             await asyncio.sleep(0.1)
         connected = test_instance.connected
+        failure = None if connected else _connect_failed_result(test_instance)
         await test_instance.disconnect()
         if connected:
             return TestResult(
@@ -2513,7 +2545,7 @@ async def test_adapter(
                 detail_code="connectOk",
                 detail_params={"type": adapter_type},
             )
-        return _failed_test_result(request, TestResult(success=False, detail="Verbindungsversuch fehlgeschlagen", detail_code="connectFailed"))
+        return _failed_test_result(request, failure)
     except Exception as exc:
         logger.exception("Verbindungstest für Adapter-Typ %s fehlgeschlagen", adapter_type)
         return _failed_test_result(request, TestResult(success=False, detail=str(exc)))
@@ -2534,7 +2566,7 @@ async def update_adapter_config(
     if cls is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Adapter '{adapter_type}' nicht registriert")
     config_new = body.config
-    if adapter_type == "HOME_ASSISTANT":
+    if adapter_type in _ADMIN_ONLY_SECRET_FIELDS:
         row = await db.fetchone("SELECT config FROM adapter_configs WHERE adapter_type=?", (adapter_type,))
         config_new = _restore_redacted_token(adapter_type, json.loads(row["config"]) if row is not None and row["config"] else {}, body.config)
     if adapter_type == "MESSAGE":

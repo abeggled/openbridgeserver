@@ -68,6 +68,11 @@
               v-else-if="newForm.adapter_type === 'MESSAGE'"
               v-model="newForm.config"
             />
+            <ModbusTcpConfigForm
+              v-else-if="newForm.adapter_type === 'MODBUS_TCP'"
+              :schema="newSchema"
+              v-model="newForm.config"
+            />
             <template v-else>
               <SchemaForm
                 :schema="newSchema"
@@ -186,6 +191,11 @@
               />
               <MessageConfigForm
                 v-else-if="a.adapter_type === 'MESSAGE'"
+                v-model="drafts[a.id].config"
+              />
+              <ModbusTcpConfigForm
+                v-else-if="a.adapter_type === 'MODBUS_TCP'"
+                :schema="schemas[a.adapter_type]"
                 v-model="drafts[a.id].config"
               />
               <template v-else>
@@ -429,6 +439,7 @@ import AnwesenheitDatapointSelector from '@/components/adapters/AnwesenheitDatap
 import AnwesenheitConfigForm from '@/components/adapters/AnwesenheitConfigForm.vue'
 import KnxConfigForm        from '@/components/adapters/KnxConfigForm.vue'
 import MessageConfigForm    from '@/components/adapters/MessageConfigForm.vue'
+import ModbusTcpConfigForm  from '@/components/adapters/ModbusTcpConfigForm.vue'
 import HomeAssistantImport  from '@/components/adapters/HomeAssistantImport.vue'
 import Modal         from '@/components/ui/Modal.vue'
 import { adapterDotClass as dotClass, adapterBadgeVariant as statusBadgeVariant, adapterStatusLabel as statusLabel, adapterStatusDetailText } from '@/utils/adapterStatus'

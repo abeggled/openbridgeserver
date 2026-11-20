@@ -93,3 +93,45 @@ class TestTcpClientInterface:
         from pymodbus.client import AsyncModbusTcpClient
 
         assert hasattr(AsyncModbusTcpClient, "write_coil")
+
+
+class TestTlsClientInterface:
+    """Modbus TCP TLS mode (issue #1448) — obs/adapters/modbus_tcp/adapter.py.
+
+    The adapter runs AsyncModbusTcpClient (MBAP socket framer) over a TLS transport by
+    presetting comm_params, because AsyncModbusTlsClient only allows FramerType.TLS,
+    which ignores the MBAP length field.
+    """
+
+    def test_comm_params_accept_tls_fields(self):
+        from pymodbus.transport import CommParams, CommType
+
+        params = inspect.signature(CommParams).parameters
+        for name in ("comm_type", "comm_name", "host", "port", "sslctx", "reconnect_delay", "reconnect_delay_max", "timeout_connect"):
+            assert name in params, f"CommParams no longer accepts '{name}'"
+        assert CommType.TLS
+
+    async def test_tcp_client_keeps_preset_tls_comm_params(self):
+        import ssl
+
+        from pymodbus.framer import FramerSocket
+        from pymodbus.transport import CommType
+
+        from obs.adapters.modbus_tcp.adapter import _mbap_tls_client_class
+
+        sslctx = ssl.create_default_context()
+        client = _mbap_tls_client_class()("127.0.0.1", port=802, timeout=2.0, sslctx=sslctx)
+
+        assert client.ctx.comm_params.comm_type == CommType.TLS
+        assert client.ctx.comm_params.sslctx is sslctx
+        assert client.ctx.comm_params.port == 802
+        assert isinstance(client.ctx.framer, FramerSocket)
+
+    async def test_transport_exposes_call_create(self):
+        """adapter._record_tls_errors wraps ctx.call_create to see handshake errors."""
+        import ssl
+
+        from obs.adapters.modbus_tcp.adapter import _mbap_tls_client_class
+
+        client = _mbap_tls_client_class()("127.0.0.1", port=802, sslctx=ssl.create_default_context())
+        assert callable(client.ctx.call_create)

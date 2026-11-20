@@ -396,6 +396,61 @@ not sent without the image, the error appears in the log, the adapter status and
 block, and its **Sent** output does not fire. Credentials from the image URL, the API token and
 the user key never appear in error messages.
 
+## Modbus TCP: TLS {#adapters-modbus-tls}
+
+A MODBUS_TCP instance can connect encrypted when the device requires secured Modbus.
+Existing instances stay unencrypted until **Use TLS** is switched on.
+
+- **Framing:** OBS speaks Modbus/TCP Security — the regular MBAP header (as in Modbus TCP)
+  inside a TLS connection. Devices or TLS gateways (e.g. stunnel in front of a Modbus TCP
+  device) that expect exactly that work. RTU or ASCII framing inside TLS is not supported.
+- **Port:** When TLS is switched on, the form suggests port **802** (the Modbus/TCP Security
+  default); a custom port is kept.
+- **Verify server certificate** (default: on) checks the certificate chain, validity and
+  hostname. The hostname is checked against the **Host** field — for an IP address the
+  certificate must list that IP as a Subject Alternative Name. With a **CA file**, OBS trusts
+  only that CA, otherwise the system certificate store.
+- **Verification disabled:** The connection is still encrypted, but the server's identity is
+  not verified. Self-signed or expired certificates and mismatching hostnames are accepted —
+  an attacker on the network could impersonate the device. Use it only when no CA can be
+  configured.
+- **Client certificate (mTLS):** Optionally give a client certificate and private key (PEM);
+  encrypted keys need their password. The client certificate is sent even when server
+  verification is disabled.
+
+**Certificate files** are given as paths on the OBS host and must be readable by the OBS
+process. For Docker and the LXC container, `/data/certs/` is recommended (it lives in the
+data volume and survives updates). With Docker you can also mount a host directory, e.g. in
+`docker-compose.yml` under `obs` → `volumes`: `- ./certs:/certs:ro`, then enter
+`/certs/ca.pem` as the CA file.
+
+Example configuration:
+
+```json
+{
+  "host": "plc.example.lan",
+  "port": 802,
+  "tls": true,
+  "tls_verify": true,
+  "tls_ca_file": "/data/certs/ca.pem",
+  "tls_client_cert_file": "/data/certs/obs-client.pem",
+  "tls_client_key_file": "/data/certs/obs-client.key"
+}
+```
+
+If the TLS setup fails, the adapter status shows why, e.g. *TLS certificate of …:802
+rejected: certificate has expired* or *… Hostname mismatch*; unreadable files or a wrong key
+password appear as *Invalid TLS configuration*. OBS never falls back to unencrypted Modbus
+TCP. Reconnects use TLS again with the same settings. Key contents and the key password
+never appear in the log.
+
+Limitation with mTLS: if a server using TLS 1.3 rejects the client certificate (missing, wrong
+or from an unknown CA), OBS only learns about it after the connection is set up, and without a
+reason. The status then alternates between *Connected* and a generic connection error, and the
+values have quality *bad*. In that case check the client certificate, the key and the CA
+configured on the server. **Test connection**, in contrast, shows the other TLS errors with
+their cause.
+
 ## Scheduling {#adapters-zeitschaltuhr}
 
 The scheduling adapter is a pure **source**: it writes to objects at defined points in time

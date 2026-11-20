@@ -904,11 +904,35 @@
         },
         "port": {
           "title": "Port",
-          "description": "Modbus TCP port (default: 502)"
+          "description": "Modbus TCP port (default: 502, with TLS: 802)"
         },
         "timeout": {
           "title": "Timeout (s)",
           "description": "Request timeout in seconds"
+        },
+        "tls": {
+          "title": "Use TLS",
+          "description": "Encrypted connection according to Modbus/TCP Security (MBAP framing inside TLS, default port 802). If TLS fails, there is no fallback to unencrypted Modbus TCP."
+        },
+        "tls_verify": {
+          "title": "Verify server certificate",
+          "description": "Checks the server's certificate chain, validity and hostname. Disable only for test setups or devices with a self-signed certificate."
+        },
+        "tls_ca_file": {
+          "title": "CA file (PEM)",
+          "description": "Path to a custom CA on the OBS host or inside the container, e.g. /data/certs/ca.pem. When set, only this CA is trusted; empty = system certificate store."
+        },
+        "tls_client_cert_file": {
+          "title": "Client certificate (PEM)",
+          "description": "Optional: path to the client certificate for mutual authentication (mTLS). Also used when server verification is disabled."
+        },
+        "tls_client_key_file": {
+          "title": "Private key (PEM)",
+          "description": "Path to the private key of the client certificate. Leave empty if the key is included in the certificate file."
+        },
+        "tls_client_key_password": {
+          "title": "Private key password",
+          "description": "Only for encrypted key files."
         }
       },
       "SNMP": {
@@ -1328,14 +1352,20 @@
       "webhookPrefixConflict": "Path prefix {prefix} overlaps the prefix of another instance",
       "webhookDuplicateSlug": "Duplicate slug(s) ignored: {slugs}",
       "webhookInvalidConfig": "Invalid instance configuration",
-      "haActionFailed": "Home Assistant rejected {action}"
+      "haActionFailed": "Home Assistant rejected {action}",
+      "modbusTlsConfigError": "Invalid TLS configuration: {error}",
+      "modbusTlsCertificateRejected": "TLS certificate of {host}:{port} rejected: {reason}",
+      "modbusTlsHandshakeFailed": "TLS handshake with {host}:{port} failed: {reason}"
     },
     "testResult": {
       "typeNotRegistered": "Adapter type '{type}' not registered",
       "configError": "Configuration error: {error}",
       "configValidationError": "Configuration validation error: {error}",
       "connectOk": "Connection to {type} successful",
-      "connectFailed": "Connection attempt failed"
+      "connectFailed": "Connection attempt failed",
+      "modbusTlsConfigError": "Invalid TLS configuration: {error}",
+      "modbusTlsCertificateRejected": "TLS certificate of {host}:{port} rejected: {reason}",
+      "modbusTlsHandshakeFailed": "TLS handshake with {host}:{port} failed: {reason}"
     },
     "allowlist": {
       "bindingLabel": "Allowed networks (CIDR)",
@@ -1521,6 +1551,9 @@
       "nameLabel": "Object name",
       "resetName": "Restore proposal: {name}",
       "nameHint": "The names of new objects can be changed here before the import."
+    },
+    "modbusTcp": {
+      "tlsVerifyDisabledHint": "The connection is encrypted, but the server's identity is not verified."
     }
   },
   "history": {
