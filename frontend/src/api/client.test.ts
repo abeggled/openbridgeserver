@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ApiRequestError,
+  cameraStreams,
   cancelTokenRefresh,
   clearAuthTokens,
   displaySettings,
@@ -1004,5 +1005,33 @@ describe('PIN session tokens for the icon list', () => {
     setSessionToken('page-b', 'token-b')
     await icons.list()
     expect(fetchMock.mock.calls[1][1].headers['X-Session-Tokens'].split(',').sort()).toEqual(['token-a', 'token-b'])
+  })
+})
+
+describe('camera streams (#1479)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function stubJson(body: unknown) {
+    const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  it('lists the cameras of an instance', async () => {
+    const fetchMock = stubJson([{ name: 'hof', streams: [] }])
+    expect(await cameraStreams.cameras('inst/1')).toEqual([{ name: 'hof', streams: [] }])
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/camera/streams/inst%2F1/cameras')
+  })
+
+  it('asks for stream info with the page scope', async () => {
+    const fetchMock = stubJson({ mse_mode: 'direct', mse_direct_url: 'ws://x' })
+    const info = await cameraStreams.streamInfo('i', 'cam sub', { pageId: 'p', sessionToken: 's' })
+    expect(info.mse_mode).toBe('direct')
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/camera/streams/i/stream-info?page_id=p&session_token=s&src=cam+sub')
   })
 })

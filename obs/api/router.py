@@ -14,6 +14,7 @@ from obs.api.v1.authz import router as authz_router
 from obs.api.v1.autobackup import router as autobackup_router
 from obs.api.v1.bindings import router as bindings_router
 from obs.api.v1.camera import router as camera_router
+from obs.api.v1.camera_streams import router as camera_streams_router
 from obs.api.v1.config import router as config_router
 from obs.api.v1.datapoints import router as dp_router
 from obs.api.v1.hierarchy import router as hierarchy_router
@@ -60,5 +61,6 @@ router.include_router(visu_router, prefix="/visu")
 router.include_router(visu_backgrounds_router, prefix="/visu/backgrounds")
 router.include_router(icons_router, prefix="/icons")
 router.include_router(camera_router, prefix="/camera")
+router.include_router(camera_streams_router, prefix="/camera/streams")
 router.include_router(weather_router, prefix="/weather")
 router.include_router(hierarchy_router, prefix="/hierarchy")

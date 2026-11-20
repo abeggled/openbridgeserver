@@ -149,6 +149,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     # 8. Adapters — import triggers @register, then start_all loads DB configs + bindings
     import obs.adapters.anwesenheit.adapter
+    import obs.adapters.frigate.adapter
+    import obs.adapters.go2rtc.adapter
     import obs.adapters.homeassistant.adapter
     import obs.adapters.iobroker.adapter
     import obs.adapters.knx.adapter

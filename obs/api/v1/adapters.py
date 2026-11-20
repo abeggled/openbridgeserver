@@ -393,12 +393,18 @@ def _preserve_redacted_message_config_secrets(stored_config: dict[str, Any], inc
     return merged
 
 
+_STREAM_SOURCE_TYPES = frozenset({"GO2RTC", "FRIGATE"})
+
+
 def _redact_instance_config(adapter_type: str, config: dict[str, Any], *, privileged: bool = False) -> dict[str, Any]:
     if adapter_type == "MESSAGE":
         return _redact_message_config(config)
     if adapter_type == "HOME_ASSISTANT" and not privileged:
         # Only admins configure HA instances; a delegated reader never sees the token (#1392).
         return redact_sensitive_fields(config, ("token",))
+    if adapter_type in _STREAM_SOURCE_TYPES and not privileged:
+        # Camera stream sources (#1479): only admins see the go2rtc/Frigate password.
+        return redact_sensitive_fields(config, ("password",))
     return config
 
 
@@ -406,6 +412,8 @@ def _restore_redacted_token(adapter_type: str, stored: dict[str, Any], incoming:
     """Keep the stored HA token when a client sends the redacted placeholder back."""
     if adapter_type == "HOME_ASSISTANT" and incoming.get("token") == REDACTED:
         return {**incoming, "token": stored.get("token", "")}
+    if adapter_type in _STREAM_SOURCE_TYPES and incoming.get("password") == REDACTED:
+        return {**incoming, "password": stored.get("password", "")}
     return incoming
 
 

@@ -192,6 +192,58 @@ change the value sent, never which action runs.
 - An object shows quality *bad*: check the entity in Home Assistant (`unavailable`, removed)
   or the instance's connection.
 
+## Camera servers: go2rtc and Frigate {#adapters-camera-servers}
+
+The `GO2RTC` and `FRIGATE` adapters provide live camera streams for the Visu
+[camera widget](../visu/widgets#widget-kamera). Both speak the same protocol: Frigate ships go2rtc
+and passes its streams through. The adapters have no bindings; they give the widget the list of
+cameras and streams and broker the connection setup.
+
+**Video does not flow through OBS.** With WebRTC only the signalling (a few kB while connecting)
+passes through OBS; the video goes straight from the camera server to the browser. MSE, the
+fallback when WebRTC cannot get through, depends on **MSE transport**:
+
+- **direct** (default) — the browser fetches the stream from the camera server itself. No load on
+  OBS. Only works without a login on the camera server and not from a Visu opened via HTTPS (the
+  browser blocks `ws://` there).
+- **proxy** — OBS relays the stream. For access from outside, an HTTPS Visu or a camera server
+  with login. Costs the stream's bandwidth (typically 1–3 Mbit/s) per viewer and stream.
+
+### go2rtc {#adapters-go2rtc}
+
+For a standalone go2rtc instance: **Host**, **Port** (default 1984) and, if go2rtc sets
+`api.username`/`api.password`, the same credentials. Every stream of the go2rtc configuration is
+offered in the widget; tile and full-screen stream are chosen freely.
+
+### Frigate {#adapters-frigate}
+
+- **Port 5000** — Frigate's internal API without login. Leave the username empty.
+- **Port 8971** — with login, usually with **SSL/TLS**. Enter user and password of a Frigate user;
+  for a self-signed certificate turn **Verify certificate** off.
+
+The widget offers Frigate's cameras and proposes the sub stream for the tile and the main stream
+for full screen (from the camera's `live.streams` in Frigate).
+
+### Setting up WebRTC on the LAN
+
+go2rtc has to offer the browser an address on the LAN for port 8555. Without one it often only
+announces the public IP; WebRTC then fails on the LAN and the widget falls back to MSE. In the
+go2rtc or Frigate configuration:
+
+```yaml
+go2rtc:
+  webrtc:
+    candidates:
+      - frigate.example.lan:8555   # host name or IP of the camera server
+      - stun:8555                  # for access from outside
+```
+
+Chrome resolves a host name here by itself. If WebRTC does not work in another browser, enter the
+IP address instead.
+
+Frigate's port 5000 and the go2rtc API on port 1984 have no login. They should only be reachable
+from the LAN, ideally only for the OBS host.
+
 ## Webhook: an incoming HTTP call as a source {#adapters-webhook}
 
 Many devices can only **call a URL** when something happens — no custom headers, no body, no

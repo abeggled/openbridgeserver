@@ -145,6 +145,13 @@ async def _ensure_camera_page_scope(
     username: str = "",
     password: str = "",
 ) -> None:
+    page_config = await _ensure_camera_page_access(db, page_id, user, session_token)
+    if not _page_config_contains_camera_url(page_config, url, username, password):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Kamera nicht gefunden")
+
+
+async def _ensure_camera_page_access(db: Database, page_id: str, user: str | None, session_token: str = "") -> Any:
+    """Prüft, ob der Aufrufer die Visu-Seite sehen darf, und liefert deren ``page_config``."""
     row = await db.fetchone(
         "SELECT page_config FROM visu_nodes WHERE id = ? AND type = 'PAGE'",
         (page_id,),
@@ -167,8 +174,7 @@ async def _ensure_camera_page_scope(
         )
     if access == "user" and not await _check_user_access(db, page_id, user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Zugriff verweigert")
-    if not _page_config_contains_camera_url(row["page_config"], url, username, password):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Kamera nicht gefunden")
+    return row["page_config"]
 
 
 async def _ensure_camera_editor_preview_access(db: Database, user: str | None) -> None:

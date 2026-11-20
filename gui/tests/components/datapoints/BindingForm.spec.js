@@ -89,6 +89,23 @@ describe('BindingForm', () => {
   })
 })
 
+describe('BindingForm — camera stream sources (#1479)', () => {
+  it('never offers GO2RTC or FRIGATE instances', async () => {
+    const instances = {
+      listInstances: vi.fn().mockResolvedValue({
+        data: [
+          { id: 'mqtt-inst-1', name: 'MQTT Test', adapter_type: 'MQTT' },
+          { id: 'g2', name: 'go2rtc', adapter_type: 'GO2RTC' },
+          { id: 'fr', name: 'Frigate', adapter_type: 'FRIGATE' },
+        ],
+      }),
+    }
+    const { wrapper } = await mountBindingForm({}, instances)
+    const offered = wrapper.findAll('[data-testid="select-adapter-instance"] option').map(option => option.attributes('value'))
+    expect(offered).toEqual(['', 'mqtt-inst-1'])
+  })
+})
+
 describe('BindingForm — read-only system DataPoint (#1370)', () => {
   const instances = {
     listInstances: vi.fn().mockResolvedValue({

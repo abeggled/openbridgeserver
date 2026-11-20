@@ -4,6 +4,9 @@ import { getJwt } from '@/api/client'
 import { AUTH_TOKEN_REFRESHED_EVENT } from '@/utils/authEvents'
 import { usePageNavigation } from '@/composables/usePageNavigation'
 import type { DataPointValue } from '@/types'
+import type { PlayerMode } from './go2rtcPlayer'
+import { resolveTarget, snapshotUrl as buildStreamSnapshotUrl } from './streamSource'
+import { useGo2rtcStream } from './useGo2rtcStream'
 
 const props = defineProps<{
   config: Record<string, unknown>
@@ -185,12 +188,85 @@ const containerStyle = computed((): Record<string, string> => {
 const imgSrc = computed(() =>
   streamType.value === 'snapshot' ? snapshotUrl.value : streamUrl.value
 )
+
+// ── Kamera-Server (go2rtc / Frigate, #1479) ─────────────────────────────────
+// WebRTC mit Rückfall auf MSE; bis der Stream spielt (oder wenn er ausfällt) steht
+// ein Snapshot da. Im Editor nur der Snapshot — kein Live-Stream beim Bearbeiten.
+const STREAM_SNAPSHOT_REFRESH_MS = 10_000
+const STREAM_SNAPSHOT_HEIGHT = 480
+
+const isStream         = computed(() => props.config.source === 'go2rtc')
+const streamInstanceId = computed(() => (props.config.streamInstanceId as string) ?? '')
+const tileSrc          = computed(() => (props.config.tileSrc as string) ?? '')
+const fullscreenSrc    = computed(() => (props.config.fullscreenSrc as string) || tileSrc.value)
+const streamModes      = computed<PlayerMode[]>(() => props.config.preferMode === 'mse' ? ['mse'] : ['webrtc', 'mse'])
+const configured       = computed(() => isStream.value ? !!(streamInstanceId.value && tileSrc.value) : !!url.value)
+
+const rootEl       = ref<HTMLElement | null>(null)
+const videoEl      = ref<HTMLVideoElement | null>(null)
+const isFullscreen = ref(false)
+const muted        = ref(true)
+const activeSrc    = computed(() => isFullscreen.value ? fullscreenSrc.value : tileSrc.value)
+const streamScope  = computed(() => ({ pageId: props.pageId, sessionToken: props.sessionToken, editorPreview: props.editorMode }))
+
+const stream = useGo2rtcStream({
+  container: rootEl,
+  video: videoEl,
+  active: computed(() => isStream.value && configured.value && !props.editorMode),
+  src: activeSrc,
+  modes: streamModes,
+  authKey: jwt,
+  resolve: (mode, src) => resolveTarget(mode, streamInstanceId.value, src, streamScope.value, jwt.value),
+})
+
+const streamSnapshotTick = ref(Date.now())
+const streamSnapshotFailed = ref(false)
+let streamSnapshotTimer: ReturnType<typeof setInterval> | undefined
+onMounted(() => {
+  streamSnapshotTimer = setInterval(() => {
+    if (isStream.value && !stream.playing.value) streamSnapshotTick.value = Date.now()
+  }, STREAM_SNAPSHOT_REFRESH_MS)
+})
+onUnmounted(() => clearInterval(streamSnapshotTimer))
+const streamSnapshotSrc = computed(() =>
+  isStream.value && configured.value
+    ? buildStreamSnapshotUrl(streamInstanceId.value, activeSrc.value, streamScope.value, jwt.value, STREAM_SNAPSHOT_HEIGHT, streamSnapshotTick.value)
+    : '',
+)
+watch(streamSnapshotSrc, () => { streamSnapshotFailed.value = false })
+
+function toggleMute() {
+  muted.value = !muted.value
+}
+
+async function toggleFullscreen() {
+  const el = rootEl.value
+  if (!el) return
+  if (document.fullscreenElement) {
+    await document.exitFullscreen().catch(() => {})
+    return
+  }
+  if (typeof el.requestFullscreen === 'function') {
+    await el.requestFullscreen().catch(() => {})
+    return
+  }
+  // iPhone: kein Element-Vollbild, nur das native Vollbild des Videos.
+  const video = videoEl.value as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null
+  video?.webkitEnterFullscreen?.()
+}
+
+function onFullscreenChange() {
+  isFullscreen.value = !!rootEl.value && document.fullscreenElement === rootEl.value
+}
+onMounted(() => document.addEventListener('fullscreenchange', onFullscreenChange))
+onUnmounted(() => document.removeEventListener('fullscreenchange', onFullscreenChange))
 </script>
 
 <template>
   <div
     class="h-full w-full flex flex-col overflow-hidden bg-black rounded relative"
     :class="clickable ? 'cursor-pointer' : ''"
+    ref="rootEl"
     data-testid="kamera-widget"
     @click="navigate"
   >
@@ -205,7 +281,7 @@ const imgSrc = computed(() =>
 
     <!-- Editor-Platzhalter (kein URL konfiguriert) -->
     <div
-      v-if="editorMode && !url"
+      v-if="editorMode && !configured"
       class="flex-1 flex flex-col items-center justify-center text-gray-500 gap-2"
     >
       <span class="text-4xl">📷</span>
@@ -214,10 +290,64 @@ const imgSrc = computed(() =>
 
     <!-- Kein URL im Live-Modus -->
     <div
-      v-else-if="!url"
+      v-else-if="!configured"
       class="flex-1 flex items-center justify-center text-gray-600 text-xs"
     >
       {{ $t('widgets.kamera.noUrlConfigured') }}
+    </div>
+
+    <!-- Kamera-Server (go2rtc / Frigate): WebRTC → MSE, Snapshot als Platzhalter -->
+    <div
+      v-else-if="isStream"
+      class="flex-1 relative flex items-center justify-center overflow-hidden"
+      data-testid="kamera-stream"
+      :data-mode="stream.mode.value ?? ''"
+    >
+      <img
+        v-if="!stream.playing.value && streamSnapshotSrc && !streamSnapshotFailed"
+        :src="streamSnapshotSrc"
+        :style="containerStyle"
+        class="max-h-full max-w-full"
+        :alt="$t('widgets.kamera.title')"
+        data-testid="kamera-stream-snapshot"
+        @error="streamSnapshotFailed = true"
+      />
+      <video
+        v-show="stream.playing.value"
+        ref="videoEl"
+        :style="containerStyle"
+        class="max-h-full max-w-full"
+        :muted="muted"
+        autoplay
+        playsinline
+        data-testid="kamera-stream-video"
+      />
+      <span
+        v-if="stream.failed.value && !editorMode"
+        class="absolute left-1 bottom-1 px-1.5 py-0.5 rounded bg-black/60 text-[10px] text-gray-300"
+        data-testid="kamera-stream-offline"
+      >
+        {{ $t('widgets.kamera.liveUnavailable') }}
+      </span>
+      <div v-if="!editorMode" class="absolute right-1 bottom-1 flex gap-1 z-10">
+        <button
+          v-if="stream.hasAudio.value"
+          class="px-1.5 py-0.5 rounded bg-black/60 hover:bg-black/80 text-xs"
+          :title="muted ? $t('widgets.kamera.unmute') : $t('widgets.kamera.mute')"
+          data-testid="kamera-stream-mute"
+          @click.stop="toggleMute"
+        >
+          {{ muted ? '🔇' : '🔊' }}
+        </button>
+        <button
+          class="px-1.5 py-0.5 rounded bg-black/60 hover:bg-black/80 text-xs text-gray-200"
+          :title="isFullscreen ? $t('widgets.kamera.exitFullscreen') : $t('widgets.kamera.fullscreen')"
+          data-testid="kamera-stream-fullscreen"
+          @click.stop="toggleFullscreen"
+        >
+          {{ isFullscreen ? '🗗' : '⛶' }}
+        </button>
+      </div>
     </div>
 
     <!-- MJPEG / Snapshot -->
@@ -256,7 +386,7 @@ const imgSrc = computed(() =>
 
     <!-- Fehler-Overlay (nicht-blockierend: liegt über dem Stream, ersetzt ihn nicht) -->
     <div
-      v-if="hasError && url"
+      v-if="hasError && url && !isStream"
       class="absolute inset-0 flex flex-col items-center justify-center bg-black/70 gap-2 z-20"
     >
       <span class="text-2xl">⚠️</span>

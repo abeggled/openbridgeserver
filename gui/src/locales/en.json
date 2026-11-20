@@ -1293,6 +1293,66 @@
         "autoreset_delay_ms": {
           "title": "Reset delay (ms)"
         }
+      },
+      "FRIGATE": {
+        "host": {
+          "title": "Host",
+          "description": "Hostname or IP address of the Frigate server"
+        },
+        "port": {
+          "title": "Port",
+          "description": "5000 = internal API without login, 8971 = with login (usually HTTPS)"
+        },
+        "ssl": {
+          "title": "Use SSL/TLS",
+          "description": "Connect via HTTPS/WSS instead of HTTP/WS"
+        },
+        "verify_tls": {
+          "title": "Verify certificate",
+          "description": "Turn off for self-signed certificates"
+        },
+        "username": {
+          "title": "Username",
+          "description": "Port 8971 only: Frigate user to log in with"
+        },
+        "password": {
+          "title": "Password",
+          "description": "Password for the username"
+        },
+        "mse_mode": {
+          "title": "MSE transport",
+          "description": "direct: the browser fetches the MSE stream itself (no load on OBS; only without login and without an HTTPS Visu). proxy: OBS relays the stream (remote access, HTTPS Visu or login). WebRTC media always flow directly."
+        }
+      },
+      "GO2RTC": {
+        "host": {
+          "title": "Host",
+          "description": "Hostname or IP address of the go2rtc server"
+        },
+        "port": {
+          "title": "Port",
+          "description": "go2rtc API port (default 1984)"
+        },
+        "ssl": {
+          "title": "Use SSL/TLS",
+          "description": "Connect via HTTPS/WSS instead of HTTP/WS"
+        },
+        "verify_tls": {
+          "title": "Verify certificate",
+          "description": "Turn off for self-signed certificates"
+        },
+        "username": {
+          "title": "Username",
+          "description": "Optional: api.username from the go2rtc configuration"
+        },
+        "password": {
+          "title": "Password",
+          "description": "Password for the username"
+        },
+        "mse_mode": {
+          "title": "MSE transport",
+          "description": "direct: the browser fetches the MSE stream itself (no load on OBS; only without login and without an HTTPS Visu). proxy: OBS relays the stream (remote access, HTTPS Visu or login). WebRTC media always flow directly."
+        }
       }
     },
     "statusDetail": {
@@ -1336,7 +1396,11 @@
       "webhookPrefixConflict": "Path prefix {prefix} overlaps the prefix of another instance",
       "webhookDuplicateSlug": "Duplicate slug(s) ignored: {slugs}",
       "webhookInvalidConfig": "Invalid instance configuration",
-      "haActionFailed": "Home Assistant rejected {action}"
+      "haActionFailed": "Home Assistant rejected {action}",
+      "streamSourceNoHost": "No host configured",
+      "streamSourceConnected": "Connected",
+      "streamSourceDisconnected": "Disconnected",
+      "streamSourceUnreachable": "Unreachable: {error}"
     },
     "testResult": {
       "typeNotRegistered": "Adapter type '{type}' not registered",
