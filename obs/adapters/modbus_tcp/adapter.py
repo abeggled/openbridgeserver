@@ -736,11 +736,25 @@ class ModbusTcpAdapter(AdapterBase):
     async def _abandon_acquire(self, acquire: asyncio.Future, *, keep_if_granted: bool = False) -> bool:
         """Cancel a pending shared-bus ``acquire()``. Returns True when the waiter
         left the queue without a permit. A permit granted in the meantime is kept
-        (``keep_if_granted``) or released, so it can never leak."""
+        (``keep_if_granted``) or released, so it can never leak.
+
+        The ``CancelledError`` from awaiting the cancelled ``acquire`` cannot be
+        told apart from a cancellation of the calling poll task (disconnect /
+        reload). So it is only swallowed when this task has no pending cancel;
+        otherwise any granted permit is released and the cancellation propagates.
+        """
         acquire.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
+        try:
             await acquire
-        if acquire.cancelled():
+        except asyncio.CancelledError:
+            pass
+        granted = acquire.done() and not acquire.cancelled()
+        task = asyncio.current_task()
+        if task is not None and task.cancelling():
+            if granted:
+                self._io_sem.release()
+            raise asyncio.CancelledError
+        if not granted:
             return True
         if not keep_if_granted:
             self._io_sem.release()

@@ -2495,6 +2495,52 @@ class TestSharedBusAcquireTimeout:
         await asyncio.sleep(0)
         assert adapter._io_sem.locked() is False
 
+    async def test_caller_cancel_while_abandoning_a_wedged_wait_propagates(self):
+        """starwarsfan F3: a disconnect()/reload that cancels the poll task while it
+        abandons the acquire on a wedged bus must not be swallowed, or the poller
+        outlives disconnect() and reconnects the client."""
+        adapter, _ = await self._connect_shared("10.9.9.30", 0.2)
+        await adapter._io_sem.acquire()  # wedged holder
+        original = adapter._abandon_acquire
+
+        async def cancel_then_abandon(acquire, **kwargs):
+            asyncio.current_task().cancel()  # lands exactly in the abandon window
+            return await original(acquire, **kwargs)
+
+        adapter._abandon_acquire = cancel_then_abandon
+        try:
+            with pytest.raises(asyncio.CancelledError):
+                await adapter._acquire_shared_bus(0.2)
+            asyncio.current_task().uncancel()  # the test task itself goes on
+        finally:
+            adapter._io_sem.release()
+        await asyncio.sleep(0)
+        assert adapter._io_sem.locked() is False
+
+    async def test_abandon_after_permit_was_granted(self):
+        """A permit granted while the wait is being abandoned is kept for the read
+        (keep_if_granted) or released, never leaked."""
+        adapter, _ = await self._connect_shared("10.9.9.31", 0.2)
+        for keep in (True, False):
+            acquire = asyncio.ensure_future(adapter._io_sem.acquire())
+            await asyncio.sleep(0)  # free bus: the permit is granted right away
+            assert await adapter._abandon_acquire(acquire, keep_if_granted=keep) is False
+            assert adapter._io_sem.locked() is keep
+            if keep:
+                adapter._io_sem.release()
+
+    async def test_caller_cancel_after_permit_was_granted_releases_it(self):
+        """If the poll task is cancelled while abandoning and the permit had already
+        been granted, the permit is released and the cancellation propagates."""
+        adapter, _ = await self._connect_shared("10.9.9.32", 0.2)
+        acquire = asyncio.ensure_future(adapter._io_sem.acquire())
+        await asyncio.sleep(0)
+        asyncio.current_task().cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await adapter._abandon_acquire(acquire, keep_if_granted=True)
+        asyncio.current_task().uncancel()  # the test task itself goes on
+        assert adapter._io_sem.locked() is False
+
     async def test_wedge_timeout_does_not_leak_the_semaphore(self):
         """Giving up on a stalled bus must not leave a permit acquired on its behalf:
         once the holder releases, the bus is free again."""
