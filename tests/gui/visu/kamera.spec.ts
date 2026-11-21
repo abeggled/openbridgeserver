@@ -115,8 +115,15 @@ test('Kamera: HLS-Modus → <video> spielt per hls.js, Fehler-Overlay bei unerre
     url: camUrl, streamType: 'hls', authType: 'none', useProxy: false,
   })
 
-  // Die Kamera gibt es nicht: Abruf abfangen und scheitern lassen (#1480).
-  await page.route(camUrl, (route) => route.abort('connectionrefused'))
+  // Die Kamera gibt es nicht: Abruf abfangen und scheitern lassen (#1480). Der
+  // Abruf wird festgehalten, bis die blob:-Quelle geprüft ist — scheitert er
+  // sofort, zerstört der fatale Fehler hls.js und mit ihm die Quelle wieder.
+  let releasePlaylist!: () => void
+  const playlistReleased = new Promise<void>((resolve) => { releasePlaylist = resolve })
+  await page.route(camUrl, async (route) => {
+    await playlistReleased
+    await route.abort('connectionrefused')
+  })
 
   try {
     const playlistRequest = page.waitForRequest(camUrl)
@@ -131,8 +138,10 @@ test('Kamera: HLS-Modus → <video> spielt per hls.js, Fehler-Overlay bei unerre
     // Kein img-Element
     await expect(page.locator(`[data-widget-id="${widgetId}"] img`)).toHaveCount(0)
     // Fataler hls.js-Fehler → vorhandenes Fehler-Overlay mit Neuladen
+    releasePlaylist()
     await expect(page.locator(`[data-widget-id="${widgetId}"] [data-testid="kamera-reload"]`)).toBeVisible({ timeout: 15_000 })
   } finally {
+    releasePlaylist()
     await apiDelete(`/api/v1/visu/nodes/${pageId}`)
   }
 })
