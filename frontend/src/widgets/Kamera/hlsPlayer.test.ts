@@ -32,7 +32,7 @@ class FakeHls {
 }
 
 const fakeLoader = (() => Promise.resolve({ default: FakeHls })) as unknown as HlsLoader
-const failingLoader: HlsLoader = () => Promise.reject(new Error('chunk missing'))
+const failingLoader: HlsLoader = () => Promise.reject(new Error('ERR_CHUNK_LOAD'))
 
 function videoWith(canPlay: string) {
   const video = document.createElement('video')

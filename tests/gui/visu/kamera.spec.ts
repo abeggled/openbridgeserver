@@ -8,7 +8,7 @@ import { apiPost, apiPut, apiDelete, getToken } from '../helpers'
  * Priorität hoch:
  *   1. Kein URL konfiguriert → Platzhalter "Keine URL konfiguriert"
  *   2. MJPEG-Modus → <img> mit direkter URL als src
- *   3. HLS-Modus   → <video> mit URL als src
+ *   3. HLS-Modus   → <video> per hls.js (blob:), Fehler-Overlay bei unerreichbarer Playlist
  *   4. Proxy-Modus → img src zeigt auf /api/v1/camera/proxy mit _token
  *   5. Fehler-Overlay bei nicht erreichbarem Stream
  *
@@ -105,7 +105,7 @@ test('Kamera: MJPEG-Modus → <img> mit direkter Kamera-URL als src', async ({ p
 
 // ─── Test 3 (hoch): HLS → video-Element ──────────────────────────────────────
 
-test('Kamera: HLS-Modus → <video> mit Kamera-URL als src', async ({ page }) => {
+test('Kamera: HLS-Modus → <video> spielt per hls.js, Fehler-Overlay bei unerreichbarer Playlist', async ({ page }) => {
   const visuNode = await createVisuPage()
   const pageId   = visuNode.id
   const widgetId = randomUUID()
@@ -115,15 +115,23 @@ test('Kamera: HLS-Modus → <video> mit Kamera-URL als src', async ({ page }) =>
     url: camUrl, streamType: 'hls', authType: 'none', useProxy: false,
   })
 
+  // Die Kamera gibt es nicht: Abruf abfangen und scheitern lassen (#1480).
+  await page.route(camUrl, (route) => route.abort('connectionrefused'))
+
   try {
+    const playlistRequest = page.waitForRequest(camUrl)
     await page.goto(`/visu/${pageId}`)
     await page.waitForLoadState('domcontentloaded')
 
     const video = page.locator(`[data-widget-id="${widgetId}"] video`)
     await expect(video).toBeAttached({ timeout: 10_000 })
-    await expect(video).toHaveAttribute('src', camUrl)
+    // Chromium kann MSE: hls.js lädt die Playlist selbst und hängt eine MediaSource an.
+    expect((await playlistRequest).resourceType()).toBe('xhr')
+    await expect(video).toHaveAttribute('src', /^blob:/)
     // Kein img-Element
     await expect(page.locator(`[data-widget-id="${widgetId}"] img`)).toHaveCount(0)
+    // Fataler hls.js-Fehler → vorhandenes Fehler-Overlay mit Neuladen
+    await expect(page.locator(`[data-widget-id="${widgetId}"] [data-testid="kamera-reload"]`)).toBeVisible({ timeout: 15_000 })
   } finally {
     await apiDelete(`/api/v1/visu/nodes/${pageId}`)
   }
