@@ -7,6 +7,7 @@ import type { DataPointValue } from '@/types'
 import type { PlayerMode } from './go2rtcPlayer'
 import { resolveTarget, snapshotUrl as buildStreamSnapshotUrl } from './streamSource'
 import { useGo2rtcStream } from './useGo2rtcStream'
+import { startHls, type HlsSession } from './hlsPlayer'
 
 const props = defineProps<{
   config: Record<string, unknown>
@@ -176,6 +177,24 @@ function reload() {
 
 onUnmounted(clearRetry)
 watch(streamUrl, () => { hasError.value = false; clearRetry(); reloadKey.value++ })
+
+// ── HLS (#1480) ─────────────────────────────────────────────────────────────
+// hls.js bzw. natives HLS hängt am jeweiligen <video>. Ein Reload oder eine neue
+// URL erzeugt über reloadKey ein neues Element; der Watcher räumt dann die alte
+// Sitzung ab und startet auf dem neuen Element.
+const hlsVideoEl = ref<HTMLVideoElement | null>(null)
+let hlsSession: HlsSession | null = null
+
+function stopHls() {
+  hlsSession?.destroy()
+  hlsSession = null
+}
+
+watch([hlsVideoEl, streamUrl], ([el, src]) => {
+  stopHls()
+  if (el) hlsSession = startHls(el, src, onStreamError)
+}, { flush: 'post' })
+onUnmounted(stopHls)
 
 // ── Seitenverhältnis ────────────────────────────────────────────────────────
 const containerStyle = computed((): Record<string, string> => {
@@ -366,14 +385,14 @@ onUnmounted(() => document.removeEventListener('fullscreenchange', onFullscreenC
       />
     </div>
 
-    <!-- HLS / native Video -->
+    <!-- HLS: hls.js oder nativ (hlsPlayer.ts) -->
     <div
       v-else-if="streamType === 'hls'"
       class="flex-1 flex items-center justify-center overflow-hidden"
     >
       <video
         :key="reloadKey"
-        :src="streamUrl"
+        ref="hlsVideoEl"
         :style="containerStyle"
         class="max-h-full max-w-full"
         autoplay

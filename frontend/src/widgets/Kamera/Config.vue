@@ -380,6 +380,13 @@ watch(tileSrc, (value) => {
         <span class="text-gray-500 font-normal ml-1">{{ $t('widgets.kamera.proxyMixedContentHint') }}</span>
       </label>
     </div>
+    <p
+      v-if="useProxy && streamType === 'hls'"
+      class="text-xs text-amber-400"
+      data-testid="kamera-hls-proxy-hint"
+    >
+      {{ $t('widgets.kamera.hlsProxyUnsupported') }}
+    </p>
     </template>
 
     <!-- Darstellung -->

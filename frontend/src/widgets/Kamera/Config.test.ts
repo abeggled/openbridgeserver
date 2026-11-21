@@ -140,6 +140,25 @@ describe('Kamera Config.vue', () => {
     })
   })
 
+  describe('HLS through the proxy (#1480)', () => {
+    const hint = '[data-testid="kamera-hls-proxy-hint"]'
+
+    it('warns when HLS is combined with the proxy', () => {
+      const wrapper = mountConfig({ url: 'http://cam/live.m3u8', streamType: 'hls', useProxy: true })
+      expect(wrapper.get(hint).text()).toBe('widgets.kamera.hlsProxyUnsupported')
+    })
+
+    it('does not warn for HLS without proxy', () => {
+      const wrapper = mountConfig({ url: 'http://cam/live.m3u8', streamType: 'hls', useProxy: false })
+      expect(wrapper.find(hint).exists()).toBe(false)
+    })
+
+    it('does not warn for other stream types through the proxy', () => {
+      const wrapper = mountConfig({ url: 'http://cam/stream', streamType: 'mjpeg', useProxy: true })
+      expect(wrapper.find(hint).exists()).toBe(false)
+    })
+  })
+
   describe('click action', () => {
     function lastPayload(wrapper: ReturnType<typeof mountConfig>) {
       const emitted = wrapper.emitted('update:modelValue') ?? []

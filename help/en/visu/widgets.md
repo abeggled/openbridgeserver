@@ -17,6 +17,14 @@ The **Camera** widget ("Kamera") shows a camera picture. **Source** offers two k
   [GO2RTC or FRIGATE](../adapters/list#adapters-camera-servers) adapters. This also shows RTSP
   cameras a browser cannot play by itself.
 
+### HLS streams
+
+The widget plays an HLS stream (`.m3u8`) in all common browsers, not only in Safari. The Visu
+loads the library it needs only when an HLS widget is on the page. The camera has to allow the
+browser to fetch from another address (CORS); otherwise the picture stays black and the browser
+console reports a CORS error. HLS cannot be played through the **proxy**, because it passes on
+only the playlist, not the video segments.
+
 ### Camera server
 
 - **Camera server**, **Camera** — the instance and, for Frigate, the camera.

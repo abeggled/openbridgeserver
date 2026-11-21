@@ -17,6 +17,14 @@ Das **Kamera**-Widget zeigt ein Kamerabild. Unter **Quelle** gibt es zwei Arten:
   [GO2RTC oder FRIGATE](../adapters/list#adapters-camera-servers). Damit lassen sich auch
   RTSP-Kameras anzeigen, die ein Browser selbst nicht abspielen kann.
 
+### HLS-Streams
+
+Einen HLS-Stream (`.m3u8`) spielt das Widget in allen gängigen Browsern ab, nicht nur in Safari.
+Die dafür nötige Bibliothek lädt die Visu erst, wenn ein HLS-Widget auf der Seite ist. Die
+Kamera muss dem Browser dafür den Abruf von einer anderen Adresse erlauben (CORS); sonst bleibt
+das Bild schwarz und die Konsole des Browsers meldet einen CORS-Fehler. Über den **Proxy** lässt
+sich HLS nicht abspielen, weil er nur die Playlist weiterreicht, nicht die Videosegmente.
+
 ### Kamera-Server
 
 - **Kamera-Server**, **Kamera** — Instanz und, bei Frigate, die Kamera.

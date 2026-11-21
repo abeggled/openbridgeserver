@@ -598,6 +598,7 @@
       "credentialWarning": "Credentials werden in die URL eingebettet (http://user:pass{'@'}host/…). Nur für interne Netzwerke empfohlen.",
       "useProxy": "Via Server-Proxy laden",
       "proxyMixedContentHint": "(Mixed-Content / HTTPS → HTTP)",
+      "hlsProxyUnsupported": "HLS lässt sich nicht über den Proxy abspielen: Er liefert nur die Playlist, nicht die Videosegmente. Den Proxy für HLS ausschalten.",
       "aspectRatio": "Seitenverhältnis",
       "aspectFree": "Frei (Widget-Grösse)",
       "aspectSquare": "1:1 (Quadrat)",
