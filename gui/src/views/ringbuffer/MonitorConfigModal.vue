@@ -259,6 +259,36 @@
         <p class="text-xs text-slate-500">{{ $t('ringbuffer.segmentRatioHint') }}</p>
       </div>
 
+      <!-- Sammelfenster (#1484): Ereignisse sammeln und als einen Block schreiben. -->
+      <div class="flex flex-col gap-1">
+        <label for="batch-window" class="text-sm font-medium">{{ $t('ringbuffer.batchWindow') }}</label>
+        <input
+          id="batch-window"
+          v-model.trim="configForm.batchWindowValue"
+          type="number"
+          min="0"
+          :max="BATCH_WINDOW_MAX_SECONDS"
+          step="1"
+          class="input"
+          :disabled="!configForm.enabled"
+          data-testid="rb-config-batch-window"
+        />
+        <p class="text-xs text-slate-500">{{ $t('ringbuffer.batchWindowHint') }}</p>
+        <label for="batch-max-events" class="text-sm font-medium mt-2">{{ $t('ringbuffer.batchMaxEvents') }}</label>
+        <input
+          id="batch-max-events"
+          v-model.trim="configForm.batchMaxEventsValue"
+          type="number"
+          min="1"
+          :max="BATCH_MAX_EVENTS_LIMIT"
+          step="1"
+          class="input"
+          :disabled="!configForm.enabled"
+          data-testid="rb-config-batch-max-events"
+        />
+        <p class="text-xs text-slate-500">{{ $t('ringbuffer.batchMaxEventsHint') }}</p>
+      </div>
+
       <div v-if="configMsg" :class="['p-3 rounded-lg text-sm', configMsg.ok ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400']">
         {{ configMsg.text }}
       </div>
@@ -331,6 +361,11 @@ const RETENTION_UNIT_SECONDS = {
 // Sichtbarer Kompatibilitätswert für ältere /stats-Antworten, die den
 // persistierten Segment-Age-Wert noch nicht zurücklieferten.
 const DEFAULT_SEGMENT_MAX_AGE_HOURS = 6
+// Sammelfenster (#1484): Backend-Standard und Obergrenze in Sekunden.
+const DEFAULT_BATCH_WINDOW_SECONDS = 5
+const BATCH_WINDOW_MAX_SECONDS = 60
+const DEFAULT_BATCH_MAX_EVENTS = 100
+const BATCH_MAX_EVENTS_LIMIT = 1000
 const SECONDS_PER_HOUR = 60 * 60
 const SECONDS_PER_MINUTE = 60
 const SEGMENT_AGE_UNIT_SECONDS = { seconds: 1, minutes: SECONDS_PER_MINUTE, hours: SECONDS_PER_HOUR }
@@ -389,6 +424,8 @@ const configForm = reactive({
   segmentMaxBytesUnit: 'mb',
   segmentMaxRowsEnabled: false,
   segmentMaxRowsValue: '',
+  batchWindowValue: String(DEFAULT_BATCH_WINDOW_SECONDS),
+  batchMaxEventsValue: String(DEFAULT_BATCH_MAX_EVENTS),
 })
 
 function positiveNumber(raw) {
@@ -588,6 +625,11 @@ function hydrateForm(currentStats) {
     configForm.segmentMaxRowsEnabled = false
     configForm.segmentMaxRowsValue = ''
   }
+  // Aeltere /stats-Antworten kennen das Feld nicht: dann den Backend-Standard zeigen.
+  const batchWindow = Number(currentStats?.batch_window_seconds)
+  configForm.batchWindowValue = String(Number.isFinite(batchWindow) ? batchWindow : DEFAULT_BATCH_WINDOW_SECONDS)
+  const batchMaxEvents = Number(currentStats?.batch_max_events)
+  configForm.batchMaxEventsValue = String(Number.isFinite(batchMaxEvents) ? batchMaxEvents : DEFAULT_BATCH_MAX_EVENTS)
 }
 
 function buildPayload() {
@@ -671,6 +713,18 @@ function buildPayload() {
   if (!effectiveTriggers.some((value) => Number.isFinite(value) && value > 0)) {
     throw new Error(t('ringbuffer.validationSegmentTriggerRequired'))
   }
+
+  const batchWindowRaw = String(configForm.batchWindowValue ?? '').trim()
+  const batchWindow = Number(batchWindowRaw)
+  if (batchWindowRaw === '' || !Number.isFinite(batchWindow) || batchWindow < 0 || batchWindow > BATCH_WINDOW_MAX_SECONDS) {
+    throw new Error(t('ringbuffer.validationBatchWindow'))
+  }
+  payload.batch_window_seconds = batchWindow
+  const batchMaxEvents = parseNonNegativeInteger(configForm.batchMaxEventsValue)
+  if (batchMaxEvents === null || batchMaxEvents < 1 || batchMaxEvents > BATCH_MAX_EVENTS_LIMIT) {
+    throw new Error(t('ringbuffer.validationBatchMaxEvents'))
+  }
+  payload.batch_max_events = batchMaxEvents
   return payload
 }
 

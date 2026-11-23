@@ -74,6 +74,13 @@ DEFAULT_UPGRADE_MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MiB (Upgrade-ohne-C
 # nur bei einer passenden Gesamtgrenze abgeleitet.
 DEFAULT_SEGMENT_MAX_AGE_SECONDS = 6 * 60 * 60  # 21600 s (6 h)
 
+# Sammelfenster des segmentierten Schreibpfads (#1484): Ereignisse werden bis zu
+# so vielen Sekunden gesammelt und als ein Block geschrieben. 0 = sofort schreiben.
+# Gilt auch fuer bestehende Installationen ohne gespeicherten Wert.
+DEFAULT_BATCH_WINDOW_SECONDS = 5
+# Ein Block mit so vielen Ereignissen wird sofort geschrieben, auch vor Ablauf des Fensters.
+DEFAULT_BATCH_MAX_EVENTS = 100
+
 
 def _defaults() -> dict[str, Any]:
     return {
@@ -92,6 +99,8 @@ def _defaults() -> dict[str, Any]:
         "segment_max_bytes": None,
         "segment_max_rows": None,
         "segment_max_age": DEFAULT_SEGMENT_MAX_AGE_SECONDS,
+        "batch_window_seconds": DEFAULT_BATCH_WINDOW_SECONDS,
+        "batch_max_events": DEFAULT_BATCH_MAX_EVENTS,
     }
 
 
@@ -206,6 +215,8 @@ async def load_persisted_ringbuffer_config(db: Database, *, storage_path: str | 
         "segment_max_bytes": data.get("segment_max_bytes", defaults["segment_max_bytes"]),
         "segment_max_rows": data.get("segment_max_rows", defaults["segment_max_rows"]),
         "segment_max_age": segment_max_age,
+        "batch_window_seconds": data.get("batch_window_seconds", defaults["batch_window_seconds"]),
+        "batch_max_events": data.get("batch_max_events", defaults["batch_max_events"]),
     }
     # Compatibility migration for totals persisted before the three-segment
     # invariant existed.  One- and two-unit row/size budgets cannot contain
@@ -380,6 +391,8 @@ async def persist_ringbuffer_config(
     segment_max_bytes: int | None = None,
     segment_max_rows: int | None = None,
     segment_max_age: int | None = None,
+    batch_window_seconds: float = DEFAULT_BATCH_WINDOW_SECONDS,
+    batch_max_events: int = DEFAULT_BATCH_MAX_EVENTS,
 ) -> None:
     payload = json.dumps(
         {
@@ -391,6 +404,8 @@ async def persist_ringbuffer_config(
             "segment_max_bytes": segment_max_bytes,
             "segment_max_rows": segment_max_rows,
             "segment_max_age": segment_max_age,
+            "batch_window_seconds": batch_window_seconds,
+            "batch_max_events": batch_max_events,
         }
     )
     await db.execute(

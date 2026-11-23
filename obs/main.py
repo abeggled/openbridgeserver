@@ -284,6 +284,8 @@ async def _init_persisted_ringbuffer(db, bus, database_path: str, data_value_eve
         segment_max_rows=rb_cfg.get("segment_max_rows"),
         segment_max_age=rb_cfg.get("segment_max_age"),
         legacy_retention_protected=decision in LEGACY_DECISIONS_PROTECTED,
+        batch_window_seconds=rb_cfg.get("batch_window_seconds", 0),
+        batch_max_events=rb_cfg.get("batch_max_events", 100),
     )
     # Ist ein Offline-Migrations-Commit durch (Kopien promotet, Legacy detached), aber die
     # ``migrated``-Entscheidung wurde nie terminal persistiert (im Commit-Fenster unterbrochen

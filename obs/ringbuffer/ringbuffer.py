@@ -38,6 +38,8 @@ from obs.core.json import json_dumps
 
 logger = logging.getLogger(__name__)
 _UNSET = object()
+# Sammelfenster (#1484): ein voller Block wird sofort geschrieben (Standardgroesse).
+_BATCH_MAX_EVENTS = 100
 _ALLOWED_STORAGE_MODELS = {"memory", "disk", "file"}
 _MISSING_SEGMENT_ROTATION_LIMIT_ERROR = (
     "At least one effective segment rotation limit is required; configure a segment limit or a matching total retention limit"
@@ -234,9 +236,15 @@ class RingBuffer:
         segment_max_rows: int | None = None,
         segment_max_age: int | None = None,
         legacy_retention_protected: bool = False,
+        batch_window_seconds: float = 0,
+        batch_max_events: int = _BATCH_MAX_EVENTS,
     ) -> None:
         if storage not in _ALLOWED_STORAGE_MODELS:
             raise ValueError("storage must be one of: file, disk, memory")
+        if batch_window_seconds < 0:
+            raise ValueError("batch_window_seconds must be >= 0")
+        if batch_max_events < 1:
+            raise ValueError("batch_max_events must be >= 1")
         self._storage = storage
         self._max_entries = int(max_entries) if max_entries is not None else None
         if self._max_entries is not None and self._max_entries < 1:
@@ -275,6 +283,14 @@ class RingBuffer:
         self._segment_max_age = segment_max_age
         self._store: Any = None
         self._segment_created_at: str | None = None
+        # Sammelfenster (#1484), nur segmentierter Modus. 0 = jedes Ereignis sofort
+        # schreiben. Sonst: ein ``append``-Block nach ``batch_max_events`` Ereignissen
+        # oder nach Ablauf des Fensters. Ein harter Absturz verliert hoechstens die
+        # Ereignisse eines Fensters; ``stop()`` schreibt sie aus.
+        self._batch_window = float(batch_window_seconds)
+        self._batch_max_events = int(batch_max_events)
+        self._pending: list[Any] = []
+        self._flush_task: asyncio.Task | None = None
 
     @property
     def segmented(self) -> bool:
@@ -547,6 +563,7 @@ class RingBuffer:
             with suppress(asyncio.CancelledError, Exception):
                 await self._legacy_migration_task
         self._legacy_migration_task = None
+        await self._flush_pending()
         if self._store is not None:
             try:
                 await self._store.close()
@@ -578,6 +595,8 @@ class RingBuffer:
         segment_max_bytes: int | None | object = _UNSET,
         segment_max_rows: int | None | object = _UNSET,
         segment_max_age: int | None | object = _UNSET,
+        batch_window_seconds: float | object = _UNSET,
+        batch_max_events: int | object = _UNSET,
     ) -> None:
         """Switch storage model at runtime.
 
@@ -593,7 +612,17 @@ class RingBuffer:
         if storage not in _ALLOWED_STORAGE_MODELS:
             raise ValueError("storage must be one of: file, disk, memory")
 
+        if batch_window_seconds is not _UNSET and batch_window_seconds < 0:
+            raise ValueError("batch_window_seconds must be >= 0")
+        if batch_max_events is not _UNSET and batch_max_events < 1:
+            raise ValueError("batch_max_events must be >= 1")
+
         async with self._lock:
+            resolved_batch_window = self._batch_window if batch_window_seconds is _UNSET else float(batch_window_seconds)
+            resolved_batch_max_events = self._batch_max_events if batch_max_events is _UNSET else int(batch_max_events)
+            if resolved_batch_window != self._batch_window or resolved_batch_max_events != self._batch_max_events:
+                # Gesammelte Ereignisse zuerst schreiben, dann gelten die neuen Werte.
+                await self._flush_pending_locked()
             resolved_max_entries = self._max_entries if max_entries is _UNSET else max_entries
             if resolved_max_entries is not None:
                 resolved_max_entries = int(resolved_max_entries)
@@ -614,6 +643,8 @@ class RingBuffer:
                 and resolved_max_entries == self._max_entries
                 and resolved_max_file_size == self._max_file_size_bytes
                 and resolved_max_age == self._max_age
+                and resolved_batch_window == self._batch_window
+                and resolved_batch_max_events == self._batch_max_events
                 and segment_max_bytes is _UNSET
                 and segment_max_rows is _UNSET
                 and segment_max_age is _UNSET
@@ -630,6 +661,8 @@ class RingBuffer:
                 # dürfte dann NICHT mit den abgelehnten Limits weiterlaufen. Daher den
                 # Vorzustand festhalten und bei jedem Fehler vollständig wiederherstellen.
                 _rollback = self._inplace_config_snapshot()
+                self._batch_window = resolved_batch_window
+                self._batch_max_events = resolved_batch_max_events
                 self._max_entries = resolved_max_entries
                 self._max_file_size_bytes = int(resolved_max_file_size) if resolved_max_file_size is not None else None
                 self._max_age = int(resolved_max_age) if resolved_max_age is not None else None
@@ -708,6 +741,8 @@ class RingBuffer:
             "segment_max_bytes": self._segment_max_bytes,
             "segment_max_rows": self._segment_max_rows,
             "segment_max_age": self._segment_max_age,
+            "batch_window": self._batch_window,
+            "batch_max_events": self._batch_max_events,
         }
         if self._store is not None:
             snap["store_segments"] = self._store._segment_config
@@ -732,6 +767,8 @@ class RingBuffer:
         self._segment_max_bytes = snap["segment_max_bytes"]
         self._segment_max_rows = snap["segment_max_rows"]
         self._segment_max_age = snap["segment_max_age"]
+        self._batch_window = snap["batch_window"]
+        self._batch_max_events = snap["batch_max_events"]
         if self._store is not None and "store_segments" in snap:
             self._store.apply_config(segments=snap["store_segments"], retention=snap["store_retention"])
 
@@ -826,18 +863,28 @@ class RingBuffer:
         if self._segmented:
             if self._store is None:
                 return
+            from obs.ringbuffer.store.interface import StoreEvent
+
+            event = StoreEvent(
+                ts=ts,
+                datapoint_id=datapoint_id,
+                topic=topic,
+                old_value=old_value,
+                new_value=new_value,
+                source_adapter=source_adapter,
+                quality=quality,
+                metadata_version=metadata_version,
+                metadata=metadata_obj,
+            )
             async with self._lock:
-                await self._record_segmented_locked(
-                    ts,
-                    datapoint_id,
-                    topic,
-                    old_value,
-                    new_value,
-                    source_adapter,
-                    quality,
-                    metadata_version,
-                    metadata_obj,
-                )
+                if self._batch_window <= 0:
+                    await self._record_segmented_locked([event])
+                    return
+                self._pending.append(event)
+                if len(self._pending) >= self._batch_max_events:
+                    await self._flush_pending_locked()
+                elif self._flush_task is None:
+                    self._flush_task = asyncio.create_task(self._flush_after_window())
             return
         if not self._conn:
             return
@@ -904,21 +951,39 @@ class RingBuffer:
         await self._conn.commit()
         await self._trim(reference_ts=ts)
 
-    async def _record_segmented_locked(
-        self,
-        ts: str,
-        datapoint_id: str,
-        topic: str,
-        old_value: Any,
-        new_value: Any,
-        source_adapter: str,
-        quality: str,
-        metadata_version: int,
-        metadata_obj: dict[str, Any],
-    ) -> None:
+    async def _flush_after_window(self) -> None:
+        """Timer des Sammelfensters (#1484): schreibt nach Ablauf, was gesammelt ist."""
+        await asyncio.sleep(self._batch_window)
+        async with self._lock:
+            await self._flush_pending_locked()
+
+    async def _flush_pending(self) -> None:
+        """Fuer Leser und ``stop()``: nimmt die Sperre nur, wenn etwas gesammelt ist."""
+        if self._pending:
+            async with self._lock:
+                await self._flush_pending_locked()
+
+    async def _flush_pending_locked(self) -> None:
+        """Schreibt die gesammelten Ereignisse als einen Block (#1484).
+
+        Wirft nie: Aufrufer sind Timer, Leser und ``stop()``. Jedes Schreiben beendet
+        das laufende Fenster; das naechste Ereignis startet ein neues.
+        """
+        if self._flush_task is not None and self._flush_task is not asyncio.current_task():
+            self._flush_task.cancel()
+        self._flush_task = None
+        if not self._pending or self._store is None:
+            return
+        events, self._pending = self._pending, []
+        try:
+            await self._record_segmented_locked(events, drop_failing=True)
+        except Exception:
+            logger.exception("RingBuffer: Sammelblock mit %d Ereignissen nicht vollstaendig verarbeitet", len(events))
+
+    async def _record_segmented_locked(self, events: list[Any], *, drop_failing: bool = False) -> None:
         """Schreibpfad im segmentierten Modus (#919).
 
-        Der Event geht über die portable Store-Grenze (``append``). Danach wird
+        Der Block geht über die portable Store-Grenze (``append``). Danach wird
         auf Rotation (``segment_max_bytes``/``segment_max_rows``/``segment_max_age``)
         geprüft und – falls rotiert wurde – ``enforce_retention`` auf die jetzt
         geschlossenen Segmente angewandt.
@@ -937,8 +1002,6 @@ class RingBuffer:
         gekoppelt: sobald kein attached Legacy mehr existiert (Normalbetrieb),
         läuft KEIN zusätzliches ``enforce_retention`` pro Append.
         """
-        from obs.ringbuffer.store.interface import StoreEvent
-
         # Alters-Faelligkeit VOR dem Append pruefen (#951, Pkt 1): ist das aktive
         # Segment nach einer Idle-Phase bereits ueber ``segment_max_age``, zuerst
         # rotieren und DANN ins frische Segment schreiben. Andernfalls landete das
@@ -958,21 +1021,21 @@ class RingBuffer:
             # nie fällig wird. Analog zum Post-Append-Zweig.
             await self._store.enforce_retention()
 
-        await self._store.append(
-            [
-                StoreEvent(
-                    ts=ts,
-                    datapoint_id=datapoint_id,
-                    topic=topic,
-                    old_value=old_value,
-                    new_value=new_value,
-                    source_adapter=source_adapter,
-                    quality=quality,
-                    metadata_version=metadata_version,
-                    metadata=metadata_obj,
-                )
-            ]
-        )
+        try:
+            await self._store.append(events)
+        except Exception:
+            if not drop_failing:
+                raise
+            # Sammelblock (#1484): ``append`` rollt den ganzen Block zurueck. Ein
+            # einziges defektes Ereignis (z. B. nicht serialisierbare Metadaten)
+            # darf die uebrigen nicht mitreissen: einzeln schreiben, nur das
+            # scheiternde verwerfen.
+            logger.exception("RingBuffer: Block mit %d Ereignissen nicht schreibbar, schreibe einzeln", len(events))
+            for event in events:
+                try:
+                    await self._store.append([event])
+                except Exception:
+                    logger.exception("RingBuffer: Ereignis nicht schreibbar, verworfen")
         if await self._segment_rotation_due():
             await self._store.rotate()
             self._segment_created_at = _isoformat_utc(datetime.now(UTC))
@@ -2038,6 +2101,7 @@ class RingBuffer:
         """
         if self._store is None:
             return []
+        await self._flush_pending()
 
         if sort_field not in {"id", "ts"}:
             raise ValueError("invalid sort field: expected 'id' or 'ts'")
@@ -2289,6 +2353,7 @@ class RingBuffer:
             return max(0, int((datetime.now(UTC) - oldest_dt).total_seconds()))
 
         if self._segmented and self._store is not None:
+            await self._flush_pending()
             store_stats = await self._store.stats()
             common = store_stats.common
             oldest_ts = common.get("oldest_ts")
@@ -2310,6 +2375,8 @@ class RingBuffer:
                 # im Store berechnet; auf Top-Level gehoben für RingBufferStats.
                 "prognosis": common.get("prognosis"),
                 "store": store_stats.as_dict(),
+                "batch_window_seconds": self._batch_window,
+                "batch_max_events": self._batch_max_events,
             }
 
         if not self._conn:
@@ -2874,6 +2941,8 @@ async def init_ringbuffer(
     segment_max_rows: int | None = None,
     segment_max_age: int | None = None,
     legacy_retention_protected: bool = False,
+    batch_window_seconds: float = 0,
+    batch_max_events: int = _BATCH_MAX_EVENTS,
 ) -> RingBuffer:
     global _rb, _enabled
     rb = RingBuffer(
@@ -2887,6 +2956,8 @@ async def init_ringbuffer(
         segment_max_rows=segment_max_rows,
         segment_max_age=segment_max_age,
         legacy_retention_protected=legacy_retention_protected,
+        batch_window_seconds=batch_window_seconds,
+        batch_max_events=batch_max_events,
     )
     await rb.start()
     _rb = rb

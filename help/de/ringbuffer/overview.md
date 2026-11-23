@@ -13,7 +13,12 @@ Objekte, sondern ein durchsuchbarer, filterbarer Live-Strom **über alle Objekte
 
 - **⚙ Konfigurieren** (nur Admins) — öffnet die Monitor-Konfiguration: Speichermodell
   (memory oder disk), maximale Einträge, maximaler Speicherplatz, maximale Retention nach
-  Alter sowie — im segmentierten Modus — die Segment-Rotationsgrenzen. Der Monitor lässt
+  Alter sowie — im segmentierten Modus — die Segment-Rotationsgrenzen und das
+  **Sammelfenster beim Schreiben**: Der Monitor sammelt Ereignisse und schreibt sie als
+  einen Block, nach der eingestellten Zeit (Standard 5 Sekunden) oder sobald die
+  eingestellte Blockgröße erreicht ist (Standard 100 Ereignisse).
+  Das schont den Datenträger. Bei einem Absturz oder Stromausfall gehen höchstens die
+  Ereignisse dieser Zeit verloren; `0` schreibt jedes Ereignis sofort. Der Monitor lässt
   sich hier auch vollständig deaktivieren (löscht dabei alle bisherigen Einträge) oder
   wieder aktivieren.
 - **Segmente** — nur sichtbar im segmentierten Speichermodus; öffnet eine Übersicht der
