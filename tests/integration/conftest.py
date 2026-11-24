@@ -23,6 +23,8 @@ import pytest_asyncio
 from asgi_lifespan import LifespanManager
 from httpx import ASGITransport, AsyncClient
 
+import obs.ringbuffer.persisted_config as _rb_config
+
 # ---------------------------------------------------------------------------
 # Mosquitto Docker fixture (sync — subprocess only)
 # ---------------------------------------------------------------------------
@@ -85,6 +87,24 @@ def mosquitto_port():
 # ---------------------------------------------------------------------------
 # App + Client (async session fixtures)
 # ---------------------------------------------------------------------------
+
+
+# This suite alternates between the session loop and one loop per test. A batch-window timer
+# (#1484) that started on one loop stops with it in the middle of a write and keeps the write
+# lock; record() on the next loop then waits forever. A real server has one loop. So the tests
+# in this directory write through; the unit tests cover the window. The hooks run for the
+# tests of this directory only, so a later unit test sees the real default again.
+_BATCH_WINDOW_DEFAULT = _rb_config.DEFAULT_BATCH_WINDOW_SECONDS
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item):
+    _rb_config.DEFAULT_BATCH_WINDOW_SECONDS = 0
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_runtest_teardown(item):
+    _rb_config.DEFAULT_BATCH_WINDOW_SECONDS = _BATCH_WINDOW_DEFAULT
 
 
 @pytest_asyncio.fixture(scope="session")
@@ -157,21 +177,10 @@ async def app(mosquitto_port):
     await bootstrap_db.disconnect()
     create_first_owner(db_path, username="admin", password="integration-test-password", backup=False)
 
-    # This suite alternates between the session loop and one loop per test. A batch-window
-    # timer (#1484) that started on one loop stops with it in the middle of a write and keeps
-    # the write lock; record() on the next loop then waits forever. A real server has one
-    # loop. So the session writes through; the unit tests cover the window.
-    import obs.ringbuffer.persisted_config as _rb_config
-
-    _orig_batch_window = _rb_config.DEFAULT_BATCH_WINDOW_SECONDS
-    _rb_config.DEFAULT_BATCH_WINDOW_SECONDS = 0
-
     _app = create_app()
 
     async with LifespanManager(_app):
         yield _app
-
-    _rb_config.DEFAULT_BATCH_WINDOW_SECONDS = _orig_batch_window
 
     # Reset all singletons so the test session ends in a clean state.
     # Each import is attempted individually so that a missing reset helper
