@@ -14,7 +14,6 @@ import pytest
 from obs.db.database import get_db
 from obs.ringbuffer.persisted_config import (
     DEFAULT_BATCH_MAX_EVENTS,
-    DEFAULT_BATCH_WINDOW_SECONDS,
     DEFAULT_SEGMENT_MAX_AGE_SECONDS,
     PERSISTED_CONFIG_KEY,
     load_persisted_ringbuffer_config,
@@ -77,7 +76,7 @@ async def test_config_post_persists_full_payload_to_app_settings(client, auth_he
         "segment_max_bytes": None,
         "segment_max_rows": None,
         "segment_max_age": 2400,
-        "batch_window_seconds": DEFAULT_BATCH_WINDOW_SECONDS,
+        "batch_window_seconds": 0,
         "batch_max_events": DEFAULT_BATCH_MAX_EVENTS,
     }
 
@@ -109,7 +108,7 @@ async def test_config_post_persists_null_max_entries(client, auth_headers):
         "segment_max_bytes": None,
         "segment_max_rows": None,
         "segment_max_age": DEFAULT_SEGMENT_MAX_AGE_SECONDS,
-        "batch_window_seconds": DEFAULT_BATCH_WINDOW_SECONDS,
+        "batch_window_seconds": 0,
         "batch_max_events": DEFAULT_BATCH_MAX_EVENTS,
     }
 
@@ -141,7 +140,7 @@ async def test_load_persisted_ringbuffer_config_after_post_matches_payload(clien
         "segment_max_bytes": None,
         "segment_max_rows": None,
         "segment_max_age": 1200,
-        "batch_window_seconds": DEFAULT_BATCH_WINDOW_SECONDS,
+        "batch_window_seconds": 0,
         "batch_max_events": DEFAULT_BATCH_MAX_EVENTS,
     }
 
