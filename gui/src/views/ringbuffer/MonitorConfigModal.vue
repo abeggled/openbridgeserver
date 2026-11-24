@@ -714,7 +714,7 @@ function buildPayload() {
     throw new Error(t('ringbuffer.validationSegmentTriggerRequired'))
   }
 
-  const batchWindowRaw = String(configForm.batchWindowValue ?? '').trim()
+  const batchWindowRaw = String(configForm.batchWindowValue).trim()
   const batchWindow = Number(batchWindowRaw)
   if (batchWindowRaw === '' || !Number.isFinite(batchWindow) || batchWindow < 0 || batchWindow > BATCH_WINDOW_MAX_SECONDS) {
     throw new Error(t('ringbuffer.validationBatchWindow'))
