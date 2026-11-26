@@ -740,6 +740,52 @@ export const adapters = {
     request<HolidayEntry[]>(`/adapters/instances/${instanceId}/holidays${year ? `?year=${year}` : ''}`),
 }
 
+// ── Kamera-Streams (go2rtc / Frigate, #1479) ──────────────────────────────────
+
+/** Adapter-Typen, die Kamera-Streams liefern. */
+export const STREAM_SOURCE_TYPES = ['GO2RTC', 'FRIGATE']
+
+export interface StreamSourceStream {
+  label: string
+  src: string
+}
+
+export interface StreamSourceCamera {
+  name: string
+  streams: StreamSourceStream[]
+}
+
+export interface StreamInfo {
+  mse_mode: 'direct' | 'proxy'
+  mse_direct_url: string | null
+}
+
+/** Wessen Seite fragt: Visu-Seite (ggf. mit PIN-Session) oder der Admin-Editor. */
+export interface StreamScope {
+  pageId?: string | null
+  sessionToken?: string | null
+  editorPreview?: boolean
+}
+
+export function streamScopeParams(scope: StreamScope): URLSearchParams {
+  const p = new URLSearchParams()
+  if (scope.editorPreview) p.set('editor_preview', '1')
+  if (scope.pageId) p.set('page_id', scope.pageId)
+  if (scope.sessionToken) p.set('session_token', scope.sessionToken)
+  return p
+}
+
+export const cameraStreams = {
+  cameras: (instanceId: string) =>
+    request<StreamSourceCamera[]>(`/camera/streams/${encodeURIComponent(instanceId)}/cameras`),
+
+  streamInfo: (instanceId: string, src: string, scope: StreamScope) => {
+    const p = streamScopeParams(scope)
+    p.set('src', src)
+    return request<StreamInfo>(`/camera/streams/${encodeURIComponent(instanceId)}/stream-info?${p.toString()}`)
+  },
+}
+
 // ── Icons ─────────────────────────────────────────────────────────────────────
 
 export interface IconOut {

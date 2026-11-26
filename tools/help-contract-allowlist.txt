@@ -32,7 +32,6 @@ widget:Grundriss  # Visu widget help not written yet (#1183 follow-up).
 widget:HorizontalBar  # Visu widget help not written yet (#1183 follow-up).
 widget:IFrame  # Visu widget help not written yet (#1183 follow-up).
 widget:Info  # Visu widget help not written yet (#1183 follow-up).
-widget:Kamera  # Visu widget help not written yet (#1183 follow-up).
 widget:Licht  # Visu widget help not written yet (#1183 follow-up).
 widget:Link  # Visu widget help not written yet (#1183 follow-up).
 widget:MessageArchive  # Visu widget help not written yet (#1183 follow-up).

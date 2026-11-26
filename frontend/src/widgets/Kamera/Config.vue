@@ -1,6 +1,14 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import PagePicker from '@/components/PagePicker.vue'
+import {
+  adapters,
+  cameraStreams,
+  STREAM_SOURCE_TYPES,
+  type AdapterInstanceSummary,
+  type StreamSourceCamera,
+} from '@/api/client'
+import { allStreams, defaultFullscreenSrc, defaultTileSrc } from './streamSource'
 
 const props = defineProps<{
   modelValue: Record<string, unknown> | null | undefined
@@ -27,6 +35,12 @@ function raw(): Record<string, unknown> {
 
 const r = raw()
 const label           = ref((r.label           as string)  ?? '')
+const source          = ref<'url' | 'go2rtc'>(r.source === 'go2rtc' ? 'go2rtc' : 'url')
+const streamInstanceId = ref((r.streamInstanceId as string) ?? '')
+const streamCamera    = ref((r.streamCamera    as string)  ?? '')
+const tileSrc         = ref((r.tileSrc         as string)  ?? '')
+const fullscreenSrc   = ref((r.fullscreenSrc   as string)  ?? '')
+const preferMode      = ref<'auto' | 'mse'>(r.preferMode === 'mse' ? 'mse' : 'auto')
 const url             = ref((r.url             as string)  ?? '')
 const streamType      = ref((r.streamType      as string)  ?? 'mjpeg')
 const authType        = ref<AuthType>(normalizeAuthType(r.authType))
@@ -45,10 +59,19 @@ const targetNodeId    = ref(clickAction.value === 'none' ? '' : (r.targetNodeId 
 watch(clickAction, (action) => { if (action === 'none') targetNodeId.value = '' })
 
 watch(
-  [label, url, streamType, authType, username, password, apiKeyParam, apiKeyValue, refreshInterval, aspectRatio, objectFit, useProxy, clickAction, targetNodeId],
+  [
+    label, source, streamInstanceId, streamCamera, tileSrc, fullscreenSrc, preferMode,
+    url, streamType, authType, username, password, apiKeyParam, apiKeyValue, refreshInterval, aspectRatio, objectFit, useProxy, clickAction, targetNodeId,
+  ],
   () => {
     emit('update:modelValue', {
       label:           label.value,
+      source:          source.value,
+      streamInstanceId: streamInstanceId.value,
+      streamCamera:    streamCamera.value,
+      tileSrc:         tileSrc.value,
+      fullscreenSrc:   fullscreenSrc.value,
+      preferMode:      preferMode.value,
       url:             url.value,
       streamType:      streamType.value,
       authType:        authType.value,
@@ -69,6 +92,74 @@ watch(
 const showBasicAuth  = computed(() => authType.value === 'basic')
 const showApiKeyAuth = computed(() => authType.value === 'apikey')
 const showRefresh    = computed(() => streamType.value === 'snapshot')
+
+// ── Kamera-Server (go2rtc / Frigate, #1479) ─────────────────────────────────
+const instances      = ref<AdapterInstanceSummary[]>([])
+const instancesLoaded = ref(false)
+const cameras        = ref<StreamSourceCamera[]>([])
+const camerasLoading = ref(false)
+const camerasError   = ref(false)
+
+// Frigate gruppiert Haupt-/Substream je Kamera; bei go2rtc ist jeder Stream eine „Kamera“.
+const groupsCameras = computed(() =>
+  instances.value.find(i => i.id === streamInstanceId.value)?.adapter_type === 'FRIGATE',
+)
+const streamOptions = computed(() =>
+  groupsCameras.value
+    ? cameras.value.find(c => c.name === streamCamera.value)?.streams ?? []
+    : allStreams(cameras.value),
+)
+
+async function loadInstances() {
+  try {
+    const all = await adapters.listInstances()
+    instances.value = all.filter(i => STREAM_SOURCE_TYPES.includes(i.adapter_type))
+  } catch {
+    instances.value = []
+  } finally {
+    instancesLoaded.value = true
+  }
+}
+
+async function loadCameras() {
+  cameras.value = []
+  camerasError.value = false
+  if (!streamInstanceId.value) return
+  camerasLoading.value = true
+  try {
+    cameras.value = await cameraStreams.cameras(streamInstanceId.value)
+  } catch {
+    camerasError.value = true
+  } finally {
+    camerasLoading.value = false
+  }
+}
+
+function loadStreamSources() {
+  if (!instancesLoaded.value) void loadInstances()
+  void loadCameras()
+}
+
+onMounted(() => {
+  if (source.value === 'go2rtc') loadStreamSources()
+})
+watch(source, (value) => {
+  if (value === 'go2rtc') loadStreamSources()
+})
+// Nur echte Wechsel durch den Benutzer setzen die Auswahl darunter zurück.
+watch(streamInstanceId, () => {
+  streamCamera.value = ''
+  tileSrc.value = ''
+  fullscreenSrc.value = ''
+  void loadCameras()
+})
+watch(streamCamera, () => {
+  tileSrc.value = defaultTileSrc(streamOptions.value)
+  fullscreenSrc.value = defaultFullscreenSrc(streamOptions.value)
+})
+watch(tileSrc, (value) => {
+  if (value && !fullscreenSrc.value) fullscreenSrc.value = value
+})
 </script>
 
 <template>
@@ -85,6 +176,95 @@ const showRefresh    = computed(() => streamType.value === 'snapshot')
       />
     </div>
 
+    <!-- Quelle -->
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.kamera.source') }}</label>
+      <select
+        v-model="source"
+        data-testid="kamera-config-source"
+        class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+      >
+        <option value="url">{{ $t('widgets.kamera.sourceUrl') }}</option>
+        <option value="go2rtc">{{ $t('widgets.kamera.sourceStreamServer') }}</option>
+      </select>
+    </div>
+
+    <!-- Kamera-Server (go2rtc / Frigate) -->
+    <template v-if="source === 'go2rtc'">
+      <div>
+        <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.kamera.streamInstance') }}</label>
+        <select
+          v-model="streamInstanceId"
+          data-testid="kamera-config-instance"
+          class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+        >
+          <option value="">{{ $t('widgets.kamera.choose') }}</option>
+          <option v-for="inst in instances" :key="inst.id" :value="inst.id">
+            {{ inst.name }} ({{ inst.adapter_type }})
+          </option>
+        </select>
+        <p v-if="instancesLoaded && !instances.length" class="text-xs text-yellow-600 mt-1" data-testid="kamera-config-no-instances">
+          {{ $t('widgets.kamera.noStreamInstances') }}
+        </p>
+      </div>
+
+      <p v-if="camerasLoading" class="text-xs text-gray-500">{{ $t('widgets.kamera.loadingCameras') }}</p>
+      <p v-else-if="camerasError" class="text-xs text-red-400" data-testid="kamera-config-cameras-error">
+        {{ $t('widgets.kamera.camerasUnavailable') }}
+      </p>
+
+      <div v-if="groupsCameras">
+        <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.kamera.camera') }}</label>
+        <select
+          v-model="streamCamera"
+          data-testid="kamera-config-camera"
+          class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+        >
+          <option value="">{{ $t('widgets.kamera.choose') }}</option>
+          <option v-for="cam in cameras" :key="cam.name" :value="cam.name">{{ cam.name }}</option>
+        </select>
+      </div>
+
+      <div class="grid grid-cols-2 gap-2">
+        <div>
+          <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.kamera.tileStream') }}</label>
+          <select
+            v-model="tileSrc"
+            data-testid="kamera-config-tile-src"
+            class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+          >
+            <option value="">{{ $t('widgets.kamera.choose') }}</option>
+            <option v-for="st in streamOptions" :key="st.src" :value="st.src">{{ st.label }}</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.kamera.fullscreenStream') }}</label>
+          <select
+            v-model="fullscreenSrc"
+            data-testid="kamera-config-fullscreen-src"
+            class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+          >
+            <option value="">{{ $t('widgets.kamera.choose') }}</option>
+            <option v-for="st in streamOptions" :key="st.src" :value="st.src">{{ st.label }}</option>
+          </select>
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.kamera.preferMode') }}</label>
+        <select
+          v-model="preferMode"
+          data-testid="kamera-config-prefer-mode"
+          class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+        >
+          <option value="auto">{{ $t('widgets.kamera.preferModeAuto') }}</option>
+          <option value="mse">{{ $t('widgets.kamera.preferModeMse') }}</option>
+        </select>
+        <p class="text-xs text-gray-500 mt-1">{{ $t('widgets.kamera.preferModeHint') }}</p>
+      </div>
+    </template>
+
+    <template v-else>
     <!-- Stream-Typ -->
     <div>
       <label class="block text-xs text-gray-400 mb-1">{{ $t('widgets.kamera.streamType') }}</label>
@@ -200,6 +380,7 @@ const showRefresh    = computed(() => streamType.value === 'snapshot')
         <span class="text-gray-500 font-normal ml-1">{{ $t('widgets.kamera.proxyMixedContentHint') }}</span>
       </label>
     </div>
+    </template>
 
     <!-- Darstellung -->
     <div class="grid grid-cols-2 gap-2">

@@ -7,6 +7,36 @@ title: Visu-Widgets
 Widgets sind die Bausteine einer Visu-Seite. Sie werden im Visu-Editor aus der Palette auf die
 Seite gezogen und im Eigenschaften-Panel rechts konfiguriert.
 
+## Kamera {#widget-kamera}
+
+Das **Kamera**-Widget zeigt ein Kamerabild. Unter **Quelle** gibt es zwei Arten:
+
+- **Kamera-URL** — ein MJPEG-Stream, ein JPEG-Standbild mit Aktualisierungsintervall oder ein
+  HLS-Stream (`.m3u8`) direkt von der Kamera, optional über den Proxy von OBS.
+- **Kamera-Server (go2rtc / Frigate)** — ein Livestream von einer Instanz der Adapter
+  [GO2RTC oder FRIGATE](../adapters/list#adapters-camera-servers). Damit lassen sich auch
+  RTSP-Kameras anzeigen, die ein Browser selbst nicht abspielen kann.
+
+### Kamera-Server
+
+- **Kamera-Server**, **Kamera** — Instanz und, bei Frigate, die Kamera.
+- **Stream in der Kachel** / **Stream im Vollbild** — typischerweise der Substream in der
+  Kachel und der Hauptstream im Vollbild. Bei Frigate werden beide vorgeschlagen.
+- **Übertragung** — *Automatisch* versucht WebRTC (geringste Verzögerung, direkt zwischen
+  Kamera-Server und Browser) und fällt nach wenigen Sekunden auf MSE zurück. *Nur MSE*
+  überspringt WebRTC.
+
+Bis der Stream läuft, und wenn er ausfällt, zeigt das Widget ein Standbild; es verbindet sich
+selbstständig neu. Unten rechts schaltet ein Knopf ins Vollbild, bei Streams mit Ton ein
+weiterer den Ton ein. Ein verdecktes Widget oder ein Tab im Hintergrund hält den Stream an. Im
+Visu-Editor zeigt das Widget nur das Standbild.
+
+### Darstellung und Antippen
+
+- **Seitenverhältnis**, **Bildanpassung** — Format und Einpassung des Bildes.
+- **Beim Antippen** — öffnet eine andere Seite oder springt zur zuvor besuchten Seite zurück.
+  Die Knöpfe für Vollbild und Ton lösen das nicht aus.
+
 ## Terminliste {#widget-terminliste}
 
 Die **Terminliste** zeigt die Termine der nächsten Tage als Liste, ein Eintrag pro Tag:

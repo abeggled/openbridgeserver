@@ -98,6 +98,9 @@ ROUTE_CLASSIFICATIONS: Final[dict[RouteSignature, RouteCategory]] = {
     ("GET", "/api/v1/auth/users/{username}/deletion-preflight"): "read_live",
     ("GET", "/api/v1/authz/principals/{principal_type}/{principal_id:path}/grants"): "read_live",
     ("GET", "/api/v1/camera/proxy"): "read_live",
+    ("GET", "/api/v1/camera/streams/{instance_id}/cameras"): "read_live",
+    ("GET", "/api/v1/camera/streams/{instance_id}/snapshot"): "read_live",
+    ("GET", "/api/v1/camera/streams/{instance_id}/stream-info"): "read_live",
     ("GET", "/api/v1/config/autobackup/config"): "read_live",
     ("GET", "/api/v1/config/autobackup/list"): "read_live",
     ("GET", "/api/v1/config/export"): "read_live",
@@ -280,5 +283,6 @@ ROUTE_CLASSIFICATIONS: Final[dict[RouteSignature, RouteCategory]] = {
     ("PUT", "/api/v1/visu/nodes/{node_id}/move"): "config_mutation",
     ("PUT", "/api/v1/visu/nodes/{node_id}/users"): "config_mutation",
     ("PUT", "/api/v1/visu/pages/{node_id}"): "config_mutation",
+    ("WEBSOCKET", "/api/v1/camera/streams/{instance_id}/ws"): "read_live",
     ("WEBSOCKET", "/api/v1/ws"): "read_live",
 }

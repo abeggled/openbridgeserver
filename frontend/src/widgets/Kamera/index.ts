@@ -13,6 +13,13 @@ WidgetRegistry.register({
   configComponent: Config,
   defaultConfig: {
     label: '',
+    // 'url' = Kamera-URL (MJPEG/Snapshot/HLS), 'go2rtc' = Kamera-Server GO2RTC/FRIGATE (#1479)
+    source: 'url',
+    streamInstanceId: '',
+    streamCamera: '',
+    tileSrc: '',
+    fullscreenSrc: '',
+    preferMode: 'auto',
     url: '',
     streamType: 'mjpeg',
     authType: 'none',
@@ -29,4 +36,7 @@ WidgetRegistry.register({
   },
   compatibleTypes: ['*'],
   noDatapoint: true,
+  // Die UUIDs in der Konfiguration (Kamera-Server-Instanz, Zielseite) sind keine
+  // Datenpunkte; ohne diese Angabe hält der Editor sie für fehlende DP-Verweise.
+  getExtraDatapointIds: () => [],
 })
