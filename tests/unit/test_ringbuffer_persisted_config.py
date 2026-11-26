@@ -22,6 +22,8 @@ import pytest
 
 from obs.db.database import Database
 from obs.ringbuffer.persisted_config import (
+    DEFAULT_BATCH_MAX_EVENTS,
+    DEFAULT_BATCH_WINDOW_SECONDS,
     DEFAULT_MAX_FILE_SIZE_BYTES,
     DEFAULT_SEGMENT_MAX_AGE_SECONDS,
     DEFAULT_UPGRADE_MAX_FILE_SIZE_BYTES,
@@ -70,6 +72,8 @@ async def test_load_returns_defaults_when_nothing_persisted():
             "segment_max_bytes": None,
             "segment_max_rows": None,
             "segment_max_age": DEFAULT_SEGMENT_MAX_AGE_SECONDS,
+            "batch_window_seconds": DEFAULT_BATCH_WINDOW_SECONDS,
+            "batch_max_events": DEFAULT_BATCH_MAX_EVENTS,
         }
     finally:
         await db.disconnect()
@@ -97,6 +101,8 @@ async def test_persist_then_load_roundtrip():
             "segment_max_bytes": None,
             "segment_max_rows": None,
             "segment_max_age": None,
+            "batch_window_seconds": DEFAULT_BATCH_WINDOW_SECONDS,
+            "batch_max_events": DEFAULT_BATCH_MAX_EVENTS,
         }
     finally:
         await db.disconnect()
@@ -124,6 +130,8 @@ async def test_persist_supports_unbounded_max_entries_and_age():
             "segment_max_bytes": None,
             "segment_max_rows": None,
             "segment_max_age": None,
+            "batch_window_seconds": DEFAULT_BATCH_WINDOW_SECONDS,
+            "batch_max_events": DEFAULT_BATCH_MAX_EVENTS,
         }
     finally:
         await db.disconnect()
@@ -146,6 +154,8 @@ async def test_persist_overwrites_existing_row():
             "segment_max_bytes": None,
             "segment_max_rows": None,
             "segment_max_age": None,
+            "batch_window_seconds": DEFAULT_BATCH_WINDOW_SECONDS,
+            "batch_max_events": DEFAULT_BATCH_MAX_EVENTS,
         }
         rows = await db.fetchall("SELECT key FROM app_settings WHERE key=?", (PERSISTED_CONFIG_KEY,))
         assert len(rows) == 1
@@ -173,6 +183,8 @@ async def test_load_handles_corrupt_json_by_returning_defaults():
             "segment_max_bytes": None,
             "segment_max_rows": None,
             "segment_max_age": DEFAULT_SEGMENT_MAX_AGE_SECONDS,
+            "batch_window_seconds": DEFAULT_BATCH_WINDOW_SECONDS,
+            "batch_max_events": DEFAULT_BATCH_MAX_EVENTS,
         }
     finally:
         await db.disconnect()
@@ -198,6 +210,8 @@ async def test_load_fills_missing_keys_with_defaults():
             "segment_max_bytes": None,
             "segment_max_rows": None,
             "segment_max_age": DEFAULT_SEGMENT_MAX_AGE_SECONDS,
+            "batch_window_seconds": DEFAULT_BATCH_WINDOW_SECONDS,
+            "batch_max_events": DEFAULT_BATCH_MAX_EVENTS,
         }
     finally:
         await db.disconnect()
@@ -661,5 +675,30 @@ async def test_load_returns_defaults_when_persisted_value_is_not_a_dict():
         cfg = await load_persisted_ringbuffer_config(db)
         assert cfg["segment_max_bytes"] is None
         assert cfg["max_file_size_bytes"] == DEFAULT_MAX_FILE_SIZE_BYTES
+    finally:
+        await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_batch_window_roundtrip_and_default_for_existing_installs():
+    db = Database(":memory:")
+    await db.connect()
+    try:
+        # Bestehende Installation: gespeicherte Config ohne den Schluessel (#1484).
+        await db.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?)",
+            (PERSISTED_CONFIG_KEY, json.dumps({"max_age": 3600})),
+        )
+        await db.commit()
+        cfg = await load_persisted_ringbuffer_config(db)
+        assert cfg["batch_window_seconds"] == DEFAULT_BATCH_WINDOW_SECONDS
+        assert cfg["batch_max_events"] == DEFAULT_BATCH_MAX_EVENTS
+
+        await persist_ringbuffer_config(
+            db, enabled=True, max_entries=None, max_file_size_bytes=None, max_age=3600, batch_window_seconds=0, batch_max_events=7
+        )
+        cfg = await load_persisted_ringbuffer_config(db)
+        assert cfg["batch_window_seconds"] == 0
+        assert cfg["batch_max_events"] == 7
     finally:
         await db.disconnect()

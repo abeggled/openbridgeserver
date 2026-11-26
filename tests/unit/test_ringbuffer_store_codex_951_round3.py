@@ -138,14 +138,14 @@ async def test_pre_append_age_rotation_enforces_retention(tmp_path: Path, monkey
         # nicht-leeres Segment). created_at in die Vergangenheit setzen.
         rb._segment_created_at = "2000-01-01T00:00:00.000Z"
         async with rb._lock:
-            await rb._record_segmented_locked("2026-01-01T00:00:00.000Z", "dp-1", "dp/dp-1/value", None, 1, "api", "good", 1, {})
+            await rb._record_segmented_locked([_event(1, "2026-01-01T00:00:00.000Z")])
         calls["enforce"] = 0  # ab hier zählen
 
         # Zweites Event: das aktive Segment ist jetzt "über" der Age-Grenze → VOR-
         # Append-Age-Rotation greift und MUSS enforce_retention() nachziehen.
         rb._segment_created_at = "2000-01-01T00:00:00.000Z"
         async with rb._lock:
-            await rb._record_segmented_locked("2026-01-01T00:00:01.000Z", "dp-1", "dp/dp-1/value", None, 2, "api", "good", 1, {})
+            await rb._record_segmented_locked([_event(2, "2026-01-01T00:00:01.000Z")])
         assert calls["enforce"] >= 1
     finally:
         await store.close()

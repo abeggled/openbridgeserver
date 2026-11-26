@@ -937,4 +937,59 @@ describe('MonitorConfigModal prognosis (#919/#938)', () => {
     expect(wrapper.find('[data-testid="prognosis-budget"]').exists()).toBe(true)
     expect(wrapper.text()).not.toContain('NaN')
   })
+
+  describe('write batch window (#1484)', () => {
+    async function submitWithWindow(value, statsExtra = {}) {
+      const base = makeApi()
+      const stats = (await base.stats()).data
+      const api = makeApi({ stats: vi.fn().mockResolvedValue({ data: { ...stats, ...statsExtra } }) })
+      const { wrapper } = await mountModal({ api })
+      if (value !== undefined) await wrapper.find('[data-testid="rb-config-batch-window"]').setValue(value)
+      await wrapper.find('form').trigger('submit')
+      await flushPromises()
+      return { wrapper, api }
+    }
+
+    it('shows the backend default when stats omit the value and posts it', async () => {
+      const { wrapper, api } = await submitWithWindow(undefined)
+      expect(wrapper.find('[data-testid="rb-config-batch-window"]').element.value).toBe('5')
+      expect(api.config.mock.calls[0][0].batch_window_seconds).toBe(5)
+    })
+
+    it('hydrates the stored value, including 0', async () => {
+      // Der gesendete Wert belegt die Hydration; nach dem Speichern fuellt die Antwort das Feld neu.
+      const { api } = await submitWithWindow(undefined, { batch_window_seconds: 0 })
+      expect(api.config.mock.calls[0][0].batch_window_seconds).toBe(0)
+    })
+
+    it('posts a changed value in seconds', async () => {
+      const { api } = await submitWithWindow('12')
+      expect(api.config.mock.calls[0][0].batch_window_seconds).toBe(12)
+    })
+
+    it('posts the block size and shows the default when stats omit it', async () => {
+      const { wrapper, api } = await submitWithWindow(undefined)
+      expect(wrapper.find('[data-testid="rb-config-batch-max-events"]').element.value).toBe('100')
+      expect(api.config.mock.calls[0][0].batch_max_events).toBe(100)
+    })
+
+    it('hydrates and posts a stored block size', async () => {
+      const { api } = await submitWithWindow(undefined, { batch_max_events: 250 })
+      expect(api.config.mock.calls[0][0].batch_max_events).toBe(250)
+    })
+
+    it.each(['', '0', '1001'])('rejects block size %j with an inline error', async (value) => {
+      const { wrapper } = await mountModal()
+      await wrapper.find('[data-testid="rb-config-batch-max-events"]').setValue(value)
+      await wrapper.find('form').trigger('submit')
+      await flushPromises()
+      expect(wrapper.text()).toContain('zwischen 1 und 1000 Ereignissen')
+    })
+
+    it.each(['', '-1', '61'])('rejects %j with an inline error', async (value) => {
+      const { wrapper, api } = await submitWithWindow(value)
+      expect(api.config).not.toHaveBeenCalled()
+      expect(wrapper.text()).toContain('zwischen 0 und 60 Sekunden')
+    })
+  })
 })

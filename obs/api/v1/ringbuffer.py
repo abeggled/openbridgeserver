@@ -189,6 +189,8 @@ async def _disabled_stats(db: Database) -> RingBufferStats:
         segment_max_bytes=cfg.get("segment_max_bytes"),
         segment_max_rows=cfg.get("segment_max_rows"),
         segment_max_age=cfg.get("segment_max_age"),
+        batch_window_seconds=cfg.get("batch_window_seconds", 0),
+        batch_max_events=cfg.get("batch_max_events", 100),
         file_size_bytes=0,
         **_segment_contract_stats(
             max_entries=cfg["max_entries"],
@@ -309,6 +311,10 @@ class RingBufferStats(BaseModel):
     segment_max_rows_source: Literal["explicit", "derived", "disabled"] = "disabled"
     segment_max_age_source: Literal["explicit", "derived", "disabled"] = "disabled"
     retention_unbounded: bool = False
+    # Sammelfenster des Schreibpfads in Sekunden (#1484); 0 = sofort schreiben.
+    batch_window_seconds: float = 0
+    # Ein Block mit so vielen Ereignissen wird sofort geschrieben (#1484).
+    batch_max_events: int = 100
     last_recovery_at: str | None = None
     last_recovery_file_count: int = 0
     # Segmentierter Store (#919) — nur im segmentierten Modus befüllt (``common``
@@ -341,6 +347,13 @@ class RingBufferConfig(BaseModel):
     segment_max_bytes: int | None = Field(default=None, ge=1)
     segment_max_rows: int | None = Field(default=None, ge=1)
     segment_max_age: int | None = Field(default=None, ge=1)
+    # Sammelfenster (#1484): Ereignisse bis zu so vielen Sekunden sammeln und als
+    # einen Block schreiben. 0 = sofort schreiben. ``None`` = unveraendert lassen.
+    # Die Obergrenze begrenzt den Verlust bei einem harten Absturz.
+    batch_window_seconds: float | None = Field(default=None, ge=0, le=60)
+    # Ein Block mit so vielen Ereignissen wird sofort geschrieben, auch vor Ablauf
+    # des Fensters. ``None`` = unveraendert lassen.
+    batch_max_events: int | None = Field(default=None, ge=1, le=1000)
 
 
 class RingBufferTimeFilterV2(BaseModel):
@@ -2622,6 +2635,8 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
     resolved_segment_max_bytes = body.segment_max_bytes if "segment_max_bytes" in body.model_fields_set else persisted.get("segment_max_bytes")
     resolved_segment_max_rows = body.segment_max_rows if "segment_max_rows" in body.model_fields_set else persisted.get("segment_max_rows")
     resolved_segment_max_age = body.segment_max_age if "segment_max_age" in body.model_fields_set else persisted.get("segment_max_age")
+    resolved_batch_window = body.batch_window_seconds if body.batch_window_seconds is not None else persisted.get("batch_window_seconds", 0)
+    resolved_batch_max_events = body.batch_max_events if body.batch_max_events is not None else persisted.get("batch_max_events", 100)
     effective_segment_max_bytes = (
         resolved_segment_max_bytes if resolved_segment_max_bytes is not None else derive_segment_max_bytes(resolved_max_file_size)
     )
@@ -2701,6 +2716,8 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
                 segment_max_bytes=resolved_segment_max_bytes,
                 segment_max_rows=resolved_segment_max_rows,
                 segment_max_age=resolved_segment_max_age,
+                batch_window_seconds=resolved_batch_window,
+                batch_max_events=resolved_batch_max_events,
             )
             persisted_disabled = True
             if stopped_rb is not None:
@@ -2733,6 +2750,8 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
                         segment_max_bytes=resolved_segment_max_bytes,
                         segment_max_rows=resolved_segment_max_rows,
                         segment_max_age=resolved_segment_max_age,
+                        batch_window_seconds=resolved_batch_window,
+                        batch_max_events=resolved_batch_max_events,
                     )
             raise
         if stopped_rb is not None:
@@ -2767,6 +2786,8 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
             # Retention-Schutz des Legacy-Segments mitsichern (#968, Codex :2443),
             # damit ein Rollback nach fehlgeschlagenem Rebuild den Schutz nicht verliert.
             "legacy_retention_protected": rb._legacy_retention_protected,
+            "batch_window_seconds": rb._batch_window,
+            "batch_max_events": rb._batch_max_events,
         }
         _unsubscribe_ringbuffer(rb)
         await rb.stop()
@@ -2825,6 +2846,8 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
                 segment_max_rows=resolved_segment_max_rows,
                 segment_max_age=resolved_segment_max_age,
                 legacy_retention_protected=decision in LEGACY_DECISIONS_PROTECTED,
+                batch_window_seconds=resolved_batch_window,
+                batch_max_events=resolved_batch_max_events,
             )
             _subscribe_ringbuffer(rb)
             subscribed_new = True
@@ -2871,7 +2894,12 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
             reconfigure_kwargs["segment_max_rows"] = body.segment_max_rows
         if "segment_max_age" in body.model_fields_set:
             reconfigure_kwargs["segment_max_age"] = body.segment_max_age
-        await rb.reconfigure(body.storage, **reconfigure_kwargs)
+        await rb.reconfigure(
+            body.storage,
+            batch_window_seconds=resolved_batch_window,
+            batch_max_events=resolved_batch_max_events,
+            **reconfigure_kwargs,
+        )
         stats = await rb.stats()
         await persist_ringbuffer_config(
             db,
@@ -2883,6 +2911,8 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
             segment_max_bytes=resolved_segment_max_bytes,
             segment_max_rows=resolved_segment_max_rows,
             segment_max_age=resolved_segment_max_age,
+            batch_window_seconds=resolved_batch_window,
+            batch_max_events=resolved_batch_max_events,
         )
     except Exception as exc:
         if created_rb and rb is not None:
@@ -2930,6 +2960,8 @@ async def _configure_ringbuffer_locked(body: RingBufferConfig, db: Database) -> 
                     # FIFO-Retention könnte die über-budget Legacy-Quelle löschen, bevor
                     # der Admin eine informierte Entscheidung getroffen hat.
                     legacy_retention_protected=switch_prev_config["legacy_retention_protected"],
+                    batch_window_seconds=switch_prev_config["batch_window_seconds"],
+                    batch_max_events=switch_prev_config["batch_max_events"],
                 )
                 _subscribe_ringbuffer(restored)
                 set_ringbuffer_enabled(True)

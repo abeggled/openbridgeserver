@@ -13,7 +13,12 @@ filterable live stream **across all objects**.
 
 - **⚙ Configure** (admins only) — opens the monitor configuration: storage model (memory
   or disk), maximum entries, maximum disk space, maximum retention by age, and — in
-  segmented mode — the segment rotation thresholds. The monitor can also be fully disabled
+  segmented mode — the segment rotation thresholds and the **write batch window**: the
+  monitor collects events and writes them as one block, after the configured time
+  (default 5 seconds) or as soon as the configured block size is reached (default 100
+  events). This reduces wear on the storage device. After a
+  crash or power loss, at most the events of this time are lost; `0` writes each event
+  immediately. The monitor can also be fully disabled
   here (which deletes all existing entries) or re-enabled.
 - **Segments** — only visible in segmented storage mode; opens an overview of the
   individual storage segments with status (Active/Closed/Legacy/Quarantined), size, time
