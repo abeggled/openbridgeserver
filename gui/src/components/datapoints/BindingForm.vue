@@ -668,9 +668,13 @@ const groupedDpts = computed(() => {
   }))
 })
 
+// Camera stream sources (#1479) feed the Visu camera widget and have no bindings.
+const NO_BINDING_TYPES = ['GO2RTC', 'FRIGATE']
+
 const groupedInstances = computed(() => {
   const groups = {}
   for (const inst of allInstances.value) {
+    if (NO_BINDING_TYPES.includes(inst.adapter_type)) continue
     // A read-only system DataPoint (#1370) only goes to adapters that pass its
     // value on or watch it; the backend decides which (system_bindable).
     if (props.dpSystem && inst.system_bindable === false) continue

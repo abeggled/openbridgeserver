@@ -59,7 +59,7 @@ describe('Kamera Config.vue', () => {
   it('shows username/password fields when Basic Auth is selected', async () => {
     const wrapper = mountConfig()
     const selects = wrapper.findAll('select')
-    await selects[1].setValue('basic')
+    await selects[2].setValue('basic')
 
     expect(wrapper.text()).toContain('Username')
     expect(wrapper.text()).toContain('Password')
@@ -69,7 +69,7 @@ describe('Kamera Config.vue', () => {
   it('shows API key fields when API key auth is selected', async () => {
     const wrapper = mountConfig()
     const selects = wrapper.findAll('select')
-    await selects[1].setValue('apikey')
+    await selects[2].setValue('apikey')
 
     expect(wrapper.text()).toContain('Parameter name')
     expect(wrapper.text()).not.toContain('Username')
@@ -78,7 +78,7 @@ describe('Kamera Config.vue', () => {
   it('emits canonical authType after user selects Basic Auth', async () => {
     const wrapper = mountConfig()
     const selects = wrapper.findAll('select')
-    await selects[1].setValue('basic')
+    await selects[2].setValue('basic')
 
     const emitted = wrapper.emitted('update:modelValue')
     expect(emitted).toHaveLength(1)
@@ -117,7 +117,7 @@ describe('Kamera Config.vue', () => {
     expect(wrapper.text()).not.toContain('Refresh interval')
 
     const selects = wrapper.findAll('select')
-    await selects[0].setValue('snapshot')
+    await selects[1].setValue('snapshot')
     expect(wrapper.text()).toContain('Refresh interval')
   })
 
@@ -137,6 +137,25 @@ describe('Kamera Config.vue', () => {
       aspectRatio: '16/9',
       objectFit: 'contain',
       useProxy: false,
+    })
+  })
+
+  describe('HLS through the proxy (#1480)', () => {
+    const hint = '[data-testid="kamera-hls-proxy-hint"]'
+
+    it('warns when HLS is combined with the proxy', () => {
+      const wrapper = mountConfig({ url: 'http://cam/live.m3u8', streamType: 'hls', useProxy: true })
+      expect(wrapper.get(hint).text()).toBe('widgets.kamera.hlsProxyUnsupported')
+    })
+
+    it('does not warn for HLS without proxy', () => {
+      const wrapper = mountConfig({ url: 'http://cam/live.m3u8', streamType: 'hls', useProxy: false })
+      expect(wrapper.find(hint).exists()).toBe(false)
+    })
+
+    it('does not warn for other stream types through the proxy', () => {
+      const wrapper = mountConfig({ url: 'http://cam/stream', streamType: 'mjpeg', useProxy: true })
+      expect(wrapper.find(hint).exists()).toBe(false)
     })
   })
 

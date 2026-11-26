@@ -1293,6 +1293,66 @@
         "autoreset_delay_ms": {
           "title": "Reset-Verzögerung (ms)"
         }
+      },
+      "FRIGATE": {
+        "host": {
+          "title": "Host",
+          "description": "Hostname oder IP-Adresse des Frigate-Servers"
+        },
+        "port": {
+          "title": "Port",
+          "description": "5000 = interne API ohne Anmeldung, 8971 = mit Anmeldung (meist HTTPS)"
+        },
+        "ssl": {
+          "title": "SSL/TLS verwenden",
+          "description": "Verbindung über HTTPS/WSS statt HTTP/WS"
+        },
+        "verify_tls": {
+          "title": "Zertifikat prüfen",
+          "description": "Bei selbst signierten Zertifikaten ausschalten"
+        },
+        "username": {
+          "title": "Benutzername",
+          "description": "Nur für Port 8971: Frigate-Benutzer für die Anmeldung"
+        },
+        "password": {
+          "title": "Passwort",
+          "description": "Passwort zum Benutzernamen"
+        },
+        "mse_mode": {
+          "title": "MSE-Übertragung",
+          "description": "direct: der Browser holt den MSE-Stream selbst (keine Last auf OBS, nur ohne Anmeldung und ohne HTTPS-Visu). proxy: OBS reicht den Stream durch (für Fernzugriff, HTTPS-Visu oder mit Anmeldung). WebRTC-Medien laufen immer direkt."
+        }
+      },
+      "GO2RTC": {
+        "host": {
+          "title": "Host",
+          "description": "Hostname oder IP-Adresse des go2rtc-Servers"
+        },
+        "port": {
+          "title": "Port",
+          "description": "API-Port von go2rtc (Standard 1984)"
+        },
+        "ssl": {
+          "title": "SSL/TLS verwenden",
+          "description": "Verbindung über HTTPS/WSS statt HTTP/WS"
+        },
+        "verify_tls": {
+          "title": "Zertifikat prüfen",
+          "description": "Bei selbst signierten Zertifikaten ausschalten"
+        },
+        "username": {
+          "title": "Benutzername",
+          "description": "Optional: api.username aus der go2rtc-Konfiguration"
+        },
+        "password": {
+          "title": "Passwort",
+          "description": "Passwort zum Benutzernamen"
+        },
+        "mse_mode": {
+          "title": "MSE-Übertragung",
+          "description": "direct: der Browser holt den MSE-Stream selbst (keine Last auf OBS, nur ohne Anmeldung und ohne HTTPS-Visu). proxy: OBS reicht den Stream durch (für Fernzugriff, HTTPS-Visu oder mit Anmeldung). WebRTC-Medien laufen immer direkt."
+        }
       }
     },
     "statusDetail": {
@@ -1336,7 +1396,11 @@
       "webhookPrefixConflict": "Pfad-Präfix {prefix} überschneidet sich mit dem Präfix einer anderen Instanz",
       "webhookDuplicateSlug": "Doppelte Slugs ignoriert: {slugs}",
       "webhookInvalidConfig": "Ungültige Instanz-Konfiguration",
-      "haActionFailed": "Home Assistant hat {action} abgelehnt"
+      "haActionFailed": "Home Assistant hat {action} abgelehnt",
+      "streamSourceNoHost": "Kein Host konfiguriert",
+      "streamSourceConnected": "Verbunden",
+      "streamSourceDisconnected": "Getrennt",
+      "streamSourceUnreachable": "Nicht erreichbar: {error}"
     },
     "testResult": {
       "typeNotRegistered": "Adapter-Typ '{type}' nicht registriert",

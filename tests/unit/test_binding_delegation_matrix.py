@@ -39,6 +39,9 @@ MAIN_PY = Path(__file__).resolve().parents[2] / "obs" / "main.py"
 # an adapter to obs/main.py without deciding this fails the test below.
 EXPECTED_USER_BINDING_DELEGATION = {
     "ANWESENHEITSSIMULATION": True,
+    # Camera stream sources have no bindings in phase 1 of #1479.
+    "FRIGATE": False,
+    "GO2RTC": False,
     "HOME_ASSISTANT": False,
     "IOBROKER": True,
     "KNX": False,

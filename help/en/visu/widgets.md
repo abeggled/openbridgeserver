@@ -7,6 +7,43 @@ title: Visu widgets
 Widgets are the building blocks of a Visu page. In the Visu editor you drag them from the
 palette onto the page and configure them in the properties panel on the right.
 
+## Camera {#widget-kamera}
+
+The **Camera** widget ("Kamera") shows a camera picture. **Source** offers two kinds:
+
+- **Camera URL** — an MJPEG stream, a JPEG still image with a refresh interval or an HLS stream
+  (`.m3u8`) straight from the camera, optionally through the OBS proxy.
+- **Camera server (go2rtc / Frigate)** — a live stream from an instance of the
+  [GO2RTC or FRIGATE](../adapters/list#adapters-camera-servers) adapters. This also shows RTSP
+  cameras a browser cannot play by itself.
+
+### HLS streams
+
+The widget plays an HLS stream (`.m3u8`) in all common browsers, not only in Safari. The Visu
+loads the library it needs only when an HLS widget is on the page. The camera has to allow the
+browser to fetch from another address (CORS); otherwise the picture stays black and the browser
+console reports a CORS error. HLS cannot be played through the **proxy**, because it passes on
+only the playlist, not the video segments.
+
+### Camera server
+
+- **Camera server**, **Camera** — the instance and, for Frigate, the camera.
+- **Stream in the tile** / **Stream in full screen** — usually the sub stream in the tile and the
+  main stream in full screen. For Frigate both are proposed.
+- **Transport** — *Automatic* tries WebRTC (lowest latency, directly between camera server and
+  browser) and falls back to MSE after a few seconds. *MSE only* skips WebRTC.
+
+Until the stream runs, and when it drops, the widget shows a still image and reconnects by
+itself. A button in the bottom right switches to full screen, and for streams with sound another
+one turns the sound on. A hidden widget or a tab in the background pauses the stream. In the Visu
+editor the widget shows the still image only.
+
+### Display and tap
+
+- **Aspect ratio**, **Image fit** — format and fit of the picture.
+- **On tap** — opens another page or goes back to the previously visited page. The full-screen
+  and sound buttons do not trigger it.
+
 ## Event list {#widget-terminliste}
 
 The **Event list** ("Terminliste") shows the events of the coming days as a list, one entry per
